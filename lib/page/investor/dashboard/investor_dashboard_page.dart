@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import '../../authentication/login_page.dart';
 import '../documents/documents_page.dart';
@@ -26,11 +28,45 @@ class _InvestorDashboardPageState extends State<InvestorDashboardPage> {
   bool _isLoading = true;
   Map<String, dynamic>? _user;
 
-  // Main Bespoke Theme Colors
-  static const Color primaryTeal = Color(0xFF047857);
-  static const Color primaryDarkTeal = Color(0xFF064E3B);
+  // ─── Palette (Islamic: emerald, gold, turquoise, lapis, terracotta) ───
+  static const Color emerald = Color(0xFF0E4A37);
+  static const Color emeraldDeep = Color(0xFF0A3327);
+  static const Color emeraldSoft = Color(0xFFE3F0E9);
 
-  // Real Database Fetched State
+  static const Color gold = Color(0xFFB8935A);
+  static const Color goldDeep = Color(0xFF8A6A3A);
+  static const Color goldLight = Color(0xFFD9BE8C);
+  static const Color goldSoft = Color(0xFFF6EEDF);
+
+  static const Color turquoise = Color(0xFF167A80);
+  static const Color turquoiseSoft = Color(0xFFE0F1F1);
+
+  static const Color lapis = Color(0xFF26437A);
+  static const Color lapisDeep = Color(0xFF1A2F57);
+  static const Color lapisSoft = Color(0xFFE5EAF4);
+
+  static const Color terracotta = Color(0xFFA5523A);
+  static const Color terracottaSoft = Color(0xFFF7E6DF);
+
+  static const Color ivory = Color(0xFFF7F4EE);
+  static const Color ink = Color(0xFF1C2421);
+  static const Color muted = Color(0xFF6E736F);
+  static const Color line = Color(0xFFE8E2D7);
+  static const Color danger = Color(0xFFB4413A);
+
+  static const List<(Color, Color)> _accents = [
+    (emerald, emeraldSoft),
+    (turquoise, turquoiseSoft),
+    (lapis, lapisSoft),
+    (goldDeep, goldSoft),
+    (terracotta, terracottaSoft),
+  ];
+
+  // Recent Investments: ekbare koyta dekhabe, r protita row er height
+  static const int _recentVisibleCount = 3;
+  static const double _recentItemHeight = 70;
+
+  // ─── Data ─────────────────────────────────────────────────
   String? _avatarUrl;
   int _unreadNotificationCount = 0;
   double _totalInvested = 0.0;
@@ -44,10 +80,18 @@ class _InvestorDashboardPageState extends State<InvestorDashboardPage> {
   List<Map<String, dynamic>> _openProjects = [];
   List<Map<String, dynamic>> _recentInvestments = [];
 
+  final ScrollController _recentScrollController = ScrollController();
+
   @override
   void initState() {
     super.initState();
     _loadDashboardData();
+  }
+
+  @override
+  void dispose() {
+    _recentScrollController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadDashboardData() async {
@@ -55,8 +99,8 @@ class _InvestorDashboardPageState extends State<InvestorDashboardPage> {
 
     var userData = await AuthService.getUserData();
 
-    // Recover user session from DB if local storage is empty
-    if (userData == null || (userData['id'] == null && userData['email'] == null)) {
+    if (userData == null ||
+        (userData['id'] == null && userData['email'] == null)) {
       final conn = await DatabaseService.getConnection();
       if (conn != null) {
         final res = await conn.execute(
@@ -77,7 +121,7 @@ class _InvestorDashboardPageState extends State<InvestorDashboardPage> {
     final userEmail = userData?['email']?.toString() ?? '';
 
     final summary =
-        await DatabaseService.getDashboardSummary(userId, email: userEmail);
+    await DatabaseService.getDashboardSummary(userId, email: userEmail);
 
     if (mounted) {
       setState(() {
@@ -85,20 +129,20 @@ class _InvestorDashboardPageState extends State<InvestorDashboardPage> {
         if (summary.isNotEmpty) {
           _avatarUrl = summary['avatarUrl']?.toString();
           _unreadNotificationCount =
-              (summary['unreadNotificationCount'] as int? ?? 0);
+          (summary['unreadNotificationCount'] as int? ?? 0);
           _totalInvested = (summary['totalInvested'] as double? ?? 0.0);
           _returnsEarned = (summary['totalReturns'] as double? ?? 0.0);
           _portfolioValue = _totalInvested + _returnsEarned;
           _activeCount = (summary['activeInvestmentsCount'] as int? ?? 0);
           _pendingTransactions =
-              (summary['pendingTransactionsCount'] as int? ?? 0);
+          (summary['pendingTransactionsCount'] as int? ?? 0);
           _pendingAmount =
-              (summary['pendingInvestmentsAmount'] as double? ?? 0.0);
-
+          (summary['pendingInvestmentsAmount'] as double? ?? 0.0);
           _openProjects =
-              (summary['openProjects'] as List<Map<String, dynamic>>? ?? []);
-          _recentInvestments =
-              (summary['recentInvestments'] as List<Map<String, dynamic>>? ?? []);
+          (summary['openProjects'] as List<Map<String, dynamic>>? ?? []);
+          _recentInvestments = (summary['recentInvestments']
+          as List<Map<String, dynamic>>? ??
+              []);
         }
         _isLoading = false;
       });
@@ -116,6 +160,23 @@ class _InvestorDashboardPageState extends State<InvestorDashboardPage> {
     return '৳${amount.toStringAsFixed(0)}';
   }
 
+  double get _roi =>
+      _totalInvested > 0 ? ((_returnsEarned / _totalInvested) * 100) : 0.0;
+
+  // DB te 0.16 thakle 16%, 16 thakle o 16% dekhabe
+  double _asPercent(double v) => v <= 1 ? v * 100 : v;
+
+  Future<void> _open(Widget page) async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (context) => page),
+    );
+    if (mounted) _loadDashboardData();
+  }
+
+  // ═════════════════════════════════════════════════════════
+  // BUILD
+  // ═════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
     final String name = _user?['name'] ?? 'Investor';
@@ -124,444 +185,1645 @@ class _InvestorDashboardPageState extends State<InvestorDashboardPage> {
       valueListenable: LanguageService.currentLanguage,
       builder: (context, lang, child) {
         return Scaffold(
-          backgroundColor: const Color(0xFFF3F4F6),
+          backgroundColor: ivory,
           drawer: _buildAppSidebar(context),
-          appBar: AppBar(
-            backgroundColor: Colors.white,
-            elevation: 0,
-            scrolledUnderElevation: 1,
-            shadowColor: Colors.black.withAlpha(15),
-            leading: Builder(
-              builder: (context) => Padding(
-                padding: const EdgeInsets.only(left: 10, top: 8, bottom: 8),
-                child: Material(
-                  color: primaryTeal.withAlpha(20),
-                  borderRadius: BorderRadius.circular(12),
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(12),
-                    onTap: () => Scaffold.of(context).openDrawer(),
-                    child: const Icon(Icons.menu_rounded, color: primaryTeal, size: 22),
-                  ),
-                ),
-              ),
-            ),
-            title: Image.asset(
-              'assets/images/logo_full.png',
-              height: 38,
-              errorBuilder: (context, error, stackTrace) => Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(6),
-                    decoration: BoxDecoration(
-                      color: primaryTeal,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: const Icon(Icons.show_chart_rounded,
-                        color: Colors.white, size: 18),
-                  ),
-                  const SizedBox(width: 8),
-                  const Text(
-                    'Biniyog Club',
-                    style: TextStyle(
-                      color: primaryTeal,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 18,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            actions: [
-              // Notification Bell with Red Badge Count
-              GestureDetector(
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                        builder: (context) => const NotificationsPage()),
-                  ).then((_) => _loadDashboardData());
-                },
-                child: Container(
-                  margin: const EdgeInsets.symmetric(horizontal: 4),
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: Colors.grey.shade100,
-                    shape: BoxShape.circle,
-                  ),
-                  child: Stack(
-                    clipBehavior: Clip.none,
-                    children: [
-                      const Icon(Icons.notifications_none_rounded,
-                          color: primaryTeal, size: 22),
-                      if (_unreadNotificationCount > 0)
-                        Positioned(
-                          top: -4,
-                          right: -4,
-                          child: Container(
-                            padding: const EdgeInsets.all(3),
-                            decoration: const BoxDecoration(
-                              color: Colors.redAccent,
-                              shape: BoxShape.circle,
-                            ),
-                            constraints: const BoxConstraints(
-                              minWidth: 16,
-                              minHeight: 16,
-                            ),
-                            child: Text(
-                              '$_unreadNotificationCount',
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 9.5,
-                                fontWeight: FontWeight.bold,
-                              ),
-                              textAlign: TextAlign.center,
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-              ),
-
-              // Profile Avatar Circle
-              GestureDetector(
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (context) => const ProfilePage()),
-                  ).then((_) => _loadDashboardData());
-                },
-                child: Container(
-                  margin: const EdgeInsets.symmetric(horizontal: 4),
-                  padding: const EdgeInsets.all(2),
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    border: Border.all(color: primaryTeal.withAlpha(100), width: 1.5),
-                  ),
-                  child: CircleAvatar(
-                    radius: 14,
-                    backgroundColor: primaryTeal,
-                    child: ClipOval(
-                      child: (_avatarUrl != null && _avatarUrl!.isNotEmpty)
-                          ? Image.network(
-                              _avatarUrl!,
-                              width: 28,
-                              height: 28,
-                              fit: BoxFit.cover,
-                              errorBuilder: (context, error, stackTrace) => Text(
-                                name.isNotEmpty ? name[0].toUpperCase() : 'I',
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            )
-                          : Text(
-                              name.isNotEmpty ? name[0].toUpperCase() : 'I',
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 12,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 10),
-            ],
-          ),
+          appBar: _buildAppBar(name),
           body: _isLoading
-              ? const Center(child: CircularProgressIndicator(color: primaryTeal))
+              ? const Center(
+            child: SizedBox(
+              width: 28,
+              height: 28,
+              child: CircularProgressIndicator(
+                  color: emerald, strokeWidth: 2.4),
+            ),
+          )
               : RefreshIndicator(
-                  onRefresh: _loadDashboardData,
-                  color: primaryTeal,
-                  child: SingleChildScrollView(
-                    physics: const AlwaysScrollableScrollPhysics(),
-                    padding: const EdgeInsets.all(16.0),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // 1. Portfolio Overview Hero Card
-                        _buildPortfolioOverviewHeroCard(),
-                        const SizedBox(height: 18),
-
-                        // 2. Multi-colored Stat Bento Grid
-                        _buildBespokeStatGrid(),
-                        const SizedBox(height: 24),
-
-                        // 3. Open for Investment (Available Projects)
-                        _buildAvailableProjectsSection(),
-                        const SizedBox(height: 24),
-
-                        // 4. Recent Investments
-                        _buildRecentInvestmentsSection(),
-                        const SizedBox(height: 24),
-
-                        // 5. Project Updates
-                        _buildProjectUpdatesSection(),
-                        const SizedBox(height: 24),
-
-                        // 6. Quick Actions
-                        _buildQuickActionsSection(),
-                        const SizedBox(height: 24),
-                      ],
-                    ),
-                  ),
-                ),
+            onRefresh: _loadDashboardData,
+            color: emerald,
+            child: ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              // niche bottom nav er jonno extra jayga
+              padding: const EdgeInsets.fromLTRB(18, 6, 18, 120),
+              children: [
+                _buildGreeting(name),
+                const SizedBox(height: 18),
+                _buildHeroCard(),
+                const SizedBox(height: 16),
+                _buildStatsGrid(),
+                const SizedBox(height: 28),
+                _buildQuickActionsSection(),
+                const SizedBox(height: 28),
+                _buildAvailableProjectsSection(),
+                const SizedBox(height: 28),
+                _buildRecentInvestmentsSection(),
+                const SizedBox(height: 20),
+                _buildProjectUpdatesSection(),
+              ],
+            ),
+          ),
         );
       },
     );
   }
 
-  // App Navigation Drawer (Matching Website Sidebar 1:1)
-  Widget _buildAppSidebar(BuildContext context) {
-    final String name = _user?['name'] ?? 'Investor';
-    final String email = _user?['email'] ?? '';
-    final String initial = name.isNotEmpty ? name[0].toUpperCase() : 'I';
+  // ─── AppBar ───────────────────────────────────────────────
+  PreferredSizeWidget _buildAppBar(String name) {
+    final initial = name.isNotEmpty ? name[0].toUpperCase() : 'I';
 
-    final menuItems = [
-      {
-        'title': LanguageService.tr('Overview', 'ওভারভিউ'),
-        'icon': Icons.grid_view_rounded,
-        'page': const InvestorDashboardPage(),
-      },
-      {
-        'title': LanguageService.tr('Investments', 'ইনভেস্টমেন্টস'),
-        'icon': Icons.pie_chart_rounded,
-        'page': const InvestmentsPage(),
-      },
-      {
-        'title': LanguageService.tr('Group Invest', 'গ্রুপ ইনভেস্ট'),
-        'icon': Icons.groups_rounded,
-        'page': const GroupInvestmentsPage(),
-      },
-      {
-        'title': LanguageService.tr('My Projects', 'আমার প্রজেক্টস'),
-        'icon': Icons.business_center_rounded,
-        'page': const MyProjectsPage(),
-      },
-      {
-        'title': LanguageService.tr('Portfolio', 'পোর্টফোলিও'),
-        'icon': Icons.donut_large_rounded,
-        'page': const PortfolioPage(),
-      },
-      {
-        'title': LanguageService.tr('Documents', 'ডকুমেন্টস'),
-        'icon': Icons.folder_outlined,
-        'page': const DocumentsPage(),
-      },
-      {
-        'title': LanguageService.tr('Reports', 'রিপোর্টস'),
-        'icon': Icons.bar_chart_rounded,
-        'page': const ReportsPage(),
-      },
-      {
-        'title': LanguageService.tr('Notifications', 'নোটিফিকেশনস'),
-        'icon': Icons.notifications_outlined,
-        'page': const NotificationsPage(),
-      },
-      {
-        'title': LanguageService.tr('Profile', 'প্রোফাইল'),
-        'icon': Icons.person_outline_rounded,
-        'page': const ProfilePage(),
-      },
-      {
-        'title': LanguageService.tr('Settings', 'সেটিংস'),
-        'icon': Icons.settings_outlined,
-        'page': const SettingsPage(),
-      },
-      {
-        'title': LanguageService.tr('KYC', 'কেওয়াইসি'),
-        'icon': Icons.shield_outlined,
-        'page': const KycPage(),
-      },
-    ];
-
-    return Drawer(
-      backgroundColor: const Color(0xFF062E25),
-      child: SafeArea(
-        child: Column(
+    return AppBar(
+      backgroundColor: ivory,
+      surfaceTintColor: Colors.transparent,
+      elevation: 0,
+      toolbarHeight: 64,
+      leadingWidth: 64,
+      leading: Builder(
+        builder: (context) => Padding(
+          padding: const EdgeInsets.only(left: 18),
+          child: Center(
+            child: _iconSquare(
+              icon: Icons.notes_rounded,
+              onTap: () => Scaffold.of(context).openDrawer(),
+            ),
+          ),
+        ),
+      ),
+      titleSpacing: 6,
+      title: Image.asset(
+        'assets/images/logo_full.png',
+        height: 34,
+        errorBuilder: (context, error, stackTrace) => const Text(
+          'Biniyog Club',
+          style: TextStyle(
+            color: emerald,
+            fontWeight: FontWeight.w700,
+            fontSize: 18,
+            letterSpacing: -0.2,
+          ),
+        ),
+      ),
+      actions: [
+        Stack(
+          clipBehavior: Clip.none,
           children: [
-            // Top Header Logo & Menu Title
-            Padding(
-              padding: const EdgeInsets.all(20.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(6),
-                            decoration: BoxDecoration(
-                              color: primaryTeal,
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: const Icon(Icons.show_chart_rounded,
-                                color: Colors.white, size: 20),
-                          ),
-                          const SizedBox(width: 10),
-                          const Text(
-                            'Biniyog Club',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 18,
-                            ),
-                          ),
-                        ],
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.chevron_left_rounded,
-                            color: Colors.white70),
-                        onPressed: () => Navigator.pop(context),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  const Text(
-                    'MENU',
-                    style: TextStyle(
-                      color: Colors.white38,
-                      fontSize: 10,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 1.2,
-                    ),
-                  ),
-                ],
-              ),
+            _iconSquare(
+              icon: Icons.notifications_none_rounded,
+              onTap: () => _open(const NotificationsPage()),
             ),
-
-            // Scrollable Menu List
-            Expanded(
-              child: ListView.builder(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                itemCount: menuItems.length,
-                itemBuilder: (context, index) {
-                  final item = menuItems[index];
-                  final String title = item['title'] as String;
-                  final IconData icon = item['icon'] as IconData;
-                  final Widget page = item['page'] as Widget;
-
-                  final bool isOverview = index == 0;
-
-                  return Container(
-                    margin: const EdgeInsets.only(bottom: 4),
-                    decoration: BoxDecoration(
-                      color: isOverview
-                          ? primaryTeal.withAlpha(200)
-                          : Colors.transparent,
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: ListTile(
-                      dense: true,
-                      leading: Icon(
-                        icon,
-                        color: isOverview ? Colors.white : Colors.white70,
-                        size: 20,
-                      ),
-                      title: Text(
-                        title,
-                        style: TextStyle(
-                          color: isOverview
-                              ? Colors.white
-                              : Colors.white.withAlpha(220),
-                          fontSize: 13,
-                          fontWeight: isOverview
-                              ? FontWeight.bold
-                              : FontWeight.w500,
-                        ),
-                      ),
-                      onTap: () {
-                        Navigator.pop(context); // Close Drawer
-                        if (!isOverview) {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(builder: (context) => page),
-                          ).then((_) => _loadDashboardData());
-                        }
-                      },
-                    ),
-                  );
-                },
-              ),
-            ),
-
-            // Bottom User Profile & Logout Action Bar
-            const Divider(color: Colors.white12, height: 1),
-            Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Row(
-                children: [
-                  CircleAvatar(
-                    radius: 18,
-                    backgroundColor: primaryTeal,
-                    child: ClipOval(
-                      child: (_avatarUrl != null && _avatarUrl!.isNotEmpty)
-                          ? Image.network(
-                              _avatarUrl!,
-                              width: 36,
-                              height: 36,
-                              fit: BoxFit.cover,
-                              errorBuilder: (context, error, stackTrace) => Text(
-                                initial,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 14,
-                                ),
-                              ),
-                            )
-                          : Text(
-                              initial,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 14,
-                              ),
-                            ),
+            if (_unreadNotificationCount > 0)
+              Positioned(
+                top: -3,
+                right: -3,
+                child: Container(
+                  constraints:
+                  const BoxConstraints(minWidth: 17, minHeight: 17),
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  decoration: BoxDecoration(
+                    color: terracotta,
+                    borderRadius: BorderRadius.circular(9),
+                    border: Border.all(color: ivory, width: 2),
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    _unreadNotificationCount > 9
+                        ? '9+'
+                        : '$_unreadNotificationCount',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 9,
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                ),
+              ),
+          ],
+        ),
+        const SizedBox(width: 10),
+        GestureDetector(
+          onTap: () => _open(const ProfilePage()),
+          child: Container(
+            padding: const EdgeInsets.all(2),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(color: gold, width: 1.4),
+            ),
+            child: _avatar(initial, 17),
+          ),
+        ),
+        const SizedBox(width: 18),
+      ],
+    );
+  }
+
+  Widget _iconSquare({required IconData icon, required VoidCallback onTap}) {
+    return Material(
+      color: Colors.white,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: const BorderSide(color: line),
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: onTap,
+        child: SizedBox(
+          width: 40,
+          height: 40,
+          child: Icon(icon, color: ink, size: 20),
+        ),
+      ),
+    );
+  }
+
+  Widget _avatar(String initial, double radius) {
+    final fallback = Text(
+      initial,
+      style: TextStyle(
+        color: Colors.white,
+        fontSize: radius * 0.8,
+        fontWeight: FontWeight.w600,
+      ),
+    );
+    return CircleAvatar(
+      radius: radius,
+      backgroundColor: emerald,
+      child: ClipOval(
+        child: (_avatarUrl != null && _avatarUrl!.isNotEmpty)
+            ? Image.network(
+          _avatarUrl!,
+          width: radius * 2,
+          height: radius * 2,
+          fit: BoxFit.cover,
+          errorBuilder: (context, error, stackTrace) => fallback,
+        )
+            : fallback,
+      ),
+    );
+  }
+
+  // ─── Greeting ─────────────────────────────────────────────
+  Widget _buildGreeting(String name) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: emeraldSoft,
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 6,
+                height: 6,
+                decoration: const BoxDecoration(
+                  color: emerald,
+                  shape: BoxShape.circle,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                LanguageService.tr('Investor', 'বিনিয়োগকারী'),
+                style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: emerald,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ─── Hero Card ────────────────────────────────────────────
+  Widget _buildHeroCard() {
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(
+            color: emerald.withAlpha(60),
+            blurRadius: 24,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(24),
+        child: Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              colors: [Color(0xFF125A43), emeraldDeep, Color(0xFF0B2A3A)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+          ),
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: CustomPaint(
+                  painter: _IslamicPatternPainter(
+                    color: Colors.white.withAlpha(16),
+                    cell: 46,
+                  ),
+                ),
+              ),
+              Positioned(
+                top: -60,
+                right: -40,
+                child: Container(
+                  width: 180,
+                  height: 180,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: RadialGradient(
+                      colors: [gold.withAlpha(90), gold.withAlpha(0)],
+                    ),
+                  ),
+                ),
+              ),
+              Positioned.fill(
+                child: Container(
+                  margin: const EdgeInsets.all(7),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(18),
+                    border:
+                    Border.all(color: gold.withAlpha(80), width: 0.8),
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(24, 24, 24, 22),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
                       children: [
                         Text(
-                          name,
+                          LanguageService.tr(
+                              'TOTAL INVESTED', 'মোট বিনিয়োগ'),
                           style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 13,
-                            fontWeight: FontWeight.bold,
+                            color: goldLight,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: 1.6,
                           ),
                         ),
-                        Text(
-                          email,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Colors.white54,
-                            fontSize: 10.5,
+                        const Spacer(),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 5),
+                          decoration: BoxDecoration(
+                            gradient: const LinearGradient(
+                              colors: [goldLight, gold],
+                            ),
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.north_east_rounded,
+                                  size: 12, color: emeraldDeep),
+                              const SizedBox(width: 4),
+                              Text(
+                                'ROI ${_roi.toStringAsFixed(1)}%',
+                                style: const TextStyle(
+                                  color: emeraldDeep,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ],
                     ),
+                    const SizedBox(height: 12),
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        _fmt(_totalInvested),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 38,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: -0.8,
+                          height: 1.1,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      LanguageService.tr(
+                        '$_activeCount active projects',
+                        '$_activeCount টি চলমান প্রজেক্ট',
+                      ),
+                      style: TextStyle(
+                        color: Colors.white.withAlpha(170),
+                        fontSize: 12.5,
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 12),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withAlpha(18),
+                        borderRadius: BorderRadius.circular(14),
+                        border:
+                        Border.all(color: Colors.white.withAlpha(25)),
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: _heroMetric(
+                              LanguageService.tr('Returns', 'রিটার্ন'),
+                              _fmt(_returnsEarned),
+                              const Color(0xFF7FD6C2),
+                            ),
+                          ),
+                          _heroDivider(),
+                          Expanded(
+                            child: _heroMetric(
+                              LanguageService.tr('Portfolio', 'পোর্টফোলিও'),
+                              _fmt(_portfolioValue),
+                              goldLight,
+                            ),
+                          ),
+                          _heroDivider(),
+                          Expanded(
+                            child: _heroMetric(
+                              LanguageService.tr('Active', 'চলমান'),
+                              '$_activeCount',
+                              const Color(0xFF9DB5E8),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _heroDivider() => Container(
+    width: 0.8,
+    height: 30,
+    margin: const EdgeInsets.symmetric(horizontal: 10),
+    color: Colors.white.withAlpha(35),
+  );
+
+  Widget _heroMetric(String label, String value, Color dot) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Container(
+              width: 6,
+              height: 6,
+              decoration: BoxDecoration(color: dot, shape: BoxShape.circle),
+            ),
+            const SizedBox(width: 5),
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: Colors.white.withAlpha(160),
+                  fontSize: 10.5,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.centerLeft,
+          child: Text(
+            value,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 15,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ─── Colorful Stats Grid ──────────────────────────────────
+  Widget _buildStatsGrid() {
+    return Column(
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: _statCard(
+                icon: Icons.account_balance_wallet_outlined,
+                value: _fmt(_portfolioValue),
+                label: LanguageService.tr(
+                    'Portfolio Value', 'পোর্টফোলিও ভ্যালু'),
+                color: emerald,
+                soft: emeraldSoft,
+                onTap: () => _open(const PortfolioPage()),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _statCard(
+                icon: Icons.show_chart_rounded,
+                value: '${_roi.toStringAsFixed(1)}%',
+                label: LanguageService.tr('Return (ROI)', 'রিটার্ন (ROI)'),
+                color: goldDeep,
+                soft: goldSoft,
+                onTap: () => _open(const PortfolioPage()),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: _statCard(
+                icon: Icons.task_alt_rounded,
+                value: '$_completedCount',
+                label: LanguageService.tr('Completed', 'সম্পন্ন'),
+                color: lapis,
+                soft: lapisSoft,
+                onTap: () => _open(const InvestmentsPage()),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _statCard(
+                icon: Icons.schedule_rounded,
+                value: '$_pendingTransactions',
+                label: _pendingAmount > 0
+                    ? '${LanguageService.tr('Pending', 'অপেক্ষমান')} · ${_fmt(_pendingAmount)}'
+                    : LanguageService.tr('Pending', 'অপেক্ষমান'),
+                color: terracotta,
+                soft: terracottaSoft,
+                onTap: () => _open(const InvestmentsPage()),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _statCard({
+    required IconData icon,
+    required String value,
+    required String label,
+    required Color color,
+    required Color soft,
+    required VoidCallback onTap,
+  }) {
+    return Material(
+      color: soft,
+      borderRadius: BorderRadius.circular(20),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Stack(
+          children: [
+            Positioned(
+              right: -18,
+              bottom: -18,
+              width: 80,
+              height: 80,
+              child: CustomPaint(
+                painter: _IslamicPatternPainter(
+                  color: color.withAlpha(30),
+                  cell: 40,
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 14, 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        width: 34,
+                        height: 34,
+                        decoration: BoxDecoration(
+                          color: color,
+                          borderRadius: BorderRadius.circular(11),
+                        ),
+                        child: Icon(icon, size: 17, color: Colors.white),
+                      ),
+                      const Spacer(),
+                      Icon(Icons.arrow_outward_rounded,
+                          size: 16, color: color.withAlpha(160)),
+                    ],
                   ),
-                  IconButton(
-                    icon: const Icon(Icons.logout_rounded,
-                        color: Colors.redAccent, size: 20),
-                    onPressed: () {
-                      _showLogoutConfirmDialog(context);
-                    },
+                  const SizedBox(height: 16),
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      value,
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w700,
+                        color: color,
+                        letterSpacing: -0.3,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      color: color.withAlpha(200),
+                      fontWeight: FontWeight.w500,
+                    ),
                   ),
                 ],
               ),
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  // ─── Section Header ───────────────────────────────────────
+  Widget _sectionHeader(String title, {VoidCallback? onViewAll}) {
+    return Row(
+      children: [
+        Transform.rotate(
+          angle: math.pi / 4,
+          child: Container(
+            width: 8,
+            height: 8,
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(colors: [goldLight, gold]),
+            ),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            title,
+            style: const TextStyle(
+              fontSize: 16.5,
+              fontWeight: FontWeight.w700,
+              color: ink,
+              letterSpacing: -0.2,
+            ),
+          ),
+        ),
+        if (onViewAll != null)
+          InkWell(
+            onTap: onViewAll,
+            borderRadius: BorderRadius.circular(20),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: emeraldSoft,
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Row(
+                children: [
+                  Text(
+                    LanguageService.tr('View all', 'সব দেখুন'),
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: emerald,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(width: 3),
+                  const Icon(Icons.arrow_forward_rounded,
+                      size: 13, color: emerald),
+                ],
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  // ─── Quick Actions ────────────────────────────────────────
+  Widget _buildQuickActionsSection() {
+    final actions = [
+      (
+      LanguageService.tr('Projects', 'প্রজেক্ট'),
+      Icons.explore_outlined,
+      const MyProjectsPage() as Widget,
+      emerald,
+      emeraldSoft,
+      ),
+      (
+      LanguageService.tr('Portfolio', 'পোর্টফোলিও'),
+      Icons.donut_large_outlined,
+      const PortfolioPage() as Widget,
+      turquoise,
+      turquoiseSoft,
+      ),
+      (
+      LanguageService.tr('Group Invest', 'গ্রুপ ইনভেস্ট'),
+      Icons.diversity_3_outlined,
+      const GroupInvestmentsPage() as Widget,
+      lapis,
+      lapisSoft,
+      ),
+      (
+      LanguageService.tr('KYC', 'কেওয়াইসি'),
+      Icons.verified_user_outlined,
+      const KycPage() as Widget,
+      goldDeep,
+      goldSoft,
+      ),
+    ];
+
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 6),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: line),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: actions.map((a) {
+          return Expanded(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => _open(a.$3),
+              child: Column(
+                children: [
+                  Container(
+                    width: 54,
+                    height: 54,
+                    decoration: BoxDecoration(
+                      color: a.$5,
+                      borderRadius: BorderRadius.circular(17),
+                    ),
+                    child: Icon(a.$2, color: a.$4, size: 24),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    a.$1,
+                    textAlign: TextAlign.center,
+                    maxLines: 2,
+                    style: const TextStyle(
+                      fontSize: 11.5,
+                      color: ink,
+                      fontWeight: FontWeight.w600,
+                      height: 1.25,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
+  // ─── Open Projects ────────────────────────────────────────
+  Widget _buildAvailableProjectsSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _sectionHeader(
+          LanguageService.tr('Open for Investment', 'বিনিয়োগের জন্য উন্মুক্ত'),
+          onViewAll: () => _open(const MyProjectsPage()),
+        ),
+        const SizedBox(height: 14),
+        _openProjects.isEmpty
+            ? _emptyState(
+          Icons.inventory_2_outlined,
+          LanguageService.tr('No open projects at the moment',
+              'বর্তমানে কোনো উন্মুক্ত প্রজেক্ট নেই'),
+        )
+            : SizedBox(
+          height: 384,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            clipBehavior: Clip.none,
+            itemCount: _openProjects.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 14),
+            itemBuilder: (context, index) =>
+                _projectCard(_openProjects[index], index),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _projectCard(Map<String, dynamic> p, int index) {
+    final double progress =
+    (p['progress'] as double? ?? 0.0).clamp(0.0, 1.0);
+    final pctInt = (progress * 100).toInt();
+    final coverUrl = p['coverImageUrl']?.toString() ?? '';
+    final location = p['location']?.toString() ?? 'Narayanganj';
+    final daysLeft = p['daysLeft'] as int? ?? 116;
+    final investorsCount = p['investorsCount'] as int? ?? 1;
+    final goal = (p['fundingGoalBdt'] as double? ?? 0.0);
+    final minInv = (p['minInvestmentBdt'] as double? ?? 0.0);
+    final ret = _asPercent(p['expectedReturnPct'] as double? ?? 0.0);
+    final accent = _accents[index % _accents.length];
+
+    return GestureDetector(
+      onTap: () => _open(
+        ProjectDetailPage(projectIdOrSlug: p['id'].toString()),
+      ),
+      child: Container(
+        width: 272,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(color: line),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withAlpha(8),
+              blurRadius: 14,
+              offset: const Offset(0, 6),
+            ),
+          ],
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // ── Image
+            SizedBox(
+              height: 128,
+              width: double.infinity,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  Image.network(
+                    coverUrl,
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stackTrace) => Container(
+                      color: accent.$1,
+                      child: CustomPaint(
+                        painter: _IslamicPatternPainter(
+                          color: Colors.white.withAlpha(25),
+                          cell: 34,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [Color(0x00000000), Color(0x99000000)],
+                        stops: [0.45, 1],
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    top: 10,
+                    left: 10,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 9, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: accent.$1,
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        (p['category'] as String? ?? 'SME')
+                            .replaceAll('_', ' ')
+                            .toUpperCase(),
+                        style: const TextStyle(
+                          fontSize: 9.5,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white,
+                          letterSpacing: 0.6,
+                        ),
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    left: 12,
+                    bottom: 10,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: goldLight,
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.schedule_rounded,
+                              size: 12, color: emeraldDeep),
+                          const SizedBox(width: 4),
+                          Text(
+                            LanguageService.tr('$daysLeft days left',
+                                '$daysLeft দিন বাকি'),
+                            style: const TextStyle(
+                              fontSize: 10.5,
+                              fontWeight: FontWeight.w700,
+                              color: emeraldDeep,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            // ── Details
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      p['title'] as String? ?? 'Project',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: ink,
+                        letterSpacing: -0.2,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Row(
+                      children: [
+                        Icon(Icons.place_outlined,
+                            size: 13, color: accent.$1),
+                        const SizedBox(width: 3),
+                        Expanded(
+                          child: Text(
+                            location,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontSize: 11.5, color: muted),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+
+                    // Funding progress
+                    Row(
+                      children: [
+                        Text(
+                          '$pctInt%',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: emerald,
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          LanguageService.tr('funded', 'সংগৃহীত'),
+                          style:
+                          const TextStyle(fontSize: 11, color: muted),
+                        ),
+                        const Spacer(),
+                        Text(
+                          '${LanguageService.tr('Goal', 'লক্ষ্য')} ${_fmt(goal)}',
+                          style: const TextStyle(
+                            fontSize: 11,
+                            color: ink,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 7),
+                    _gradientProgress(progress),
+                    const SizedBox(height: 12),
+
+                    // Metrics
+                    Row(
+                      children: [
+                        _projectMetric(
+                          LanguageService.tr('Return', 'রিটার্ন'),
+                          '${ret.toStringAsFixed(0)}%',
+                          emerald,
+                          emeraldSoft,
+                        ),
+                        const SizedBox(width: 6),
+                        _projectMetric(
+                          LanguageService.tr('Tenure', 'মেয়াদ'),
+                          LanguageService.tr('${p['durationDays']}d',
+                              '${p['durationDays']} দিন'),
+                          lapis,
+                          lapisSoft,
+                        ),
+                        const SizedBox(width: 6),
+                        _projectMetric(
+                          LanguageService.tr('Investors', 'বিনিয়োগকারী'),
+                          '$investorsCount',
+                          goldDeep,
+                          goldSoft,
+                        ),
+                      ],
+                    ),
+                    const Spacer(),
+
+                    Row(
+                      children: [
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              LanguageService.tr(
+                                  'Minimum investment', 'সর্বনিম্ন বিনিয়োগ'),
+                              style: const TextStyle(
+                                  fontSize: 10, color: muted),
+                            ),
+                            Text(
+                              _fmt(minInv),
+                              style: const TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w700,
+                                color: ink,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const Spacer(),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 8),
+                          decoration: BoxDecoration(
+                            gradient: const LinearGradient(
+                              colors: [Color(0xFF136247), emerald],
+                            ),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Row(
+                            children: [
+                              Text(
+                                LanguageService.tr('Invest', 'বিনিয়োগ'),
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.white,
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+                              const Icon(Icons.arrow_forward_rounded,
+                                  size: 14, color: Colors.white),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _gradientProgress(double value) {
+    return Container(
+      height: 6,
+      decoration: BoxDecoration(
+        color: const Color(0xFFEDE8DE),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: FractionallySizedBox(
+          widthFactor: value == 0 ? 0.02 : value,
+          child: Container(
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(colors: [emerald, turquoise]),
+              borderRadius: BorderRadius.circular(4),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _projectMetric(String label, String value, Color color, Color soft) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+        decoration: BoxDecoration(
+          color: soft,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Column(
+          children: [
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                value,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: color,
+                ),
+              ),
+            ),
+            const SizedBox(height: 1),
+            Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 9.5, color: color.withAlpha(190)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ─── Recent Investments ───────────────────────────────────
+  Color _statusColor(String status) {
+    final s = status.toLowerCase();
+    if (s.contains('pend') || s.contains('review')) return goldDeep;
+    if (s.contains('reject') || s.contains('cancel') || s.contains('fail')) {
+      return danger;
+    }
+    return emerald;
+  }
+
+  Widget _buildRecentInvestmentsSection() {
+    final int count = _recentInvestments.length;
+    final bool scrollable = count > _recentVisibleCount;
+    // 3 ta porjonto sob dekhabe, tar beshi hole 3 ta row er height e scroll hobe
+    final double listHeight =
+        (scrollable ? _recentVisibleCount : count) * _recentItemHeight;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _sectionHeader(
+          LanguageService.tr('Recent Investments', 'সাম্প্রতিক বিনিয়োগ'),
+          onViewAll: () => _open(const InvestmentsPage()),
+        ),
+        const SizedBox(height: 14),
+        _recentInvestments.isEmpty
+            ? _emptyState(
+          Icons.receipt_long_outlined,
+          LanguageService.tr('You have not invested yet',
+              'এখনো কোনো বিনিয়োগ করা হয়নি'),
+          actionLabel:
+          LanguageService.tr('Explore projects', 'প্রজেক্ট দেখুন'),
+          onAction: () => _open(const MyProjectsPage()),
+        )
+            : Container(
+          clipBehavior: Clip.antiAlias,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: line),
+          ),
+          child: SizedBox(
+            height: listHeight,
+            child: Scrollbar(
+              controller: _recentScrollController,
+              thumbVisibility: scrollable,
+              child: ListView.builder(
+                controller: _recentScrollController,
+                padding: EdgeInsets.zero,
+                itemExtent: _recentItemHeight,
+                physics: scrollable
+                    ? const ClampingScrollPhysics()
+                    : const NeverScrollableScrollPhysics(),
+                itemCount: count,
+                itemBuilder: (context, index) {
+                  final item = _recentInvestments[index];
+                  final title = item['title']?.toString() ?? '';
+                  final status = item['status']?.toString() ?? '';
+                  final sc = _statusColor(status);
+                  final accent = _accents[index % _accents.length];
+                  final bool isLast = index == count - 1;
+
+                  return Column(
+                    children: [
+                      Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16),
+                          child: Row(
+                            children: [
+                              Container(
+                                width: 42,
+                                height: 42,
+                                decoration: BoxDecoration(
+                                  color: accent.$2,
+                                  borderRadius:
+                                  BorderRadius.circular(13),
+                                ),
+                                alignment: Alignment.center,
+                                child: Text(
+                                  title.isNotEmpty
+                                      ? title[0].toUpperCase()
+                                      : '•',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w700,
+                                    color: accent.$1,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 14),
+                              Expanded(
+                                child: Column(
+                                  mainAxisAlignment:
+                                  MainAxisAlignment.center,
+                                  crossAxisAlignment:
+                                  CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      title,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        fontSize: 13.5,
+                                        fontWeight: FontWeight.w600,
+                                        color: ink,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      item['createdAt']?.toString() ??
+                                          '',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                          fontSize: 11, color: muted),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Column(
+                                mainAxisAlignment:
+                                MainAxisAlignment.center,
+                                crossAxisAlignment:
+                                CrossAxisAlignment.end,
+                                children: [
+                                  Text(
+                                    _fmt(item['amountBdt'] as double? ??
+                                        0.0),
+                                    style: const TextStyle(
+                                      fontSize: 13.5,
+                                      fontWeight: FontWeight.w700,
+                                      color: ink,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Container(
+                                    padding:
+                                    const EdgeInsets.symmetric(
+                                        horizontal: 8, vertical: 3),
+                                    decoration: BoxDecoration(
+                                      color: sc.withAlpha(25),
+                                      borderRadius:
+                                      BorderRadius.circular(20),
+                                    ),
+                                    child: Text(
+                                      status,
+                                      style: TextStyle(
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.w700,
+                                        color: sc,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      if (!isLast)
+                        const Divider(
+                          height: 1,
+                          thickness: 1,
+                          color: line,
+                          indent: 70,
+                        ),
+                    ],
+                  );
+                },
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ─── Project Updates ──────────────────────────────────────
+  Widget _buildProjectUpdatesSection() {
+    return GestureDetector(
+      onTap: () => _open(const NotificationsPage()),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(20),
+        child: Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              colors: [lapis, lapisDeep],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+          ),
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: CustomPaint(
+                  painter: _IslamicPatternPainter(
+                    color: Colors.white.withAlpha(14),
+                    cell: 38,
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 44,
+                      height: 44,
+                      decoration: BoxDecoration(
+                        gradient:
+                        const LinearGradient(colors: [goldLight, gold]),
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: const Icon(Icons.campaign_outlined,
+                          color: lapisDeep, size: 22),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            LanguageService.tr(
+                                'PROJECT UPDATE', 'প্রজেক্ট আপডেট'),
+                            style: const TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700,
+                              color: goldLight,
+                              letterSpacing: 1.2,
+                            ),
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            LanguageService.tr(
+                                'Quarterly profit distribution credited',
+                                'ত্রৈমাসিক মুনাফা ক্রেডিট করা হয়েছে'),
+                            style: const TextStyle(
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Icon(Icons.chevron_right_rounded,
+                        color: Colors.white.withAlpha(180), size: 22),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _emptyState(
+      IconData icon,
+      String text, {
+        String? actionLabel,
+        VoidCallback? onAction,
+      }) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 26, horizontal: 20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: line),
+      ),
+      child: Column(
+        children: [
+          Container(
+            width: 52,
+            height: 52,
+            decoration: const BoxDecoration(
+              color: goldSoft,
+              shape: BoxShape.circle,
+            ),
+            child: Icon(icon, size: 24, color: goldDeep),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            text,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              fontSize: 13,
+              color: ink,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          if (actionLabel != null && onAction != null) ...[
+            const SizedBox(height: 12),
+            TextButton(
+              onPressed: onAction,
+              style: TextButton.styleFrom(
+                backgroundColor: emeraldSoft,
+                foregroundColor: emerald,
+                padding:
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(20),
+                ),
+              ),
+              child: Text(
+                actionLabel,
+                style: const TextStyle(
+                    fontSize: 12, fontWeight: FontWeight.w600),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  // ═════════════════════════════════════════════════════════
+  // DRAWER
+  // ═════════════════════════════════════════════════════════
+  Widget _buildAppSidebar(BuildContext context) {
+    final String name = _user?['name'] ?? 'Investor';
+    final String email = _user?['email'] ?? '';
+    final String initial = name.isNotEmpty ? name[0].toUpperCase() : 'I';
+
+    final menuItems = [
+      (LanguageService.tr('Overview', 'ওভারভিউ'),
+      Icons.space_dashboard_outlined,
+      const InvestorDashboardPage() as Widget),
+      (LanguageService.tr('Investments', 'ইনভেস্টমেন্টস'),
+      Icons.pie_chart_outline_rounded, const InvestmentsPage() as Widget),
+      (LanguageService.tr('Group Invest', 'গ্রুপ ইনভেস্ট'),
+      Icons.diversity_3_outlined, const GroupInvestmentsPage() as Widget),
+      (LanguageService.tr('My Projects', 'আমার প্রজেক্টস'),
+      Icons.business_center_outlined, const MyProjectsPage() as Widget),
+      (LanguageService.tr('Portfolio', 'পোর্টফোলিও'),
+      Icons.donut_large_outlined, const PortfolioPage() as Widget),
+      (LanguageService.tr('Documents', 'ডকুমেন্টস'), Icons.folder_outlined,
+      const DocumentsPage() as Widget),
+      (LanguageService.tr('Reports', 'রিপোর্টস'), Icons.bar_chart_rounded,
+      const ReportsPage() as Widget),
+      (LanguageService.tr('Notifications', 'নোটিফিকেশনস'),
+      Icons.notifications_none_rounded,
+      const NotificationsPage() as Widget),
+      (LanguageService.tr('Profile', 'প্রোফাইল'),
+      Icons.person_outline_rounded, const ProfilePage() as Widget),
+      (LanguageService.tr('Settings', 'সেটিংস'), Icons.settings_outlined,
+      const SettingsPage() as Widget),
+      (LanguageService.tr('KYC', 'কেওয়াইসি'), Icons.verified_user_outlined,
+      const KycPage() as Widget),
+    ];
+
+    return Drawer(
+      backgroundColor: emeraldDeep,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.horizontal(right: Radius.circular(24)),
+      ),
+      child: Stack(
+        children: [
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            height: 220,
+            child: ShaderMask(
+              shaderCallback: (rect) => const LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [Colors.white, Colors.transparent],
+              ).createShader(rect),
+              blendMode: BlendMode.dstIn,
+              child: CustomPaint(
+                painter: _IslamicPatternPainter(
+                  color: Colors.white.withAlpha(14),
+                  cell: 40,
+                ),
+              ),
+            ),
+          ),
+          SafeArea(
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(22, 18, 10, 8),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 36,
+                        height: 36,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: gold, width: 1),
+                        ),
+                        child: const Icon(Icons.show_chart_rounded,
+                            color: goldLight, size: 19),
+                      ),
+                      const SizedBox(width: 12),
+                      const Expanded(
+                        child: Text(
+                          'Biniyog Club',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 18,
+                            letterSpacing: -0.2,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close_rounded,
+                            color: Colors.white60, size: 20),
+                        onPressed: () => Navigator.pop(context),
+                      ),
+                    ],
+                  ),
+                ),
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(24, 18, 24, 10),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'MENU',
+                      style: TextStyle(
+                        color: goldLight,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 1.8,
+                      ),
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: ListView.builder(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    itemCount: menuItems.length,
+                    itemBuilder: (context, index) {
+                      final item = menuItems[index];
+                      final bool active = index == 0;
+
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 2),
+                        child: Material(
+                          color: active
+                              ? Colors.white.withAlpha(18)
+                              : Colors.transparent,
+                          borderRadius: BorderRadius.circular(12),
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(12),
+                            onTap: () {
+                              Navigator.pop(context);
+                              if (!active) _open(item.$3);
+                            },
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 12, vertical: 12),
+                              child: Row(
+                                children: [
+                                  Container(
+                                    width: 3,
+                                    height: 18,
+                                    decoration: BoxDecoration(
+                                      color:
+                                      active ? gold : Colors.transparent,
+                                      borderRadius: BorderRadius.circular(2),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Icon(
+                                    item.$2,
+                                    size: 20,
+                                    color: active
+                                        ? goldLight
+                                        : Colors.white.withAlpha(150),
+                                  ),
+                                  const SizedBox(width: 14),
+                                  Text(
+                                    item.$1,
+                                    style: TextStyle(
+                                      color: active
+                                          ? Colors.white
+                                          : Colors.white.withAlpha(190),
+                                      fontSize: 13.5,
+                                      fontWeight: active
+                                          ? FontWeight.w600
+                                          : FontWeight.w500,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                Container(
+                  margin: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+                  padding: const EdgeInsets.fromLTRB(12, 12, 4, 12),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withAlpha(12),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: Colors.white.withAlpha(20)),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(2),
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          border: Border.all(color: gold, width: 1),
+                        ),
+                        child: _avatar(initial, 18),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 13.5,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(height: 1),
+                            Text(
+                              email,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: Colors.white.withAlpha(130),
+                                fontSize: 11,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        icon: Icon(Icons.logout_rounded,
+                            color: Colors.white.withAlpha(170), size: 19),
+                        onPressed: () => _showLogoutConfirmDialog(context),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -571,956 +1833,103 @@ class _InvestorDashboardPageState extends State<InvestorDashboardPage> {
       context: context,
       builder: (context) {
         return AlertDialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(18),
+          backgroundColor: Colors.white,
+          surfaceTintColor: Colors.transparent,
+          shape:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 8),
+          title: Text(
+            LanguageService.tr('Sign out', 'সাইন আউট'),
+            style: const TextStyle(
+                fontSize: 18, fontWeight: FontWeight.w700, color: ink),
           ),
-          title: Text(LanguageService.tr('Sign Out', 'সাইন আউট')),
-          content: Text(LanguageService.tr(
-              'Are you sure you want to sign out of your Biniyog Club account?',
-              'আপনি কি নিশ্চিত যে আপনি অ্যাকাউন্ট থেকে সাইন আউট করতে চান?')),
+          content: Text(
+            LanguageService.tr(
+                'Are you sure you want to sign out of your Biniyog Club account?',
+                'আপনি কি নিশ্চিত যে আপনি অ্যাকাউন্ট থেকে সাইন আউট করতে চান?'),
+            style:
+            const TextStyle(fontSize: 13.5, color: muted, height: 1.45),
+          ),
+          actionsPadding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
-              child: Text(LanguageService.tr('Cancel', 'বাতিল'),
-                  style: const TextStyle(color: Colors.grey)),
+              child: Text(
+                LanguageService.tr('Cancel', 'বাতিল'),
+                style:
+                const TextStyle(color: muted, fontWeight: FontWeight.w600),
+              ),
             ),
-            ElevatedButton(
+            FilledButton(
               onPressed: () async {
                 final nav = Navigator.of(context);
-                nav.pop(); // Close Dialog
+                nav.pop();
                 await AuthService.logout();
                 nav.pushAndRemoveUntil(
                   MaterialPageRoute(builder: (context) => const LoginPage()),
-                  (route) => false,
+                      (route) => false,
                 );
               },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.redAccent,
+              style: FilledButton.styleFrom(
+                backgroundColor: danger,
                 foregroundColor: Colors.white,
+                padding:
+                const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
+                  borderRadius: BorderRadius.circular(12),
                 ),
               ),
-              child: Text(LanguageService.tr('Sign Out', 'সাইন আউট')),
+              child: Text(LanguageService.tr('Sign out', 'সাইন আউট')),
             ),
           ],
         );
       },
     );
   }
+}
 
-  // Hero Card: Portfolio Overview / Total Invested
-  Widget _buildPortfolioOverviewHeroCard() {
-    final double roi =
-        _totalInvested > 0 ? ((_returnsEarned / _totalInvested) * 100) : 0.0;
+// ═══════════════════════════════════════════════════════════
+// Islamic geometric pattern (8-point star grid)
+// ═══════════════════════════════════════════════════════════
+class _IslamicPatternPainter extends CustomPainter {
+  final Color color;
+  final double cell;
 
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(22),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [
-            Color(0xFF064E3B),
-            Color(0xFF047857),
-            Color(0xFF0D9488),
-          ],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(24),
-        boxShadow: [
-          BoxShadow(
-            color: primaryDarkTeal.withAlpha(70),
-            blurRadius: 18,
-            offset: const Offset(0, 8),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(6),
-                decoration: BoxDecoration(
-                  color: Colors.white.withAlpha(35),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(Icons.pie_chart_rounded,
-                    color: Colors.white, size: 16),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                LanguageService.tr('Portfolio Overview', 'পোর্টফোলিও ওভারভিউ'),
-                style: TextStyle(
-                  color: Colors.white.withAlpha(230),
-                  fontSize: 13.5,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
+  _IslamicPatternPainter({required this.color, required this.cell});
 
-          // Total Invested Display
-          Text(
-            _fmt(_totalInvested),
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 34,
-              fontWeight: FontWeight.bold,
-              letterSpacing: 0.5,
-            ),
-          ),
-          Text(
-            LanguageService.tr('Total Invested', 'মোট বিনিয়োগ'),
-            style: TextStyle(
-              color: Colors.white.withAlpha(200),
-              fontSize: 12,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-          const SizedBox(height: 20),
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.9;
 
-          // 4 Grid Sub Stats inside Hero Card
-          GridView.count(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            crossAxisCount: 2,
-            childAspectRatio: 2.2,
-            crossAxisSpacing: 10,
-            mainAxisSpacing: 10,
-            children: [
-              _buildHeroSubStatBox(
-                  LanguageService.tr('Active Projects', 'চলতি প্রজেক্ট'), '$_activeCount'),
-              _buildHeroSubStatBox(
-                  LanguageService.tr('Returns Earned', 'অর্জিত রিটার্ন'), _fmt(_returnsEarned)),
-              _buildHeroSubStatBox(
-                  LanguageService.tr('Portfolio Value', 'পোর্টফোলিও ভ্যালু'), _fmt(_portfolioValue)),
-              _buildHeroSubStatBox(
-                  LanguageService.tr('ROI', 'আর.ও.আই'), '${roi.toStringAsFixed(1)}%'),
-            ],
-          ),
-        ],
-      ),
-    );
+    final r = cell * 0.34;
+
+    for (double y = 0; y <= size.height + cell; y += cell) {
+      final offsetRow = ((y / cell).round() % 2) * cell / 2;
+      for (double x = -cell; x <= size.width + cell; x += cell) {
+        final c = Offset(x + offsetRow, y);
+        _drawStar(canvas, c, r, paint);
+        canvas.drawCircle(c, r * 0.32, paint);
+      }
+    }
   }
 
-  Widget _buildHeroSubStatBox(String label, String value) {
-    return Container(
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: Colors.white.withAlpha(30),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Text(
-            label,
-            style: TextStyle(
-              color: Colors.white.withAlpha(200),
-              fontSize: 10.5,
-            ),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            value,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 14,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-        ],
-      ),
-    );
+  void _drawStar(Canvas canvas, Offset c, double r, Paint paint) {
+    for (final start in [0.0, math.pi / 4]) {
+      final path = Path();
+      for (int i = 0; i < 4; i++) {
+        final a = start + i * math.pi / 2;
+        final p = Offset(c.dx + r * math.cos(a), c.dy + r * math.sin(a));
+        i == 0 ? path.moveTo(p.dx, p.dy) : path.lineTo(p.dx, p.dy);
+      }
+      path.close();
+      canvas.drawPath(path, paint);
+    }
   }
 
-  // 2. Multi-colored Bespoke Bento Stat Grid
-  Widget _buildBespokeStatGrid() {
-    final double roi =
-        _totalInvested > 0 ? ((_returnsEarned / _totalInvested) * 100) : 0.0;
-
-    final stats = [
-      {
-        'title': LanguageService.tr('Portfolio Value', 'পোর্টফোলিও ভ্যালু'),
-        'value': _fmt(_portfolioValue),
-        'sub': LanguageService.tr('$_activeCount active projects', '$_activeCount টি একটিভ প্রজেক্ট'),
-        'icon': Icons.account_balance_wallet_rounded,
-        'bg': const Color(0xFFECFDF5),
-        'border': const Color(0xFFA7F3D0),
-        'iconBg': const Color(0xFF059669),
-        'textCol': const Color(0xFF065F46),
-        'onTap': () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(builder: (context) => const PortfolioPage()),
-          );
-        },
-      },
-      {
-        'title': LanguageService.tr('ROI', 'আর.ও.আই'),
-        'value': '${roi.toStringAsFixed(1)}%',
-        'sub': LanguageService.tr('Distributed returns', 'প্রাপ্ত রিটার্ন'),
-        'icon': Icons.trending_up_rounded,
-        'bg': const Color(0xFFFFFBEB),
-        'border': const Color(0xFFFDE68A),
-        'iconBg': const Color(0xFFD97706),
-        'textCol': const Color(0xFF92400E),
-        'onTap': () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(builder: (context) => const PortfolioPage()),
-          );
-        },
-      },
-      {
-        'title': LanguageService.tr('Completed', 'সম্পন্ন প্রজেক্ট'),
-        'value': '$_completedCount',
-        'sub': LanguageService.tr('Matured investments', 'মেয়াদোত্তীর্ণ বিনিয়োগ'),
-        'icon': Icons.verified_rounded,
-        'bg': const Color(0xFFEEF2FF),
-        'border': const Color(0xFFC7D2FE),
-        'iconBg': const Color(0xFF4F46E5),
-        'textCol': const Color(0xFF3730A3),
-        'onTap': () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(builder: (context) => const InvestmentsPage()),
-          );
-        },
-      },
-      {
-        'title': LanguageService.tr('Pending', 'অপেক্ষমান'),
-        'value': '$_pendingTransactions',
-        'sub': _pendingAmount > 0
-            ? _fmt(_pendingAmount)
-            : LanguageService.tr('Awaiting approval', 'অনুমোদনের অপেক্ষায়'),
-        'icon': Icons.hourglass_top_rounded,
-        'bg': const Color(0xFFFEF2F2),
-        'border': const Color(0xFFFECDD3),
-        'iconBg': const Color(0xFFE11D48),
-        'textCol': const Color(0xFF9F1239),
-        'onTap': () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(builder: (context) => const InvestmentsPage()),
-          );
-        },
-      },
-    ];
-
-    return GridView.builder(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      itemCount: stats.length,
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 2,
-        crossAxisSpacing: 10,
-        mainAxisSpacing: 10,
-        childAspectRatio: 1.35,
-      ),
-      itemBuilder: (context, index) {
-        final item = stats[index];
-        final Color bg = item['bg'] as Color;
-        final Color border = item['border'] as Color;
-        final Color iconBg = item['iconBg'] as Color;
-        final Color textCol = item['textCol'] as Color;
-        final VoidCallback? onTap = item['onTap'] as VoidCallback?;
-
-        return GestureDetector(
-          onTap: onTap,
-          child: Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: bg,
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: border),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: iconBg,
-                        shape: BoxShape.circle,
-                      ),
-                      child: Icon(item['icon'] as IconData,
-                          color: Colors.white, size: 16),
-                    ),
-                    Icon(Icons.arrow_forward_rounded,
-                        color: textCol.withAlpha(180), size: 14),
-                  ],
-                ),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      item['value'] as String,
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        color: textCol,
-                      ),
-                    ),
-                    Text(
-                      item['title'] as String,
-                      style: TextStyle(
-                        fontSize: 11.5,
-                        fontWeight: FontWeight.bold,
-                        color: textCol.withAlpha(220),
-                      ),
-                    ),
-                    Text(
-                      item['sub'] as String,
-                      style: TextStyle(
-                          fontSize: 9.5, color: textCol.withAlpha(180)),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  // Open for Investment Projects
-  Widget _buildAvailableProjectsSection() {
-    return Column(
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Row(
-              children: [
-                Container(
-                  width: 4,
-                  height: 16,
-                  decoration: BoxDecoration(
-                    color: primaryTeal,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  LanguageService.tr('Open for Investment', 'বিনিয়োগের জন্য উন্মুক্ত'),
-                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
-                ),
-              ],
-            ),
-            TextButton(
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => const MyProjectsPage()),
-                );
-              },
-              child: Text(
-                LanguageService.tr('View all →', 'সব দেখুন →'),
-                style: const TextStyle(color: primaryTeal, fontWeight: FontWeight.bold),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 8),
-        _openProjects.isEmpty
-            ? Container(
-                padding: const EdgeInsets.all(20),
-                width: double.infinity,
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: Colors.grey.shade200),
-                ),
-                child: Center(
-                  child: Text(
-                    LanguageService.tr('No open projects currently available.', 'বর্তমানে কোনো উন্মুক্ত প্রজেক্ট নেই।'),
-                    style: const TextStyle(fontSize: 12, color: Colors.grey),
-                  ),
-                ),
-              )
-            : SizedBox(
-                height: 310,
-                child: ListView.builder(
-                  scrollDirection: Axis.horizontal,
-                  itemCount: _openProjects.length,
-                  itemBuilder: (context, index) {
-                    final p = _openProjects[index];
-                    final double progress = (p['progress'] as double? ?? 0.0);
-                    final pctInt = (progress * 100).toInt();
-                    final coverUrl = p['coverImageUrl']?.toString() ?? '';
-                    final location = p['location']?.toString() ?? 'Narayanganj';
-                    final daysLeft = p['daysLeft'] as int? ?? 116;
-                    final investorsCount = p['investorsCount'] as int? ?? 1;
-
-                    return GestureDetector(
-                      onTap: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) => ProjectDetailPage(
-                              projectIdOrSlug: p['id'].toString(),
-                            ),
-                          ),
-                        );
-                      },
-                      child: Container(
-                        width: 270,
-                        margin: const EdgeInsets.only(right: 14),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(18),
-                          border: Border.all(color: Colors.grey.shade200),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withAlpha(8),
-                              blurRadius: 10,
-                              offset: const Offset(0, 4),
-                            ),
-                          ],
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            // Top Media Image Container with Badges
-                            Stack(
-                              children: [
-                                ClipRRect(
-                                  borderRadius: const BorderRadius.vertical(
-                                      top: Radius.circular(18)),
-                                  child: Image.network(
-                                    coverUrl,
-                                    height: 120,
-                                    width: double.infinity,
-                                    fit: BoxFit.cover,
-                                    errorBuilder: (context, error, stackTrace) {
-                                      return Container(
-                                        height: 120,
-                                        width: double.infinity,
-                                        color: Colors.teal.shade900,
-                                        child: const Center(
-                                          child: Icon(
-                                              Icons.image_not_supported_outlined,
-                                              color: Colors.white54,
-                                              size: 32),
-                                        ),
-                                      );
-                                    },
-                                  ),
-                                ),
-                                // Top Badges
-                                Positioned(
-                                  top: 8,
-                                  left: 8,
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 8, vertical: 3),
-                                    decoration: BoxDecoration(
-                                      color: Colors.black.withAlpha(150),
-                                      borderRadius: BorderRadius.circular(6),
-                                      border: Border.all(color: Colors.white24),
-                                    ),
-                                    child: Text(
-                                      p['category'] as String? ?? 'SME',
-                                      style: const TextStyle(
-                                        fontSize: 9.5,
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.white,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                Positioned(
-                                  top: 8,
-                                  right: 8,
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 8, vertical: 3),
-                                    decoration: BoxDecoration(
-                                      color: Colors.black.withAlpha(150),
-                                      borderRadius: BorderRadius.circular(6),
-                                      border: Border.all(color: Colors.white24),
-                                    ),
-                                    child: Row(
-                                      children: [
-                                        const Icon(Icons.access_time_rounded,
-                                            size: 11, color: Colors.amber),
-                                        const SizedBox(width: 3),
-                                        Text(
-                                          '${daysLeft}d left',
-                                          style: const TextStyle(
-                                            fontSize: 9.5,
-                                            fontWeight: FontWeight.bold,
-                                            color: Colors.white,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-
-                            // Card Details Padding
-                            Padding(
-                              padding: const EdgeInsets.all(12.0),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    p['title'] as String? ?? 'Project',
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.black87,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 2),
-                                  Row(
-                                    children: [
-                                      const Icon(Icons.location_on_outlined,
-                                          size: 12, color: primaryTeal),
-                                      const SizedBox(width: 3),
-                                      Text(
-                                        location,
-                                        style: TextStyle(
-                                            fontSize: 11,
-                                            color: Colors.grey[600]),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 10),
-
-                                  // Progress Bar & Raised vs Goal
-                                  Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Row(
-                                        mainAxisAlignment:
-                                            MainAxisAlignment.spaceBetween,
-                                        children: [
-                                          Text(
-                                            '$pctInt% funded',
-                                            style: TextStyle(
-                                                fontSize: 10,
-                                                color: Colors.grey[700],
-                                                fontWeight: FontWeight.w600),
-                                          ),
-                                          Text(
-                                            '${_fmt(p['fundingGoalBdt'] as double)} goal',
-                                            style: TextStyle(
-                                                fontSize: 10,
-                                                color: Colors.grey[600]),
-                                          ),
-                                        ],
-                                      ),
-                                      const SizedBox(height: 4),
-                                      ClipRRect(
-                                        borderRadius: BorderRadius.circular(4),
-                                        child: LinearProgressIndicator(
-                                          value: progress,
-                                          minHeight: 5,
-                                          backgroundColor: Colors.grey.shade200,
-                                          valueColor:
-                                              const AlwaysStoppedAnimation<Color>(
-                                                  primaryTeal),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 10),
-
-                                  // 3 Bento Stat Boxes
-                                  Row(
-                                    children: [
-                                      Expanded(
-                                        child: _buildBentoStatBox(
-                                          LanguageService.tr('Return', 'রিটার্ন'),
-                                          '${((p['expectedReturnPct'] as double) * 100).toStringAsFixed(0)}%',
-                                          primaryTeal,
-                                        ),
-                                      ),
-                                      const SizedBox(width: 6),
-                                      Expanded(
-                                        child: _buildBentoStatBox(
-                                          LanguageService.tr('Duration', 'মেয়াদ'),
-                                          '${p['durationDays']}d',
-                                          Colors.black87,
-                                        ),
-                                      ),
-                                      const SizedBox(width: 6),
-                                      Expanded(
-                                        child: _buildBentoStatBox(
-                                          LanguageService.tr('Investors', 'বিনিয়োগকারী'),
-                                          '$investorsCount',
-                                          Colors.black87,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 8),
-
-                                  Text(
-                                    '${LanguageService.tr('Min', 'সর্বনিম্ন')} ${_fmt(p['minInvestmentBdt'] as double)}',
-                                    style: TextStyle(
-                                        fontSize: 10.5,
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.grey[700]),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ),
-      ],
-    );
-  }
-
-  Widget _buildBentoStatBox(String label, String val, Color color) {
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
-      decoration: BoxDecoration(
-        color: Colors.grey.shade50,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.grey.shade200),
-      ),
-      child: Column(
-        children: [
-          Text(
-            val,
-            style: TextStyle(
-                fontSize: 11, fontWeight: FontWeight.bold, color: color),
-          ),
-          const SizedBox(height: 1),
-          Text(
-            label,
-            style: TextStyle(fontSize: 8.5, color: Colors.grey.shade600),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // Recent Investments Section
-  Widget _buildRecentInvestmentsSection() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: Colors.grey.shade200),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withAlpha(5),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                LanguageService.tr('Recent Investments', 'সাম্প্রতিক বিনিয়োগ'),
-                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
-              ),
-              const Icon(Icons.chevron_right_rounded, color: Colors.grey),
-            ],
-          ),
-          const SizedBox(height: 12),
-          _recentInvestments.isEmpty
-              ? Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 12.0),
-                  child: Center(
-                    child: Text(
-                      LanguageService.tr('No investments made yet.', 'এখনো কোনো বিনিয়োগ করা হয়নি।'),
-                      style: const TextStyle(fontSize: 12, color: Colors.grey),
-                    ),
-                  ),
-                )
-              : ListView.separated(
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  itemCount: _recentInvestments.length,
-                  separatorBuilder: (context, index) =>
-                      const Divider(height: 16),
-                  itemBuilder: (context, index) {
-                    final item = _recentInvestments[index];
-                    return Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                item['title'] as String,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                    fontSize: 13, fontWeight: FontWeight.w600),
-                              ),
-                              Text(
-                                item['createdAt'] as String,
-                                style: TextStyle(
-                                    fontSize: 10, color: Colors.grey[600]),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            Text(
-                              _fmt(item['amountBdt'] as double),
-                              style: const TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.bold,
-                                  color: primaryTeal),
-                            ),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 6, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: Colors.teal.shade50,
-                                borderRadius: BorderRadius.circular(4),
-                              ),
-                              child: Text(
-                                item['status'] as String,
-                                style: const TextStyle(
-                                    fontSize: 9,
-                                    fontWeight: FontWeight.bold,
-                                    color: primaryTeal),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    );
-                  },
-                ),
-        ],
-      ),
-    );
-  }
-
-  // Project Updates
-  Widget _buildProjectUpdatesSection() {
-    return GestureDetector(
-      onTap: () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(builder: (context) => const NotificationsPage()),
-        );
-      },
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: const Color(0xFFF0FDF4),
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: const Color(0xFFBBF7D0)),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const Icon(Icons.notifications_active_outlined,
-                    color: primaryTeal, size: 18),
-                const SizedBox(width: 6),
-                Text(
-                  LanguageService.tr('Project Updates', 'প্রজেক্ট আপডেট'),
-                  style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFF166534)),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: const BoxDecoration(
-                    color: primaryTeal,
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(Icons.campaign_outlined,
-                      color: Colors.white, size: 20),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        LanguageService.tr(
-                            'Quarterly profit distribution credited!',
-                            'ত্রৈমাসিক মুনাফা ক্রেডিট করা হয়েছে!'),
-                        style: const TextStyle(
-                            fontSize: 12.5,
-                            fontWeight: FontWeight.bold,
-                            color: Color(0xFF14532D)),
-                      ),
-                      Text(
-                        'Biniyog Club Platform Update',
-                        style: TextStyle(
-                            fontSize: 11, color: Colors.teal.shade800),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // Quick Actions (Colorful Soft Bento Cards)
-  Widget _buildQuickActionsSection() {
-    final actions = [
-      {
-        'title': LanguageService.tr('Browse Projects', 'প্রজেক্ট ব্রাউজ করুন'),
-        'icon': Icons.explore_outlined,
-        'bg': const Color(0xFFECFDF5),
-        'border': const Color(0xFFA7F3D0),
-        'iconColor': const Color(0xFF059669),
-        'onTap': () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(builder: (context) => const MyProjectsPage()),
-          );
-        },
-      },
-      {
-        'title': LanguageService.tr('My Portfolio', 'আমার পোর্টফোলিও'),
-        'icon': Icons.pie_chart_outline_rounded,
-        'bg': const Color(0xFFEEF2FF),
-        'border': const Color(0xFFC7D2FE),
-        'iconColor': const Color(0xFF4F46E5),
-        'onTap': () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(builder: (context) => const PortfolioPage()),
-          );
-        },
-      },
-      {
-        'title': LanguageService.tr('Group Invest', 'গ্রুপ ইনভেস্ট'),
-        'icon': Icons.groups_outlined,
-        'bg': const Color(0xFFFFF7ED),
-        'border': const Color(0xFFFFEDD5),
-        'iconColor': const Color(0xFFEA580C),
-        'onTap': () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(builder: (context) => const GroupInvestmentsPage()),
-          );
-        },
-      },
-      {
-        'title': LanguageService.tr('KYC Verification', 'কেওয়াইসি ভেরিফিকেশন'),
-        'icon': Icons.verified_user_outlined,
-        'bg': const Color(0xFFF0FDF4),
-        'border': const Color(0xFFBBF7D0),
-        'iconColor': const Color(0xFF16A34A),
-        'onTap': () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(builder: (context) => const KycPage()),
-          );
-        },
-      },
-    ];
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          LanguageService.tr('Quick Actions', 'দ্রুত অ্যাকশন'),
-          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
-        ),
-        const SizedBox(height: 12),
-        GridView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          itemCount: actions.length,
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: 2,
-            crossAxisSpacing: 10,
-            mainAxisSpacing: 10,
-            childAspectRatio: 2.2,
-          ),
-          itemBuilder: (context, index) {
-            final act = actions[index];
-            final Color bg = act['bg'] as Color;
-            final Color border = act['border'] as Color;
-            final Color iconColor = act['iconColor'] as Color;
-
-            return InkWell(
-              onTap: act['onTap'] as VoidCallback?,
-              borderRadius: BorderRadius.circular(14),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                decoration: BoxDecoration(
-                  color: bg,
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: border),
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: iconColor,
-                        shape: BoxShape.circle,
-                      ),
-                      child: Icon(act['icon'] as IconData,
-                          color: Colors.white, size: 16),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        act['title'] as String,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.black87,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            );
-          },
-        ),
-      ],
-    );
-  }
+  @override
+  bool shouldRepaint(covariant _IslamicPatternPainter old) =>
+      old.color != color || old.cell != cell;
 }

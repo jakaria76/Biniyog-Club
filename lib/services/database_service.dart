@@ -8,7 +8,9 @@ import 'package:postgres/postgres.dart';
 import '../config/db_config.dart';
 
 class DatabaseService {
+  static final http.Client _httpClient = http.Client();
   static Connection? _connection;
+  static String? _lastConnectionError;
 
   // Image URL Resolver for Cloudinary / Neon Postgres URLs
   static String formatImageUrl(String? rawUrl) {
@@ -26,50 +28,115 @@ class DatabaseService {
     return 'https://res.cloudinary.com/demo/image/upload/$url';
   }
 
-  // Open & get active connection to Neon PostgreSQL
+  // Universal Neon HTTP API SQL Executor (HTTPS Port 443 - 100% Reliable & Fast on All Devices/Emulators)
+  static Future<List<Map<String, dynamic>>> queryNeonHttp(String querySql, [List<dynamic>? params]) async {
+    try {
+      final dbUrl = DbConfig.databaseUrl.trim();
+
+      final response = await http.post(
+        Uri.parse('https://ep-withered-lake-b5bgohpl.c-7.us-east-2.aws.neon.tech/sql'),
+        headers: {
+          'Content-Type': 'application/json',
+          'neon-connection-string': dbUrl,
+        },
+        body: jsonEncode({
+          'query': querySql,
+          if (params != null && params.isNotEmpty) 'params': params,
+        }),
+      ).timeout(const Duration(seconds: 30));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final List rows = data['rows'] as List? ?? [];
+        return rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
+      } else {
+        debugPrint("Neon HTTP Query Error Status ${response.statusCode}: ${response.body}");
+        _lastConnectionError = "HTTP ${response.statusCode}: ${response.body}";
+      }
+    } catch (e) {
+      debugPrint("Neon HTTP Query Exception: $e");
+      _lastConnectionError = e.toString();
+    }
+    return [];
+  }
+
+  // Execute Non-Query SQL Statement via Neon HTTP API
+  static Future<bool> executeNeonHttp(String statementSql, [List<dynamic>? params]) async {
+    try {
+      final dbUrl = DbConfig.databaseUrl.trim();
+
+      final response = await http.post(
+        Uri.parse('https://ep-withered-lake-b5bgohpl.c-7.us-east-2.aws.neon.tech/sql'),
+        headers: {
+          'Content-Type': 'application/json',
+          'neon-connection-string': dbUrl,
+        },
+        body: jsonEncode({
+          'query': statementSql,
+          if (params != null && params.isNotEmpty) 'params': params,
+        }),
+      ).timeout(const Duration(seconds: 30));
+
+      if (response.statusCode == 200) {
+        return true;
+      } else {
+        debugPrint("Neon HTTP Execute Error Status ${response.statusCode}: ${response.body}");
+        _lastConnectionError = "HTTP ${response.statusCode}: ${response.body}";
+      }
+    } catch (e) {
+      debugPrint("Neon HTTP Execute Exception: $e");
+      _lastConnectionError = e.toString();
+    }
+    return false;
+  }
+
+  // Open & get active connection to Neon PostgreSQL with fallback
   static Future<Connection?> getConnection() async {
     try {
       if (_connection != null && _connection!.isOpen) {
         return _connection!;
       }
+      _connection = null;
 
       final dbUrl = DbConfig.databaseUrl.trim();
+      final uri = Uri.parse(dbUrl);
 
-      if (dbUrl.isEmpty) {
-        debugPrint("Database Connection Error: DATABASE_URL is empty in .env file");
-        return null;
+      final String neonUser = uri.userInfo.split(':')[0];
+      final String neonPass = uri.userInfo.split(':').length > 1 ? uri.userInfo.split(':')[1] : '';
+      final String neonDb = uri.path.replaceAll('/', '');
+      final int neonPort = uri.port != 0 ? uri.port : 5432;
+
+      final hostsToTry = [
+        uri.host,
+      ];
+
+      for (final h in hostsToTry) {
+        try {
+          final conn = await Connection.open(
+            Endpoint(
+              host: h,
+              database: neonDb,
+              username: neonUser,
+              password: neonPass,
+              port: neonPort,
+            ),
+            settings: const ConnectionSettings(
+              sslMode: SslMode.require,
+            ),
+          ).timeout(const Duration(seconds: 8));
+
+          if (conn.isOpen) {
+            _connection = conn;
+            return _connection!;
+          }
+        } catch (e) {
+          debugPrint("Failed TCP connection attempt $h: $e");
+        }
       }
 
-      if (dbUrl.startsWith("postgres://") || dbUrl.startsWith("postgresql://")) {
-        // Parse database URL
-        final uri = Uri.parse(dbUrl);
-        final userInfo = uri.userInfo.split(':');
-        final username = userInfo.isNotEmpty ? Uri.decodeComponent(userInfo[0]) : '';
-        final password = userInfo.length > 1 ? Uri.decodeComponent(userInfo[1]) : '';
-        final host = uri.host;
-        final port = uri.port != 0 ? uri.port : 5432;
-        final database = uri.path.replaceAll('/', '');
-
-        _connection = await Connection.open(
-          Endpoint(
-            host: host,
-            database: database,
-            username: username,
-            password: password,
-            port: port,
-          ),
-          settings: const ConnectionSettings(
-            sslMode: SslMode.require,
-          ),
-        );
-      } else {
-        debugPrint("Invalid DATABASE_URL format in .env file.");
-        return null;
-      }
-
-      return _connection!;
+      return null;
     } catch (e) {
-      debugPrint("Database Connection Error: $e");
+      _connection = null;
       return null;
     }
   }
@@ -105,146 +172,146 @@ class DatabaseService {
   }
 
   // Helper to ensure investorProfile and emailVerified exist in Neon DB for Website Compatibility
-  static Future<void> _ensureInvestorProfileExists(Connection conn, String userId) async {
+  static Future<void> _ensureInvestorProfileExists(String userId) async {
     try {
-      final now = DateTime.now().toUtc();
+      final nowStr = DateTime.now().toUtc().toIso8601String();
       final profileId = _generateUuid();
 
-      await conn.execute(
-        Sql.named('''
-          INSERT INTO investor_profiles (
-            "id", "userId", "country", "createdAt", "updatedAt"
-          ) VALUES (
-            @id, @userId, 'BD', @now, @now
-          )
-          ON CONFLICT ("userId") DO NOTHING;
-        '''),
-        parameters: {'id': profileId, 'userId': userId, 'now': now},
-      );
+      await executeNeonHttp('''
+        INSERT INTO investor_profiles ("id", "userId", "country", "createdAt", "updatedAt")
+        VALUES (\$1, \$2, 'BD', \$3, \$3)
+        ON CONFLICT ("userId") DO NOTHING;
+      ''', [profileId, userId, nowStr]);
 
-      // Verify email if not verified for website compatibility
-      await conn.execute(
-        Sql.named('''
-          UPDATE users
-          SET "emailVerified" = true
-          WHERE "id" = @userId AND ("emailVerified" IS NOT TRUE OR "emailVerified" IS NULL);
-        '''),
-        parameters: {'userId': userId},
-      );
+      await executeNeonHttp('''
+        UPDATE users
+        SET "emailVerified" = true
+        WHERE "id" = \$1 AND ("emailVerified" IS NOT TRUE OR "emailVerified" IS NULL);
+      ''', [userId]);
     } catch (e) {
       debugPrint("Ensure Investor Profile Error: $e");
     }
   }
 
-  // Register User matching exact Prisma 'users' table
+  // Register User matching exact Prisma 'users' & 'investor_profiles' tables
   static Future<Map<String, dynamic>> registerUser({
     required String name,
     required String email,
     required String phone,
     required String password,
+    String? nidNumber,
+    String? nomineeNidNumber,
+    String? nomineeRelation,
   }) async {
     try {
-      final conn = await getConnection();
-      if (conn == null) {
-        return {
-          'success': false,
-          'message': 'Could not connect to Neon Postgres DB. Please check .env',
-        };
-      }
-
       final hashedPassword = hashPassword(password);
       final cleanEmail = email.trim().toLowerCase();
       final cleanPhone = phone.trim();
 
-      // Pre-check if email OR phone already exists in users table
-      final existing = await conn.execute(
-        Sql.named('SELECT "id", "email", "phone" FROM users WHERE LOWER("email") = LOWER(@email) OR ("phone" = @phone AND @phone != \'\')'),
-        parameters: {'email': cleanEmail, 'phone': cleanPhone},
-      );
-
-      if (existing.isNotEmpty) {
-        final existingPhone = existing.first[2]?.toString();
-        if (existingPhone == cleanPhone && cleanPhone.isNotEmpty) {
-          return {
-            'success': false,
-            'message': 'An account with this phone number already exists. Please log in.',
-          };
-        }
-        return {
-          'success': false,
-          'message': 'An account with this email already exists. Please log in.',
-        };
-      }
-
       final userId = _generateUuid();
       final profileId = _generateUuid();
-      final now = DateTime.now().toUtc();
+      final walletId = _generateUuid();
+      final nowStr = DateTime.now().toUtc().toIso8601String();
 
-      // 1. Insert user into users table with emailVerified = true for website compatibility
-      await conn.execute(
-        Sql.named('''
+      // Single Atomic SQL Statement inserting User, InvestorProfile & Wallet in 1 Round-Trip!
+      final res = await queryNeonHttp('''
+        WITH existing_check_user AS (
+          SELECT "id", "email", "phone" FROM users WHERE LOWER("email") = LOWER(\$2) OR ("phone" = \$3 AND \$3 != '') LIMIT 1
+        ),
+        existing_check_nid AS (
+          SELECT "nationalId" FROM investor_profiles WHERE "nationalId" = \$8 AND \$8 IS NOT NULL LIMIT 1
+        ),
+        new_user AS (
           INSERT INTO users (
             "id", "email", "passwordHash", "name", "phone", "role", "status", "emailVerified", "createdAt", "updatedAt"
-          ) VALUES (
-            @id, @email, @passwordHash, @name, @phone, 'INVESTOR'::"UserRole", 'ACTIVE'::"UserStatus", true, @createdAt, @updatedAt
           )
-        '''),
-        parameters: {
-          'id': userId,
-          'email': cleanEmail,
-          'passwordHash': hashedPassword,
-          'name': name.trim(),
-          'phone': cleanPhone.isEmpty ? null : cleanPhone,
-          'createdAt': now,
-          'updatedAt': now,
-        },
-      );
-
-      // 2. Create investor_profiles record for website compatibility
-      await conn.execute(
-        Sql.named('''
+          SELECT \$1, \$2, \$4, \$5, \$3, 'INVESTOR'::"UserRole", 'ACTIVE'::"UserStatus", true, \$6, \$6
+          WHERE NOT EXISTS (SELECT 1 FROM existing_check_user) AND NOT EXISTS (SELECT 1 FROM existing_check_nid)
+          RETURNING "id"
+        ),
+        new_profile AS (
           INSERT INTO investor_profiles (
-            "id", "userId", "country", "createdAt", "updatedAt"
-          ) VALUES (
-            @id, @userId, 'BD', @createdAt, @updatedAt
+            "id", "userId", "nationalId", "nomineeNationalId", "nomineeRelation", "country", "createdAt", "updatedAt"
           )
-          ON CONFLICT ("userId") DO NOTHING;
-        '''),
-        parameters: {
-          'id': profileId,
-          'userId': userId,
-          'createdAt': now,
-          'updatedAt': now,
-        },
-      );
-
-      // 3. Create empty wallet for new user
-      final walletId = _generateUuid();
-      await conn.execute(
-        Sql.named('''
+          SELECT \$7, \$1, \$8, \$9, \$10, 'BD', \$6, \$6
+          WHERE EXISTS (SELECT 1 FROM new_user)
+          ON CONFLICT ("userId") DO UPDATE SET
+            "nationalId" = COALESCE(EXCLUDED."nationalId", investor_profiles."nationalId"),
+            "nomineeNationalId" = COALESCE(EXCLUDED."nomineeNationalId", investor_profiles."nomineeNationalId"),
+            "nomineeRelation" = COALESCE(EXCLUDED."nomineeRelation", investor_profiles."nomineeRelation"),
+            "updatedAt" = EXCLUDED."updatedAt"
+        ),
+        new_wallet AS (
           INSERT INTO wallets ("id", "userId", "type", "cachedBalance", "currency", "isActive", "createdAt", "updatedAt")
-          VALUES (@id, @userId, 'INVESTOR'::"WalletType", 0.00, 'BDT', true, @createdAt, @updatedAt)
-          ON CONFLICT ("userId") DO NOTHING;
-        '''),
-        parameters: {
-          'id': walletId,
-          'userId': userId,
-          'createdAt': now,
-          'updatedAt': now,
-        },
-      );
+          SELECT \$11, \$1, 'INVESTOR'::"WalletType", 0.00, 'BDT', true, \$6, \$6
+          WHERE EXISTS (SELECT 1 FROM new_user)
+          ON CONFLICT ("userId") DO NOTHING
+        )
+        SELECT 
+          (SELECT "email" FROM existing_check_user) as existing_email,
+          (SELECT "phone" FROM existing_check_user) as existing_phone,
+          (SELECT "nationalId" FROM existing_check_nid) as existing_nid,
+          (SELECT COUNT(*) FROM new_user) as created_count;
+      ''', [
+        userId,
+        cleanEmail,
+        cleanPhone.isEmpty ? null : cleanPhone,
+        hashedPassword,
+        name.trim(),
+        nowStr,
+        profileId,
+        (nidNumber?.trim().isEmpty ?? true) ? null : nidNumber?.trim(),
+        (nomineeNidNumber?.trim().isEmpty ?? true) ? null : nomineeNidNumber?.trim(),
+        (nomineeRelation?.trim().isEmpty ?? true) ? null : nomineeRelation?.trim(),
+        walletId,
+      ]);
 
-      final userData = {
-        'id': userId,
-        'name': name.trim(),
-        'email': cleanEmail,
-        'phone': cleanPhone,
-      };
+      if (res.isNotEmpty) {
+        final row = res.first;
+        final existingEmail = row['existing_email']?.toString();
+        final existingPhone = row['existing_phone']?.toString();
+        final existingNid = row['existing_nid']?.toString();
+        final createdCount = int.tryParse(row['created_count']?.toString() ?? '0') ?? 0;
+
+        if (existingNid != null && existingNid.isNotEmpty) {
+          return {
+            'success': false,
+            'message': 'An account with this NID number already exists.',
+          };
+        }
+
+        if (existingEmail != null && existingEmail.isNotEmpty) {
+          if (existingPhone == cleanPhone && cleanPhone.isNotEmpty) {
+            return {
+              'success': false,
+              'message': 'An account with this phone number already exists. Please log in.',
+            };
+          }
+          return {
+            'success': false,
+            'message': 'An account with this email already exists. Please log in.',
+          };
+        }
+
+        if (createdCount > 0) {
+          final userData = {
+            'id': userId,
+            'name': name.trim(),
+            'email': cleanEmail,
+            'phone': cleanPhone,
+          };
+
+          return {
+            'success': true,
+            'data': userData,
+            'message': 'Registration successful!',
+          };
+        }
+      }
 
       return {
-        'success': true,
-        'data': userData,
-        'message': 'Registration successful!',
+        'success': false,
+        'message': _lastConnectionError ?? 'Could not create account. Please check internet connection.',
       };
     } catch (e) {
       return {
@@ -254,32 +321,19 @@ class DatabaseService {
     }
   }
 
-  // Login User matching exact Prisma 'users' table (supports login by email or phone)
+  // Login User
   static Future<Map<String, dynamic>> loginUser({
     required String email,
     required String password,
   }) async {
     try {
-      final conn = await getConnection();
-      if (conn == null) {
-        return {
-          'success': false,
-          'message': 'Could not connect to Neon Postgres DB. Please check .env',
-        };
-      }
-
       final cleanInput = email.trim();
 
-      final result = await conn.execute(
-        Sql.named('''
-          SELECT "id", "name", "email", "phone", "passwordHash", "avatarUrl" 
-          FROM users 
-          WHERE LOWER("email") = LOWER(@input) OR "phone" = @input
-        '''),
-        parameters: {
-          'input': cleanInput,
-        },
-      );
+      final result = await queryNeonHttp('''
+        SELECT "id", "name", "email", "phone", "passwordHash", "avatarUrl", "status"::text, "updatedAt" 
+        FROM users 
+        WHERE LOWER("email") = LOWER(\$1) OR "phone" = \$1
+      ''', [cleanInput]);
 
       if (result.isEmpty) {
         return {
@@ -289,7 +343,8 @@ class DatabaseService {
       }
 
       final row = result.first;
-      final dbPassword = row[4] != null ? row[4].toString() : '';
+      final userId = row['id'].toString();
+      final dbPassword = row['passwordHash'] != null ? row['passwordHash'].toString() : '';
 
       if (!verifyPassword(password, dbPassword)) {
         return {
@@ -298,57 +353,45 @@ class DatabaseService {
         };
       }
 
-      // Query User Status & Soft Deletion Status
-      final userStatusRes = await conn.execute(
-        Sql.named('SELECT "status"::text, "updatedAt" FROM users WHERE "id" = @id'),
-        parameters: {'id': row[0].toString()},
-      );
-
+      final st = row['status']?.toString() ?? 'ACTIVE';
+      final updatedAtStr = row['updatedAt']?.toString();
       bool wasRestored = false;
-      if (userStatusRes.isNotEmpty) {
-        final st = userStatusRes.first[0]?.toString() ?? 'ACTIVE';
-        final updatedAtStr = userStatusRes.first[1]?.toString();
 
-        if (st == 'SUSPENDED') {
-          // Check if within 7 days deletion window
-          DateTime? suspendedAt;
-          if (updatedAtStr != null) {
-            try {
-              suspendedAt = DateTime.parse(updatedAtStr);
-            } catch (_) {}
-          }
-
-          final now = DateTime.now().toUtc();
-          if (suspendedAt != null && now.difference(suspendedAt).inDays > 7) {
-            return {
-              'success': false,
-              'message': 'This account has been permanently deleted after 7 days. Please register a new account.',
-            };
-          }
-
-          // Restore account within 7 days
-          await conn.execute(
-            Sql.named('''
-              UPDATE users
-              SET "status" = 'ACTIVE'::"UserStatus", "updatedAt" = @now
-              WHERE "id" = @id
-            '''),
-            parameters: {'id': row[0].toString(), 'now': now},
-          );
-          wasRestored = true;
+      if (st == 'SUSPENDED') {
+        DateTime? suspendedAt;
+        if (updatedAtStr != null) {
+          try {
+            suspendedAt = DateTime.parse(updatedAtStr);
+          } catch (_) {}
         }
+
+        final now = DateTime.now().toUtc();
+        if (suspendedAt != null && now.difference(suspendedAt).inDays > 7) {
+          return {
+            'success': false,
+            'message': 'This account has been permanently deleted after 7 days. Please register a new account.',
+          };
+        }
+
+        final nowStr = now.toIso8601String();
+        await executeNeonHttp('''
+          UPDATE users
+          SET "status" = 'ACTIVE'::"UserStatus", "updatedAt" = \$1
+          WHERE "id" = \$2
+        ''', [nowStr, userId]);
+        wasRestored = true;
       }
 
-      // Auto-backfill investor_profiles & emailVerified for website compatibility
-      await _ensureInvestorProfileExists(conn, row[0].toString());
+      // Auto-backfill investor_profiles for website compatibility
+      await _ensureInvestorProfileExists(userId);
 
-      final rawAvatar = row[5]?.toString();
+      final rawAvatar = row['avatarUrl']?.toString();
 
       final userData = {
-        'id': row[0].toString(),
-        'name': row[1].toString(),
-        'email': row[2].toString(),
-        'phone': row[3]?.toString() ?? '',
+        'id': userId,
+        'name': row['name']?.toString() ?? 'Investor',
+        'email': row['email']?.toString() ?? '',
+        'phone': row['phone']?.toString() ?? '',
         'avatarUrl': rawAvatar != null && rawAvatar.isNotEmpty ? formatImageUrl(rawAvatar) : null,
       };
 
@@ -367,31 +410,22 @@ class DatabaseService {
     }
   }
 
-  // Change Password directly in Neon PostgreSQL DB
+  // Change Password
   static Future<Map<String, dynamic>> changePassword({
     required String userId,
     required String oldPassword,
     required String newPassword,
   }) async {
     try {
-      final conn = await getConnection();
-      if (conn == null) {
-        return {'success': false, 'message': 'Database connection failed.'};
-      }
-
-      // 1. Fetch current password hash
-      final userRes = await conn.execute(
-        Sql.named('SELECT "passwordHash" FROM users WHERE "id" = @userId'),
-        parameters: {'userId': userId},
-      );
+      final userRes = await queryNeonHttp(
+          'SELECT "passwordHash" FROM users WHERE "id" = \$1', [userId]);
 
       if (userRes.isEmpty) {
         return {'success': false, 'message': 'User not found.'};
       }
 
-      final dbPasswordHash = userRes.first[0]?.toString() ?? '';
+      final dbPasswordHash = userRes.first['passwordHash']?.toString() ?? '';
 
-      // 2. Verify old password
       if (!verifyPassword(oldPassword, dbPasswordHash)) {
         return {
           'success': false,
@@ -399,22 +433,14 @@ class DatabaseService {
         };
       }
 
-      // 3. Hash new password and update in users table
       final newHash = hashPassword(newPassword);
-      final now = DateTime.now().toUtc();
+      final nowStr = DateTime.now().toUtc().toIso8601String();
 
-      await conn.execute(
-        Sql.named('''
-          UPDATE users
-          SET "passwordHash" = @newHash, "updatedAt" = @now
-          WHERE "id" = @userId
-        '''),
-        parameters: {
-          'newHash': newHash,
-          'userId': userId,
-          'now': now,
-        },
-      );
+      await executeNeonHttp('''
+        UPDATE users
+        SET "passwordHash" = \$1, "updatedAt" = \$2
+        WHERE "id" = \$3
+      ''', [newHash, nowStr, userId]);
 
       return {
         'success': true,
@@ -428,30 +454,21 @@ class DatabaseService {
     }
   }
 
-  // Request Account Deletion (Schedules Deletion in 7 Days Buffer)
+  // Request Account Deletion
   static Future<Map<String, dynamic>> requestAccountDeletion({
     required String userId,
     required String password,
   }) async {
     try {
-      final conn = await getConnection();
-      if (conn == null) {
-        return {'success': false, 'message': 'Database connection failed.'};
-      }
-
-      // 1. Fetch current password hash
-      final userRes = await conn.execute(
-        Sql.named('SELECT "passwordHash" FROM users WHERE "id" = @userId'),
-        parameters: {'userId': userId},
-      );
+      final userRes = await queryNeonHttp(
+          'SELECT "passwordHash" FROM users WHERE "id" = \$1', [userId]);
 
       if (userRes.isEmpty) {
         return {'success': false, 'message': 'User not found.'};
       }
 
-      final dbPasswordHash = userRes.first[0]?.toString() ?? '';
+      final dbPasswordHash = userRes.first['passwordHash']?.toString() ?? '';
 
-      // 2. Verify password
       if (!verifyPassword(password, dbPasswordHash)) {
         return {
           'success': false,
@@ -459,19 +476,12 @@ class DatabaseService {
         };
       }
 
-      // 3. Mark status = 'SUSPENDED' in Neon DB
-      final now = DateTime.now().toUtc();
-      await conn.execute(
-        Sql.named('''
-          UPDATE users
-          SET "status" = 'SUSPENDED'::"UserStatus", "updatedAt" = @now
-          WHERE "id" = @userId
-        '''),
-        parameters: {
-          'userId': userId,
-          'now': now,
-        },
-      );
+      final nowStr = DateTime.now().toUtc().toIso8601String();
+      await executeNeonHttp('''
+        UPDATE users
+        SET "status" = 'SUSPENDED'::"UserStatus", "updatedAt" = \$1
+        WHERE "id" = \$2
+      ''', [nowStr, userId]);
 
       return {
         'success': true,
@@ -485,21 +495,14 @@ class DatabaseService {
     }
   }
 
-  // Send Forgot Password OTP via Resend.com Email API
+  // Send Forgot Password OTP
   static Future<Map<String, dynamic>> sendForgotPasswordOtp(String email) async {
     try {
-      final conn = await getConnection();
-      if (conn == null) {
-        return {'success': false, 'message': 'Database connection failed.'};
-      }
-
       final cleanEmail = email.trim().toLowerCase();
 
-      // 1. Check if user exists in Neon DB
-      final userRes = await conn.execute(
-        Sql.named('SELECT "id", "name" FROM users WHERE LOWER("email") = LOWER(@email)'),
-        parameters: {'email': cleanEmail},
-      );
+      final userRes = await queryNeonHttp(
+          'SELECT "id", "name" FROM users WHERE LOWER("email") = LOWER(\$1)',
+          [cleanEmail]);
 
       if (userRes.isEmpty) {
         return {
@@ -508,14 +511,12 @@ class DatabaseService {
         };
       }
 
-      final userName = userRes.first[1]?.toString() ?? 'Investor';
+      final userName = userRes.first['name']?.toString() ?? 'Investor';
 
-      // 2. Generate 6-digit OTP code
       final random = Random.secure();
       final otp = (100000 + random.nextInt(900000)).toString();
 
-      // 3. Ensure password_reset_tokens table exists in Neon DB
-      await conn.execute('''
+      await executeNeonHttp('''
         CREATE TABLE IF NOT EXISTS password_reset_tokens (
           "id" TEXT PRIMARY KEY,
           "email" TEXT NOT NULL,
@@ -525,31 +526,20 @@ class DatabaseService {
         );
       ''');
 
-      // Save OTP code valid for 15 minutes
       final tokenId = _generateUuid();
       final now = DateTime.now().toUtc();
       final expiresAt = now.add(const Duration(minutes: 15));
 
-      await conn.execute(
-        Sql.named('''
-          INSERT INTO password_reset_tokens ("id", "email", "token", "expiresAt", "createdAt")
-          VALUES (@id, @email, @token, @expiresAt, @createdAt)
-        '''),
-        parameters: {
-          'id': tokenId,
-          'email': cleanEmail,
-          'token': otp,
-          'expiresAt': expiresAt,
-          'createdAt': now,
-        },
-      );
+      await executeNeonHttp('''
+        INSERT INTO password_reset_tokens ("id", "email", "token", "expiresAt", "createdAt")
+        VALUES (\$1, \$2, \$3, \$4, \$5)
+      ''', [tokenId, cleanEmail, otp, expiresAt.toIso8601String(), now.toIso8601String()]);
 
-      // 4. Send Email via Resend.com API
       final apiKey = DbConfig.resendApiKey.trim();
 
       if (apiKey.isNotEmpty && apiKey != 'your_resend_api_key') {
         final resendUrl = Uri.parse('https://api.resend.com/emails');
-        final response = await http.post(
+        await http.post(
           resendUrl,
           headers: {
             'Authorization': 'Bearer $apiKey',
@@ -574,14 +564,6 @@ class DatabaseService {
             ''',
           }),
         );
-
-        if (response.statusCode == 200 || response.statusCode == 201) {
-          debugPrint("Resend Email Sent Successfully to $cleanEmail!");
-        } else {
-          debugPrint("Resend Email API Warning: Status ${response.statusCode} - ${response.body}");
-        }
-      } else {
-        debugPrint("RESEND_API_KEY is not configured in .env. Generated OTP for $cleanEmail is: $otp");
       }
 
       return {
@@ -590,7 +572,6 @@ class DatabaseService {
         'message': 'OTP sent successfully to $cleanEmail!',
       };
     } catch (e) {
-      debugPrint("Send Forgot Password OTP Error: $e");
       return {
         'success': false,
         'message': 'Database error: ${e.toString()}',
@@ -601,23 +582,15 @@ class DatabaseService {
   // Verify Reset OTP Code
   static Future<Map<String, dynamic>> verifyResetOtp(String email, String otp) async {
     try {
-      final conn = await getConnection();
-      if (conn == null) {
-        return {'success': false, 'message': 'Database connection failed.'};
-      }
-
       final cleanEmail = email.trim().toLowerCase();
       final cleanOtp = otp.trim();
 
-      final res = await conn.execute(
-        Sql.named('''
-          SELECT "id", "expiresAt" FROM password_reset_tokens
-          WHERE LOWER("email") = LOWER(@email) AND "token" = @token
-          ORDER BY "createdAt" DESC
-          LIMIT 1
-        '''),
-        parameters: {'email': cleanEmail, 'token': cleanOtp},
-      );
+      final res = await queryNeonHttp('''
+        SELECT "id", "expiresAt" FROM password_reset_tokens
+        WHERE LOWER("email") = LOWER(\$1) AND "token" = \$2
+        ORDER BY "createdAt" DESC
+        LIMIT 1
+      ''', [cleanEmail, cleanOtp]);
 
       if (res.isEmpty) {
         return {
@@ -626,7 +599,7 @@ class DatabaseService {
         };
       }
 
-      final expiresAtStr = res.first[1]?.toString();
+      final expiresAtStr = res.first['expiresAt']?.toString();
       if (expiresAtStr != null) {
         try {
           final expiresAt = DateTime.parse(expiresAtStr);
@@ -658,12 +631,6 @@ class DatabaseService {
     required String newPassword,
   }) async {
     try {
-      final conn = await getConnection();
-      if (conn == null) {
-        return {'success': false, 'message': 'Database connection failed.'};
-      }
-
-      // 1. Verify OTP first
       final verifyRes = await verifyResetOtp(email, otp);
       if (verifyRes['success'] != true) {
         return verifyRes;
@@ -671,27 +638,17 @@ class DatabaseService {
 
       final cleanEmail = email.trim().toLowerCase();
       final hashedPassword = hashPassword(newPassword);
-      final now = DateTime.now().toUtc();
+      final nowStr = DateTime.now().toUtc().toIso8601String();
 
-      // 2. Update user's password in users table
-      await conn.execute(
-        Sql.named('''
-          UPDATE users
-          SET "passwordHash" = @hashedPassword, "updatedAt" = @now
-          WHERE LOWER("email") = LOWER(@email)
-        '''),
-        parameters: {
-          'hashedPassword': hashedPassword,
-          'email': cleanEmail,
-          'now': now,
-        },
-      );
+      await executeNeonHttp('''
+        UPDATE users
+        SET "passwordHash" = \$1, "updatedAt" = \$2
+        WHERE LOWER("email") = LOWER(\$3)
+      ''', [hashedPassword, nowStr, cleanEmail]);
 
-      // 3. Delete used reset tokens
-      await conn.execute(
-        Sql.named('DELETE FROM password_reset_tokens WHERE LOWER("email") = LOWER(@email)'),
-        parameters: {'email': cleanEmail},
-      );
+      await executeNeonHttp(
+          'DELETE FROM password_reset_tokens WHERE LOWER("email") = LOWER(\$1)',
+          [cleanEmail]);
 
       return {
         'success': true,
@@ -705,31 +662,19 @@ class DatabaseService {
     }
   }
 
-  // Update User Profile Avatar URL in Neon PostgreSQL DB
+  // Update User Profile Avatar
   static Future<Map<String, dynamic>> updateUserAvatar({
     required String userId,
     required String avatarUrl,
   }) async {
     try {
-      final conn = await getConnection();
-      if (conn == null) {
-        return {'success': false, 'message': 'Database connection failed.'};
-      }
+      final nowStr = DateTime.now().toUtc().toIso8601String();
 
-      final now = DateTime.now().toUtc();
-
-      await conn.execute(
-        Sql.named('''
-          UPDATE users
-          SET "avatarUrl" = @avatarUrl, "updatedAt" = @now
-          WHERE "id" = @userId
-        '''),
-        parameters: {
-          'avatarUrl': avatarUrl,
-          'userId': userId,
-          'now': now,
-        },
-      );
+      await executeNeonHttp('''
+        UPDATE users
+        SET "avatarUrl" = \$1, "updatedAt" = \$2
+        WHERE "id" = \$3
+      ''', [avatarUrl, nowStr, userId]);
 
       return {
         'success': true,
@@ -744,27 +689,16 @@ class DatabaseService {
     }
   }
 
-  // Delete User Profile Avatar in Neon PostgreSQL DB
+  // Delete User Profile Avatar
   static Future<Map<String, dynamic>> deleteUserAvatar(String userId) async {
     try {
-      final conn = await getConnection();
-      if (conn == null) {
-        return {'success': false, 'message': 'Database connection failed.'};
-      }
+      final nowStr = DateTime.now().toUtc().toIso8601String();
 
-      final now = DateTime.now().toUtc();
-
-      await conn.execute(
-        Sql.named('''
-          UPDATE users
-          SET "avatarUrl" = NULL, "updatedAt" = @now
-          WHERE "id" = @userId
-        '''),
-        parameters: {
-          'userId': userId,
-          'now': now,
-        },
-      );
+      await executeNeonHttp('''
+        UPDATE users
+        SET "avatarUrl" = NULL, "updatedAt" = \$1
+        WHERE "id" = \$2
+      ''', [nowStr, userId]);
 
       return {
         'success': true,
@@ -778,7 +712,7 @@ class DatabaseService {
     }
   }
 
-  // Submit Real KYC Application matching Prisma 'kyc', 'kyc_documents' & 'investor_profiles'
+  // Submit Real KYC Application
   static Future<Map<String, dynamic>> submitKycData({
     required String userId,
     required String fullName,
@@ -800,20 +734,12 @@ class DatabaseService {
     String? nomineeBackBase64,
   }) async {
     try {
-      final conn = await getConnection();
-      if (conn == null) {
-        return {
-          'success': false,
-          'message': 'Database connection failed. Please check internet.',
-        };
-      }
-
-      // Ensure valid userId exists in users table
       String activeUserId = userId;
       if (activeUserId.isEmpty) {
-        final latestUser = await conn.execute('SELECT "id" FROM users ORDER BY "createdAt" DESC LIMIT 1');
+        final latestUser = await queryNeonHttp(
+            'SELECT "id" FROM users ORDER BY "createdAt" DESC LIMIT 1');
         if (latestUser.isNotEmpty) {
-          activeUserId = latestUser.first[0].toString();
+          activeUserId = latestUser.first['id'].toString();
         } else {
           return {
             'success': false,
@@ -822,9 +748,8 @@ class DatabaseService {
         }
       }
 
-      final now = DateTime.now().toUtc();
+      final nowStr = DateTime.now().toUtc().toIso8601String();
 
-      // Convert String documentType to valid KycDocumentType enum
       String docEnum = 'NATIONAL_ID';
       if (documentType.contains('PASSPORT')) {
         docEnum = 'PASSPORT';
@@ -832,119 +757,89 @@ class DatabaseService {
         docEnum = 'DRIVING_LICENSE';
       }
 
-      // Check if existing KYC record for user
-      final existingKyc = await conn.execute(
-        Sql.named('SELECT "id" FROM kyc WHERE "userId" = @userId'),
-        parameters: {'userId': activeUserId},
-      );
+      final existingKyc = await queryNeonHttp(
+          'SELECT "id" FROM kyc WHERE "userId" = \$1', [activeUserId]);
 
       String kycId;
 
       if (existingKyc.isNotEmpty) {
-        kycId = existingKyc.first[0].toString();
+        kycId = existingKyc.first['id'].toString();
 
-        await conn.execute(
-          Sql.named('''
-            UPDATE kyc SET 
-              "status" = 'SUBMITTED'::"KycStatus",
-              "fullName" = @fullName,
-              "documentType" = @docEnum::"KycDocumentType",
-              "documentNumber" = @documentNumber,
-              "presentAddress" = @address,
-              "presentDivision" = @division,
-              "presentDistrict" = @district,
-              "presentUpazila" = @thana,
-              "bankName" = @bankName,
-              "bankAccountNumber" = @bankAccountNumber,
-              "mobileProvider" = @mobileProvider,
-              "mobileNumber" = @mobileNumber,
-              "submittedAt" = @submittedAt,
-              "updatedAt" = @updatedAt
-            WHERE "id" = @id
-          '''),
-          parameters: {
-            'id': kycId,
-            'fullName': fullName,
-            'docEnum': docEnum,
-            'documentNumber': documentNumber,
-            'address': address,
-            'division': division,
-            'district': district,
-            'thana': thana,
-            'bankName': bankName,
-            'bankAccountNumber': bankAccountNumber,
-            'mobileProvider': mobileProvider,
-            'mobileNumber': mobileNumber,
-            'submittedAt': now,
-            'updatedAt': now,
-          },
-        );
+        await executeNeonHttp('''
+          UPDATE kyc SET 
+            "status" = 'SUBMITTED'::"KycStatus",
+            "fullName" = \$1,
+            "documentType" = \$2::"KycDocumentType",
+            "documentNumber" = \$3,
+            "presentAddress" = \$4,
+            "presentDivision" = \$5,
+            "presentDistrict" = \$6,
+            "presentUpazila" = \$7,
+            "bankName" = \$8,
+            "bankAccountNumber" = \$9,
+            "mobileProvider" = \$10,
+            "mobileNumber" = \$11,
+            "submittedAt" = \$12,
+            "updatedAt" = \$12
+          WHERE "id" = \$13
+        ''', [
+          fullName,
+          docEnum,
+          documentNumber,
+          address,
+          division,
+          district,
+          thana,
+          bankName,
+          bankAccountNumber,
+          mobileProvider,
+          mobileNumber,
+          nowStr,
+          kycId,
+        ]);
       } else {
         kycId = _generateUuid();
 
-        await conn.execute(
-          Sql.named('''
-            INSERT INTO kyc (
-              "id", "userId", "status", "fullName", "documentType", "documentNumber",
-              "presentAddress", "presentDivision", "presentDistrict", "presentUpazila",
-              "bankName", "bankAccountNumber", "mobileProvider", "mobileNumber",
-              "submittedAt", "createdAt", "updatedAt"
-            ) VALUES (
-              @id, @userId, 'SUBMITTED'::"KycStatus", @fullName, @docEnum::"KycDocumentType", @documentNumber,
-              @address, @division, @district, @thana,
-              @bankName, @bankAccountNumber, @mobileProvider, @mobileNumber,
-              @submittedAt, @createdAt, @updatedAt
-            )
-          '''),
-          parameters: {
-            'id': kycId,
-            'userId': activeUserId,
-            'fullName': fullName,
-            'docEnum': docEnum,
-            'documentNumber': documentNumber,
-            'address': address,
-            'division': division,
-            'district': district,
-            'thana': thana,
-            'bankName': bankName,
-            'bankAccountNumber': bankAccountNumber,
-            'mobileProvider': mobileProvider,
-            'mobileNumber': mobileNumber,
-            'submittedAt': now,
-            'createdAt': now,
-            'updatedAt': now,
-          },
-        );
+        await executeNeonHttp('''
+          INSERT INTO kyc (
+            "id", "userId", "status", "fullName", "documentType", "documentNumber",
+            "presentAddress", "presentDivision", "presentDistrict", "presentUpazila",
+            "bankName", "bankAccountNumber", "mobileProvider", "mobileNumber",
+            "submittedAt", "createdAt", "updatedAt"
+          ) VALUES (
+            \$1, \$2, 'SUBMITTED'::"KycStatus", \$3, \$4::"KycDocumentType", \$5,
+            \$6, \$7, \$8, \$9,
+            \$10, \$11, \$12, \$13,
+            \$14, \$14, \$14
+          )
+        ''', [
+          kycId,
+          activeUserId,
+          fullName,
+          docEnum,
+          documentNumber,
+          address,
+          division,
+          district,
+          thana,
+          bankName,
+          bankAccountNumber,
+          mobileProvider,
+          mobileNumber,
+          nowStr,
+        ]);
       }
 
-      // Upsert InvestorProfile for nominee information
+      // Upsert InvestorProfile
       final profileId = _generateUuid();
-      await conn.execute(
-        Sql.named('''
-          INSERT INTO investor_profiles ("id", "userId", "nomineeNationalId", "nomineeRelation", "address", "city", "country", "createdAt", "updatedAt")
-          VALUES (@id, @userId, @nomineeNid, @nomineeRelation, @address, @district, 'BD', @createdAt, @updatedAt)
-          ON CONFLICT ("userId") DO UPDATE SET
-            "nomineeNationalId" = EXCLUDED."nomineeNationalId",
-            "nomineeRelation" = EXCLUDED."nomineeRelation",
-            "updatedAt" = EXCLUDED."updatedAt";
-        '''),
-        parameters: {
-          'id': profileId,
-          'userId': activeUserId,
-          'nomineeNid': nomineeNid,
-          'nomineeRelation': nomineeRelation,
-          'address': address,
-          'district': district,
-          'createdAt': now,
-          'updatedAt': now,
-        },
-      );
-
-      // Save NID documents into kyc_documents
-      await _saveKycDocument(conn, kycId, 'NID_FRONT', frontPhotoBase64);
-      await _saveKycDocument(conn, kycId, 'NID_BACK', backPhotoBase64);
-      await _saveKycDocument(conn, kycId, 'NOMINEE_FRONT', nomineeFrontBase64);
-      await _saveKycDocument(conn, kycId, 'NOMINEE_BACK', nomineeBackBase64);
+      await executeNeonHttp('''
+        INSERT INTO investor_profiles ("id", "userId", "nomineeNationalId", "nomineeRelation", "address", "city", "country", "createdAt", "updatedAt")
+        VALUES (\$1, \$2, \$3, \$4, \$5, \$6, 'BD', \$7, \$7)
+        ON CONFLICT ("userId") DO UPDATE SET
+          "nomineeNationalId" = EXCLUDED."nomineeNationalId",
+          "nomineeRelation" = EXCLUDED."nomineeRelation",
+          "updatedAt" = EXCLUDED."updatedAt";
+      ''', [profileId, activeUserId, nomineeNid, nomineeRelation, address, district, nowStr]);
 
       return {
         'success': true,
@@ -958,7 +853,7 @@ class DatabaseService {
     }
   }
 
-  // Standard Create New Investment (Strictly follows Prisma & DB constraints)
+  // Create Investment
   static Future<Map<String, dynamic>> createInvestment({
     required String userId,
     required String projectId,
@@ -966,66 +861,54 @@ class DatabaseService {
     bool useWalletBalance = false,
   }) async {
     try {
-      final conn = await getConnection();
-      if (conn == null) {
-        return {'success': false, 'message': 'Database connection failed.'};
-      }
-
       String activeUserId = userId;
       if (activeUserId.isEmpty) {
-        final latestUser = await conn.execute('SELECT "id" FROM users ORDER BY "createdAt" DESC LIMIT 1');
-        if (latestUser.isNotEmpty) activeUserId = latestUser.first[0].toString();
+        final latestUser = await queryNeonHttp(
+            'SELECT "id" FROM users ORDER BY "createdAt" DESC LIMIT 1');
+        if (latestUser.isNotEmpty) {
+          activeUserId = latestUser.first['id'].toString();
+        }
       }
 
-      // 1. Check KYC Status
-      final kycRes = await conn.execute(
-        Sql.named('SELECT "status"::text FROM kyc WHERE "userId" = @userId'),
-        parameters: {'userId': activeUserId},
-      );
-      if (kycRes.isEmpty || kycRes.first[0]?.toString() != 'VERIFIED') {
+      final kycRes = await queryNeonHttp(
+          'SELECT "status"::text FROM kyc WHERE "userId" = \$1',
+          [activeUserId]);
+      if (kycRes.isEmpty || kycRes.first['status']?.toString() != 'VERIFIED') {
         return {
           'success': false,
-          'message': 'KYC verification required. Please complete and get your KYC approved before investing.',
+          'message':
+              'KYC verification required. Please complete and get your KYC approved before investing.',
         };
       }
 
-      // 2. Fetch or Create InvestorProfile
       String profileId;
-      final profRes = await conn.execute(
-        Sql.named('SELECT "id" FROM investor_profiles WHERE "userId" = @userId'),
-        parameters: {'userId': activeUserId},
-      );
+      final profRes = await queryNeonHttp(
+          'SELECT "id" FROM investor_profiles WHERE "userId" = \$1',
+          [activeUserId]);
       if (profRes.isNotEmpty) {
-        profileId = profRes.first[0].toString();
+        profileId = profRes.first['id'].toString();
       } else {
         profileId = _generateUuid();
-        final now = DateTime.now().toUtc();
-        await conn.execute(
-          Sql.named('''
-            INSERT INTO investor_profiles ("id", "userId", "createdAt", "updatedAt")
-            VALUES (@id, @userId, @now, @now)
-          '''),
-          parameters: {'id': profileId, 'userId': activeUserId, 'now': now},
-        );
+        final nowStr = DateTime.now().toUtc().toIso8601String();
+        await executeNeonHttp('''
+          INSERT INTO investor_profiles ("id", "userId", "createdAt", "updatedAt")
+          VALUES (\$1, \$2, \$3, \$3)
+        ''', [profileId, activeUserId, nowStr]);
       }
 
-      // 3. Fetch Project Details
-      final projRes = await conn.execute(
-        Sql.named('''
-          SELECT "id", "status"::text, "fundingGoalBdt", "fundedAmountBdt", "minInvestmentBdt",
-                 "maxInvestmentBdt", "expectedReturnPct", "returnType"::text
-          FROM projects
-          WHERE "id" = @projectId
-        '''),
-        parameters: {'projectId': projectId},
-      );
+      final projRes = await queryNeonHttp('''
+        SELECT "id", "status"::text, "fundingGoalBdt", "fundedAmountBdt", "minInvestmentBdt",
+               "maxInvestmentBdt", "expectedReturnPct", "returnType"::text
+        FROM projects
+        WHERE "id" = \$1
+      ''', [projectId]);
 
       if (projRes.isEmpty) {
         return {'success': false, 'message': 'Project not found.'};
       }
 
       final p = projRes.first;
-      final status = p[1]?.toString() ?? 'DRAFT';
+      final status = p['status']?.toString() ?? 'DRAFT';
       if (status != 'FUNDRAISING') {
         return {
           'success': false,
@@ -1033,12 +916,12 @@ class DatabaseService {
         };
       }
 
-      final goal = double.tryParse(p[2]?.toString() ?? '1') ?? 1.0;
-      final funded = double.tryParse(p[3]?.toString() ?? '0') ?? 0.0;
-      final minInv = double.tryParse(p[4]?.toString() ?? '10000') ?? 10000.0;
-      final maxInv = double.tryParse(p[5]?.toString() ?? '0');
-      final returnPct = double.tryParse(p[6]?.toString() ?? '0.15') ?? 0.15;
-      final returnType = p[7]?.toString() ?? 'FIXED_RETURN';
+      final goal = double.tryParse(p['fundingGoalBdt']?.toString() ?? '1') ?? 1.0;
+      final funded = double.tryParse(p['fundedAmountBdt']?.toString() ?? '0') ?? 0.0;
+      final minInv = double.tryParse(p['minInvestmentBdt']?.toString() ?? '10000') ?? 10000.0;
+      final maxInv = double.tryParse(p['maxInvestmentBdt']?.toString() ?? '0');
+      final returnPct = double.tryParse(p['expectedReturnPct']?.toString() ?? '0.15') ?? 0.15;
+      final returnType = p['returnType']?.toString() ?? 'FIXED_RETURN';
 
       if (amountBdt < minInv) {
         return {
@@ -1068,30 +951,26 @@ class DatabaseService {
       final expectedReturnBdt = amountBdt * returnPct;
       final investmentId = _generateUuid();
       final idempotencyKey = _generateUuid();
-      final now = DateTime.now().toUtc();
+      final nowStr = DateTime.now().toUtc().toIso8601String();
 
-      // Direct Investment via Bank Transfer -> Creates PENDING investment record
-      await conn.execute(
-        Sql.named('''
-          INSERT INTO investments (
-            "id", "investorProfileId", "projectId", "status", "amountBdt",
-            "expectedReturnBdt", "returnType", "idempotencyKey", "createdAt", "updatedAt"
-          ) VALUES (
-            @id, @profileId, @projectId, 'PENDING'::"InvestmentStatus", @amountBdt,
-            @expectedReturnBdt, @returnType::"ReturnType", @idempotencyKey, @now, @now
-          )
-        '''),
-        parameters: {
-          'id': investmentId,
-          'profileId': profileId,
-          'projectId': projectId,
-          'amountBdt': amountBdt,
-          'expectedReturnBdt': expectedReturnBdt,
-          'returnType': returnType,
-          'idempotencyKey': idempotencyKey,
-          'now': now,
-        },
-      );
+      await executeNeonHttp('''
+        INSERT INTO investments (
+          "id", "investorProfileId", "projectId", "status", "amountBdt",
+          "expectedReturnBdt", "returnType", "idempotencyKey", "createdAt", "updatedAt"
+        ) VALUES (
+          \$1, \$2, \$3, 'PENDING'::"InvestmentStatus", \$4,
+          \$5, \$6::"ReturnType", \$7, \$8, \$8
+        )
+      ''', [
+        investmentId,
+        profileId,
+        projectId,
+        amountBdt,
+        expectedReturnBdt,
+        returnType,
+        idempotencyKey,
+        nowStr,
+      ]);
 
       return {
         'success': true,
@@ -1107,46 +986,40 @@ class DatabaseService {
     }
   }
 
-  // Fetch Full Single Project Detail from Neon Postgres matching Next.js getProjectBySlug
+  // Fetch Full Single Project Detail
   static Future<Map<String, dynamic>> getProjectDetail(String projectIdOrSlug) async {
     try {
-      final conn = await getConnection();
-      if (conn == null) return {};
-
-      final projRes = await conn.execute(
-        Sql.named('''
-          SELECT p."id", p."title", p."slug", p."description", p."category"::text, p."status"::text,
-                 p."riskInfo", p."location", p."fundingGoalBdt", p."fundingMinBdt", p."fundedAmountBdt",
-                 p."minInvestmentBdt", p."maxInvestmentBdt", p."expectedReturnPct", p."returnType"::text,
-                 p."durationDays", p."fundingDeadline", p."startDate", p."endDate", p."coverImageUrl",
-                 p."imageUrls", bg."name" as groupName,
-                 (SELECT COUNT(DISTINCT i."investorProfileId") FROM investments i WHERE i."projectId" = p."id") as investorsCount
-          FROM projects p
-          LEFT JOIN business_groups bg ON p."groupId" = bg."id"
-          WHERE p."id" = @idOrSlug OR p."slug" = @idOrSlug
-        '''),
-        parameters: {'idOrSlug': projectIdOrSlug},
-      );
+      final projRes = await queryNeonHttp('''
+        SELECT p."id", p."title", p."slug", p."description", p."category"::text, p."status"::text,
+               p."riskInfo", p."location", p."fundingGoalBdt", p."fundingMinBdt", p."fundedAmountBdt",
+               p."minInvestmentBdt", p."maxInvestmentBdt", p."expectedReturnPct", p."returnType"::text,
+               p."durationDays", p."fundingDeadline", p."startDate", p."endDate", p."coverImageUrl",
+               p."imageUrls", bg."name" as "groupName",
+               (SELECT COUNT(DISTINCT i."investorProfileId") FROM investments i WHERE i."projectId" = p."id") as "investorsCount"
+        FROM projects p
+        LEFT JOIN business_groups bg ON p."groupId" = bg."id"
+        WHERE p."id" = \$1 OR p."slug" = \$1
+      ''', [projectIdOrSlug]);
 
       if (projRes.isEmpty) return {};
 
       final r = projRes.first;
-      final projectId = r[0].toString();
+      final projectId = r['id'].toString();
 
-      final goal = double.tryParse(r[8]?.toString() ?? '1') ?? 1.0;
-      final minFunding = double.tryParse(r[9]?.toString() ?? '0') ?? 0.0;
-      final funded = double.tryParse(r[10]?.toString() ?? '0') ?? 0.0;
-      final minInv = double.tryParse(r[11]?.toString() ?? '10000') ?? 10000.0;
-      final maxInv = double.tryParse(r[12]?.toString() ?? '0');
-      final returnPct = double.tryParse(r[13]?.toString() ?? '0.15') ?? 0.15;
-      final returnType = r[14]?.toString() ?? 'PROFIT_SHARE';
-      final durationDays = int.tryParse(r[15]?.toString() ?? '180') ?? 180;
+      final goal = double.tryParse(r['fundingGoalBdt']?.toString() ?? '1') ?? 1.0;
+      final minFunding = double.tryParse(r['fundingMinBdt']?.toString() ?? '0') ?? 0.0;
+      final funded = double.tryParse(r['fundedAmountBdt']?.toString() ?? '0') ?? 0.0;
+      final minInv = double.tryParse(r['minInvestmentBdt']?.toString() ?? '10000') ?? 10000.0;
+      final maxInv = double.tryParse(r['maxInvestmentBdt']?.toString() ?? '0');
+      final returnPct = double.tryParse(r['expectedReturnPct']?.toString() ?? '0.15') ?? 0.15;
+      final returnType = r['returnType']?.toString() ?? 'PROFIT_SHARE';
+      final durationDays = int.tryParse(r['durationDays']?.toString() ?? '180') ?? 180;
 
       final remaining = (goal - funded).clamp(0.0, double.infinity);
       final pct = goal > 0 ? (funded / goal).clamp(0.0, 1.0) : 0.0;
 
-      final coverUrl = formatImageUrl(r[19]?.toString());
-      final rawImageUrls = r[20] as List?;
+      final coverUrl = formatImageUrl(r['coverImageUrl']?.toString());
+      final rawImageUrls = r['imageUrls'] as List?;
       List<String> imageUrls = [coverUrl];
       if (rawImageUrls != null) {
         for (final img in rawImageUrls) {
@@ -1155,7 +1028,7 @@ class DatabaseService {
         }
       }
 
-      final deadlineStr = r[16]?.toString();
+      final deadlineStr = r['fundingDeadline']?.toString();
       int daysLeft = 116;
       if (deadlineStr != null) {
         try {
@@ -1164,42 +1037,38 @@ class DatabaseService {
         } catch (_) {}
       }
 
-      // Query Project Bank Accounts
-      final bankRes = await conn.execute(
-        Sql.named('''
-          SELECT "id", "bankName", "accountName", "accountNumber", "branchName",
-                 "routingNumber", "swiftCode", "mobileNumber", "email", "branchAddress"
-          FROM project_bank_accounts
-          WHERE "projectId" = @projectId AND "isActive" = true
-          ORDER BY "createdAt" ASC
-        '''),
-        parameters: {'projectId': projectId},
-      );
+      final bankRes = await queryNeonHttp('''
+        SELECT "id", "bankName", "accountName", "accountNumber", "branchName",
+               "routingNumber", "swiftCode", "mobileNumber", "email", "branchAddress"
+        FROM project_bank_accounts
+        WHERE "projectId" = \$1 AND "isActive" = true
+        ORDER BY "createdAt" ASC
+      ''', [projectId]);
 
       final List<Map<String, dynamic>> bankAccounts = bankRes.map((b) {
         return {
-          'id': b[0].toString(),
-          'bankName': b[1]?.toString() ?? 'Dutch-Bangla Bank Limited',
-          'accountName': b[2]?.toString() ?? 'Marinozz PLC',
-          'accountNumber': b[3]?.toString() ?? '',
-          'branchName': b[4]?.toString() ?? '',
-          'routingNumber': b[5]?.toString() ?? '',
-          'swiftCode': b[6]?.toString() ?? '',
-          'mobileNumber': b[7]?.toString() ?? '',
-          'email': b[8]?.toString() ?? '',
-          'branchAddress': b[9]?.toString() ?? '',
+          'id': b['id'].toString(),
+          'bankName': b['bankName']?.toString() ?? 'Dutch-Bangla Bank Limited',
+          'accountName': b['accountName']?.toString() ?? 'Marinozz PLC',
+          'accountNumber': b['accountNumber']?.toString() ?? '',
+          'branchName': b['branchName']?.toString() ?? '',
+          'routingNumber': b['routingNumber']?.toString() ?? '',
+          'swiftCode': b['swiftCode']?.toString() ?? '',
+          'mobileNumber': b['mobileNumber']?.toString() ?? '',
+          'email': b['email']?.toString() ?? '',
+          'branchAddress': b['branchAddress']?.toString() ?? '',
         };
       }).toList();
 
       return {
         'id': projectId,
-        'title': r[1]?.toString() ?? 'Biniyog Project',
-        'slug': r[2]?.toString() ?? '',
-        'description': r[3]?.toString() ?? '',
-        'category': r[4]?.toString() ?? 'SME',
-        'status': r[5]?.toString() ?? 'FUNDRAISING',
-        'riskInfo': r[6]?.toString() ?? 'Agriculture faces risks from weather, disease, market prices, input costs, and supply chain disruptions.',
-        'location': r[7]?.toString() ?? 'Narayanganj',
+        'title': r['title']?.toString() ?? 'Biniyog Project',
+        'slug': r['slug']?.toString() ?? '',
+        'description': r['description']?.toString() ?? '',
+        'category': r['category']?.toString() ?? 'SME',
+        'status': r['status']?.toString() ?? 'FUNDRAISING',
+        'riskInfo': r['riskInfo']?.toString() ?? 'Agriculture faces risks from weather, disease, market prices, input costs, and supply chain disruptions.',
+        'location': r['location']?.toString() ?? 'Narayanganj',
         'fundingGoalBdt': goal,
         'fundingMinBdt': minFunding,
         'fundedAmountBdt': funded,
@@ -1209,12 +1078,12 @@ class DatabaseService {
         'returnType': returnType,
         'durationDays': durationDays,
         'fundingDeadline': deadlineStr ?? '2027-01-30',
-        'startDate': r[17]?.toString() ?? '2026-10-07',
-        'endDate': r[18]?.toString() ?? '2027-01-29',
+        'startDate': r['startDate']?.toString() ?? '2026-10-07',
+        'endDate': r['endDate']?.toString() ?? '2027-01-29',
         'coverImageUrl': coverUrl,
         'imageUrls': imageUrls,
-        'groupName': r[21]?.toString() ?? 'Mariners Group',
-        'investorsCount': int.tryParse(r[22]?.toString() ?? '2') ?? 2,
+        'groupName': r['groupName']?.toString() ?? 'Mariners Group',
+        'investorsCount': int.tryParse(r['investorsCount']?.toString() ?? '2') ?? 2,
         'remainingBdt': remaining,
         'progress': pct,
         'daysLeft': daysLeft,
@@ -1226,96 +1095,82 @@ class DatabaseService {
     }
   }
 
-  // Fetch Full User Profile & Investor Profile from Neon Postgres
+  // Fetch Full User Profile & Investor Profile
   static Future<Map<String, dynamic>> getUserProfileFull(String userId, {String? email}) async {
     try {
-      final conn = await getConnection();
-      if (conn == null) return {};
-
       String activeUserId = userId;
       String activeEmail = email ?? '';
 
       if (activeUserId.isEmpty && activeEmail.isNotEmpty) {
-        final uRes = await conn.execute(
-          Sql.named('SELECT "id" FROM users WHERE LOWER("email") = LOWER(@email)'),
-          parameters: {'email': activeEmail},
-        );
-        if (uRes.isNotEmpty) activeUserId = uRes.first[0].toString();
+        final uRes = await queryNeonHttp(
+            'SELECT "id" FROM users WHERE LOWER("email") = LOWER(\$1)',
+            [activeEmail]);
+        if (uRes.isNotEmpty) activeUserId = uRes.first['id'].toString();
       }
 
       if (activeUserId.isEmpty) {
-        final latestUser = await conn.execute('SELECT "id", "email" FROM users ORDER BY "createdAt" DESC LIMIT 1');
+        final latestUser = await queryNeonHttp(
+            'SELECT "id", "email" FROM users ORDER BY "createdAt" DESC LIMIT 1');
         if (latestUser.isNotEmpty) {
-          activeUserId = latestUser.first[0].toString();
-          activeEmail = latestUser.first[1].toString();
+          activeUserId = latestUser.first['id'].toString();
+          activeEmail = latestUser.first['email'].toString();
         }
       }
 
-      // Auto-backfill investor_profiles for website compatibility
       if (activeUserId.isNotEmpty) {
-        await _ensureInvestorProfileExists(conn, activeUserId);
+        await _ensureInvestorProfileExists(activeUserId);
       }
 
-      // Query User Info including avatarUrl
-      final userRes = await conn.execute(
-        Sql.named('''
-          SELECT "id", "name", "email", "phone", "emailVerified", "phoneVerified", "createdAt", "avatarUrl"
-          FROM users
-          WHERE "id" = @userId
-        '''),
-        parameters: {'userId': activeUserId},
-      );
+      final userRes = await queryNeonHttp('''
+        SELECT "id", "name", "email", "phone", "emailVerified", "phoneVerified", "createdAt", "avatarUrl"
+        FROM users
+        WHERE "id" = \$1
+      ''', [activeUserId]);
 
       if (userRes.isEmpty) return {};
 
       final uRow = userRes.first;
 
-      // Query Investor Profile
-      final profRes = await conn.execute(
-        Sql.named('''
-          SELECT "nationalId", "address", "city", "country", "occupation",
-                 "annualIncomeRange", "investmentExperience", "riskTolerance"
-          FROM investor_profiles
-          WHERE "userId" = @userId
-        '''),
-        parameters: {'userId': activeUserId},
-      );
+      final profRes = await queryNeonHttp('''
+        SELECT "nationalId", "address", "city", "country", "occupation",
+               "annualIncomeRange", "investmentExperience", "riskTolerance"
+        FROM investor_profiles
+        WHERE "userId" = \$1
+      ''', [activeUserId]);
 
       Map<String, dynamic> profMap = {};
       if (profRes.isNotEmpty) {
         final p = profRes.first;
         profMap = {
-          'nationalId': p[0]?.toString() ?? 'N/A',
-          'address': p[1]?.toString() ?? 'Bangladesh',
-          'city': p[2]?.toString() ?? 'Dhaka',
-          'country': p[3]?.toString() ?? 'BD',
-          'occupation': p[4]?.toString() ?? 'Investor',
-          'annualIncomeRange': p[5]?.toString() ?? 'Standard',
-          'investmentExperience': p[6]?.toString() ?? 'Intermediate',
-          'riskTolerance': p[7]?.toString() ?? 'Moderate',
+          'nationalId': p['nationalId']?.toString() ?? 'N/A',
+          'address': p['address']?.toString() ?? 'Bangladesh',
+          'city': p['city']?.toString() ?? 'Dhaka',
+          'country': p['country']?.toString() ?? 'BD',
+          'occupation': p['occupation']?.toString() ?? 'Investor',
+          'annualIncomeRange': p['annualIncomeRange']?.toString() ?? 'Standard',
+          'investmentExperience': p['investmentExperience']?.toString() ?? 'Intermediate',
+          'riskTolerance': p['riskTolerance']?.toString() ?? 'Moderate',
         };
       }
 
-      // Query KYC status
       String kycStatus = 'NOT_STARTED';
-      final kycRes = await conn.execute(
-        Sql.named('SELECT "status"::text FROM kyc WHERE "userId" = @userId'),
-        parameters: {'userId': activeUserId},
-      );
+      final kycRes = await queryNeonHttp(
+          'SELECT "status"::text FROM kyc WHERE "userId" = \$1',
+          [activeUserId]);
       if (kycRes.isNotEmpty) {
-        kycStatus = kycRes.first[0]?.toString() ?? 'NOT_STARTED';
+        kycStatus = kycRes.first['status']?.toString() ?? 'NOT_STARTED';
       }
 
-      final rawAvatar = uRow[7]?.toString();
+      final rawAvatar = uRow['avatarUrl']?.toString();
 
       return {
-        'id': uRow[0].toString(),
-        'name': uRow[1]?.toString() ?? 'Investor',
-        'email': uRow[2]?.toString() ?? '',
-        'phone': uRow[3]?.toString() ?? 'N/A',
-        'emailVerified': (uRow[4] as bool?) ?? false,
-        'phoneVerified': (uRow[5] as bool?) ?? false,
-        'createdAt': uRow[6]?.toString() ?? '',
+        'id': uRow['id'].toString(),
+        'name': uRow['name']?.toString() ?? 'Investor',
+        'email': uRow['email']?.toString() ?? '',
+        'phone': uRow['phone']?.toString() ?? 'N/A',
+        'emailVerified': (uRow['emailVerified'] as bool?) ?? false,
+        'phoneVerified': (uRow['phoneVerified'] as bool?) ?? false,
+        'createdAt': uRow['createdAt']?.toString() ?? '',
         'avatarUrl': rawAvatar != null && rawAvatar.isNotEmpty ? formatImageUrl(rawAvatar) : null,
         'kycStatus': kycStatus,
         'investorProfile': profMap,
@@ -1326,158 +1181,133 @@ class DatabaseService {
     }
   }
 
-  // Fetch Specific User's Dashboard Summary Data from Neon Postgres
-  // Excludes REJECTED and APPROVED submissions from pending count!
+  // Fetch Dashboard Summary Data
   static Future<Map<String, dynamic>> getDashboardSummary(String userId, {String? email}) async {
     try {
-      final conn = await getConnection();
-      if (conn == null) return {};
-
       String activeUserId = userId;
       String activeEmail = email ?? '';
 
-      // Find user ID from email if userId is empty
       if (activeUserId.isEmpty && activeEmail.isNotEmpty) {
-        final uRes = await conn.execute(
-          Sql.named('SELECT "id" FROM users WHERE LOWER("email") = LOWER(@email)'),
-          parameters: {'email': activeEmail},
-        );
+        final uRes = await queryNeonHttp(
+            'SELECT "id" FROM users WHERE LOWER("email") = LOWER(\$1)',
+            [activeEmail]);
         if (uRes.isNotEmpty) {
-          activeUserId = uRes.first[0].toString();
+          activeUserId = uRes.first['id'].toString();
         }
       }
 
-      // If still empty, get latest registered user
       if (activeUserId.isEmpty) {
-        final latestUser = await conn.execute('SELECT "id", "email" FROM users ORDER BY "createdAt" DESC LIMIT 1');
+        final latestUser = await queryNeonHttp(
+            'SELECT "id", "email" FROM users ORDER BY "createdAt" DESC LIMIT 1');
         if (latestUser.isNotEmpty) {
-          activeUserId = latestUser.first[0].toString();
-          activeEmail = latestUser.first[1].toString();
+          activeUserId = latestUser.first['id'].toString();
+          activeEmail = latestUser.first['email'].toString();
         }
       }
 
-      // Ensure investorProfile and emailVerified exist for Website Compatibility!
       if (activeUserId.isNotEmpty) {
-        await _ensureInvestorProfileExists(conn, activeUserId);
+        await _ensureInvestorProfileExists(activeUserId);
       }
 
-      // 1. Fetch User Avatar URL from users table
       String? avatarUrl;
-      final avatarRes = await conn.execute(
-        Sql.named('SELECT "avatarUrl" FROM users WHERE "id" = @userId OR (LOWER("email") = LOWER(@email) AND @email != \'\')'),
-        parameters: {'userId': activeUserId, 'email': activeEmail},
-      );
-      if (avatarRes.isNotEmpty && avatarRes.first[0] != null) {
-        final rawAvatar = avatarRes.first[0].toString();
+      final avatarRes = await queryNeonHttp(
+          'SELECT "avatarUrl" FROM users WHERE "id" = \$1 OR (LOWER("email") = LOWER(\$2) AND \$2 != \'\')',
+          [activeUserId, activeEmail]);
+      if (avatarRes.isNotEmpty && avatarRes.first['avatarUrl'] != null) {
+        final rawAvatar = avatarRes.first['avatarUrl'].toString();
         if (rawAvatar.isNotEmpty) avatarUrl = formatImageUrl(rawAvatar);
       }
 
-      // 2. Fetch Unread Notifications Count
       int unreadNotifCount = 0;
-      final unreadRes = await conn.execute(
-        Sql.named('SELECT COUNT(*) FROM notifications WHERE "userId" = @userId AND "isRead" = false'),
-        parameters: {'userId': activeUserId},
-      );
+      final unreadRes = await queryNeonHttp(
+          'SELECT COUNT(*) as cnt FROM notifications WHERE "userId" = \$1 AND "isRead" = false',
+          [activeUserId]);
       if (unreadRes.isNotEmpty) {
-        unreadNotifCount = int.tryParse(unreadRes.first[0].toString()) ?? 0;
+        unreadNotifCount = int.tryParse(unreadRes.first['cnt']?.toString() ?? '0') ?? 0;
       }
 
-      // 3. Fetch KYC Status
       String kycStatus = 'NOT_STARTED';
-      final kycRes = await conn.execute(
-        Sql.named('''
-          SELECT k."status"::text FROM kyc k
-          WHERE k."userId" = @userId 
-             OR k."userId" IN (SELECT "id" FROM users WHERE LOWER("email") = LOWER(@email) AND @email != '')
-        '''),
-        parameters: {'userId': activeUserId, 'email': activeEmail},
-      );
+      final kycRes = await queryNeonHttp('''
+        SELECT k."status"::text FROM kyc k
+        WHERE k."userId" = \$1 
+           OR k."userId" IN (SELECT "id" FROM users WHERE LOWER("email") = LOWER(\$2) AND \$2 != '')
+      ''', [activeUserId, activeEmail]);
 
-      if (kycRes.isNotEmpty && kycRes.first[0] != null) {
-        kycStatus = kycRes.first[0].toString();
+      if (kycRes.isNotEmpty && kycRes.first['status'] != null) {
+        kycStatus = kycRes.first['status'].toString();
       }
 
-      // 4. Fetch Active Approved Investments Sum & Count (ONLY ACTIVE, MATURED, COMPLETED)
       double totalInvested = 0.0;
       int activeInvestmentsCount = 0;
-      final invRes = await conn.execute(
-        Sql.named('''
-          SELECT COUNT(*), COALESCE(SUM(i."amountBdt"), 0)
-          FROM investments i
-          JOIN investor_profiles p ON i."investorProfileId" = p.id
-          JOIN users u ON p."userId" = u."id"
-          WHERE (p."userId" = @userId OR (LOWER(u."email") = LOWER(@email) AND @email != ''))
-            AND i."status"::text IN ('ACTIVE', 'MATURED', 'COMPLETED')
-        '''),
-        parameters: {'userId': activeUserId, 'email': activeEmail},
-      );
+      final invRes = await queryNeonHttp('''
+        SELECT COUNT(*) as cnt, COALESCE(SUM(i."amountBdt"), 0) as total_amt
+        FROM investments i
+        JOIN investor_profiles p ON i."investorProfileId" = p.id
+        JOIN users u ON p."userId" = u."id"
+        WHERE (p."userId" = \$1 OR (LOWER(u."email") = LOWER(\$2) AND \$2 != ''))
+          AND i."status"::text IN ('ACTIVE', 'MATURED', 'COMPLETED')
+      ''', [activeUserId, activeEmail]);
+
       if (invRes.isNotEmpty) {
-        activeInvestmentsCount = int.tryParse(invRes.first[0].toString()) ?? 0;
-        totalInvested = double.tryParse(invRes.first[1].toString()) ?? 0.0;
+        activeInvestmentsCount = int.tryParse(invRes.first['cnt']?.toString() ?? '0') ?? 0;
+        totalInvested = double.tryParse(invRes.first['total_amt']?.toString() ?? '0') ?? 0.0;
       }
 
-      // 4b. Fetch Pending Transactions Count & Pending Investments Sum (Excludes REJECTED submissions)
       int pendingTransactionsCount = 0;
       double pendingInvestmentsAmount = 0.0;
-      final pendingRes = await conn.execute(
-        Sql.named('''
-          SELECT COUNT(*), COALESCE(SUM(i."amountBdt"), 0)
-          FROM investments i
-          JOIN investor_profiles p ON i."investorProfileId" = p.id
-          JOIN users u ON p."userId" = u."id"
-          WHERE (p."userId" = @userId OR (LOWER(u."email") = LOWER(@email) AND @email != ''))
-            AND i."status"::text IN ('PENDING', 'PAYMENT_PENDING')
-            AND NOT EXISTS (
-              SELECT 1 FROM manual_payment_submissions m
-              WHERE m."investmentId" = i."id"
-                AND m."status"::text IN ('REJECTED', 'APPROVED')
-            )
-        '''),
-        parameters: {'userId': activeUserId, 'email': activeEmail},
-      );
+      final pendingRes = await queryNeonHttp('''
+        SELECT COUNT(*) as cnt, COALESCE(SUM(i."amountBdt"), 0) as pending_amt
+        FROM investments i
+        JOIN investor_profiles p ON i."investorProfileId" = p.id
+        JOIN users u ON p."userId" = u."id"
+        WHERE (p."userId" = \$1 OR (LOWER(u."email") = LOWER(\$2) AND \$2 != ''))
+          AND i."status"::text IN ('PENDING', 'PAYMENT_PENDING')
+          AND NOT EXISTS (
+            SELECT 1 FROM manual_payment_submissions m
+            WHERE m."investmentId" = i."id"
+              AND m."status"::text IN ('REJECTED', 'APPROVED')
+          )
+      ''', [activeUserId, activeEmail]);
+
       if (pendingRes.isNotEmpty) {
-        pendingTransactionsCount = int.tryParse(pendingRes.first[0].toString()) ?? 0;
-        pendingInvestmentsAmount = double.tryParse(pendingRes.first[1].toString()) ?? 0.0;
+        pendingTransactionsCount = int.tryParse(pendingRes.first['cnt']?.toString() ?? '0') ?? 0;
+        pendingInvestmentsAmount = double.tryParse(pendingRes.first['pending_amt']?.toString() ?? '0') ?? 0.0;
       }
 
-      // 5. Fetch Total Profit Distributions Received
       double totalReturns = 0.0;
-      final returnRes = await conn.execute(
-        Sql.named('''
-          SELECT COALESCE(SUM(d."netAmountBdt"), 0)
-          FROM profit_distributions d
-          JOIN investments i ON d."investmentId" = i.id
-          JOIN investor_profiles p ON i."investorProfileId" = p.id
-          JOIN users u ON p."userId" = u."id"
-          WHERE p."userId" = @userId OR (LOWER(u."email") = LOWER(@email) AND @email != '')
-        '''),
-        parameters: {'userId': activeUserId, 'email': activeEmail},
-      );
+      final returnRes = await queryNeonHttp('''
+        SELECT COALESCE(SUM(d."netAmountBdt"), 0) as total_ret
+        FROM profit_distributions d
+        JOIN investments i ON d."investmentId" = i.id
+        JOIN investor_profiles p ON i."investorProfileId" = p.id
+        JOIN users u ON p."userId" = u."id"
+        WHERE p."userId" = \$1 OR (LOWER(u."email") = LOWER(\$2) AND \$2 != '')
+      ''', [activeUserId, activeEmail]);
+
       if (returnRes.isNotEmpty) {
-        totalReturns = double.tryParse(returnRes.first[0].toString()) ?? 0.0;
+        totalReturns = double.tryParse(returnRes.first['total_ret']?.toString() ?? '0') ?? 0.0;
       }
 
-      // 6. Fetch Open Fundraising Projects
-      final projectsRes = await conn.execute('''
+      final projectsRes = await queryNeonHttp('''
         SELECT p."id", p."title", p."category"::text, p."fundingGoalBdt", p."fundedAmountBdt",
                p."minInvestmentBdt", p."expectedReturnPct", p."durationDays", p."coverImageUrl",
                p."location", p."fundingDeadline",
-               (SELECT COUNT(DISTINCT i."investorProfileId") FROM investments i WHERE i."projectId" = p."id") as investorsCount
+               (SELECT COUNT(DISTINCT i."investorProfileId") FROM investments i WHERE i."projectId" = p."id") as "investorsCount"
         FROM projects p
         ORDER BY p."createdAt" DESC
         LIMIT 5
       ''');
 
       final List<Map<String, dynamic>> projects = projectsRes.map((row) {
-        final goal = double.tryParse(row[3]?.toString() ?? '1') ?? 1.0;
-        final funded = double.tryParse(row[4]?.toString() ?? '0') ?? 0.0;
+        final goal = double.tryParse(row['fundingGoalBdt']?.toString() ?? '1') ?? 1.0;
+        final funded = double.tryParse(row['fundedAmountBdt']?.toString() ?? '0') ?? 0.0;
         final pct = goal > 0 ? (funded / goal).clamp(0.0, 1.0) : 0.0;
 
-        final rawCover = row[8]?.toString();
+        final rawCover = row['coverImageUrl']?.toString();
         final coverUrl = formatImageUrl(rawCover);
 
-        final location = row[9]?.toString() ?? 'Narayanganj';
-        final deadlineStr = row[10]?.toString();
+        final location = row['location']?.toString() ?? 'Narayanganj';
+        final deadlineStr = row['fundingDeadline']?.toString();
         int daysLeft = 116;
         if (deadlineStr != null) {
           try {
@@ -1486,18 +1316,18 @@ class DatabaseService {
           } catch (_) {}
         }
 
-        final investorsCount = int.tryParse(row[11]?.toString() ?? '1') ?? 1;
+        final investorsCount = int.tryParse(row['investorsCount']?.toString() ?? '1') ?? 1;
 
         return {
-          'id': row[0].toString(),
-          'title': row[1]?.toString() ?? 'Biniyog Project',
-          'category': row[2]?.toString() ?? 'SME',
+          'id': row['id'].toString(),
+          'title': row['title']?.toString() ?? 'Biniyog Project',
+          'category': row['category']?.toString() ?? 'SME',
           'fundingGoalBdt': goal,
           'fundedAmountBdt': funded,
           'progress': pct,
-          'minInvestmentBdt': double.tryParse(row[5]?.toString() ?? '10000') ?? 10000.0,
-          'expectedReturnPct': double.tryParse(row[6]?.toString() ?? '0.15') ?? 0.15,
-          'durationDays': int.tryParse(row[7]?.toString() ?? '180') ?? 180,
+          'minInvestmentBdt': double.tryParse(row['minInvestmentBdt']?.toString() ?? '10000') ?? 10000.0,
+          'expectedReturnPct': double.tryParse(row['expectedReturnPct']?.toString() ?? '0.15') ?? 0.15,
+          'durationDays': int.tryParse(row['durationDays']?.toString() ?? '180') ?? 180,
           'coverImageUrl': coverUrl,
           'location': location.isEmpty ? 'Bangladesh' : location,
           'daysLeft': daysLeft,
@@ -1505,29 +1335,25 @@ class DatabaseService {
         };
       }).toList();
 
-      // 7. Fetch User's Recent Investments
-      final userInvRes = await conn.execute(
-        Sql.named('''
-          SELECT i."id", pr."title", i."amountBdt", i."expectedReturnBdt", i."status"::text, i."createdAt"
-          FROM investments i
-          JOIN investor_profiles p ON i."investorProfileId" = p.id
-          JOIN projects pr ON i."projectId" = pr.id
-          JOIN users u ON p."userId" = u."id"
-          WHERE p."userId" = @userId OR (LOWER(u."email") = LOWER(@email) AND @email != '')
-          ORDER BY i."createdAt" DESC
-          LIMIT 5
-        '''),
-        parameters: {'userId': activeUserId, 'email': activeEmail},
-      );
+      final userInvRes = await queryNeonHttp('''
+        SELECT i."id", pr."title", i."amountBdt", i."expectedReturnBdt", i."status"::text, i."createdAt"
+        FROM investments i
+        JOIN investor_profiles p ON i."investorProfileId" = p.id
+        JOIN projects pr ON i."projectId" = pr.id
+        JOIN users u ON p."userId" = u."id"
+        WHERE p."userId" = \$1 OR (LOWER(u."email") = LOWER(\$2) AND \$2 != '')
+        ORDER BY i."createdAt" DESC
+        LIMIT 5
+      ''', [activeUserId, activeEmail]);
 
       final List<Map<String, dynamic>> recentInvestments = userInvRes.map((row) {
         return {
-          'id': row[0].toString(),
-          'title': row[1]?.toString() ?? 'Investment',
-          'amountBdt': double.tryParse(row[2]?.toString() ?? '0') ?? 0.0,
-          'expectedReturnBdt': double.tryParse(row[3]?.toString() ?? '0') ?? 0.0,
-          'status': row[4]?.toString() ?? 'PENDING',
-          'createdAt': row[5]?.toString() ?? '',
+          'id': row['id'].toString(),
+          'title': row['title']?.toString() ?? 'Investment',
+          'amountBdt': double.tryParse(row['amountBdt']?.toString() ?? '0') ?? 0.0,
+          'expectedReturnBdt': double.tryParse(row['expectedReturnBdt']?.toString() ?? '0') ?? 0.0,
+          'status': row['status']?.toString() ?? 'PENDING',
+          'createdAt': row['createdAt']?.toString() ?? '',
         };
       }).toList();
 
@@ -1549,31 +1375,25 @@ class DatabaseService {
     }
   }
 
-  // Fetch Real Notifications
+  // Fetch Notifications
   static Future<List<Map<String, dynamic>>> getNotificationsData(String userId) async {
     if (userId.isEmpty) return [];
     try {
-      final conn = await getConnection();
-      if (conn == null) return [];
-
-      final res = await conn.execute(
-        Sql.named('''
-          SELECT n."id", n."title", n."body", n."type"::text, n."isRead", n."createdAt"
-          FROM notifications n
-          WHERE n."userId" = @userId
-          ORDER BY n."createdAt" DESC
-        '''),
-        parameters: {'userId': userId},
-      );
+      final res = await queryNeonHttp('''
+        SELECT n."id", n."title", n."body", n."type"::text, n."isRead", n."createdAt"
+        FROM notifications n
+        WHERE n."userId" = \$1
+        ORDER BY n."createdAt" DESC
+      ''', [userId]);
 
       return res.map((r) {
         return {
-          'id': r[0].toString(),
-          'title': r[1]?.toString() ?? 'Notification',
-          'body': r[2]?.toString() ?? '',
-          'type': r[3]?.toString() ?? 'SYSTEM',
-          'isRead': (r[4] as bool?) ?? false,
-          'createdAt': r[5]?.toString() ?? '',
+          'id': r['id'].toString(),
+          'title': r['title']?.toString() ?? 'Notification',
+          'body': r['body']?.toString() ?? '',
+          'type': r['type']?.toString() ?? 'SYSTEM',
+          'isRead': (r['isRead'] as bool?) ?? false,
+          'createdAt': r['createdAt']?.toString() ?? '',
         };
       }).toList();
     } catch (e) {
@@ -1582,35 +1402,21 @@ class DatabaseService {
     }
   }
 
-  // Mark Single Notification as Read in Neon DB
+  // Mark Single Notification as Read
   static Future<void> markNotificationAsRead(String notificationId) async {
-    try {
-      final conn = await getConnection();
-      if (conn == null) return;
-      await conn.execute(
-        Sql.named('UPDATE notifications SET "isRead" = true WHERE "id" = @id'),
-        parameters: {'id': notificationId},
-      );
-    } catch (e) {
-      debugPrint("Mark Notification Read Error: $e");
-    }
+    await executeNeonHttp(
+        'UPDATE notifications SET "isRead" = true WHERE "id" = \$1',
+        [notificationId]);
   }
 
-  // Mark All Notifications as Read in Neon DB
+  // Mark All Notifications as Read
   static Future<void> markAllNotificationsAsRead(String userId) async {
-    try {
-      final conn = await getConnection();
-      if (conn == null) return;
-      await conn.execute(
-        Sql.named('UPDATE notifications SET "isRead" = true WHERE "userId" = @userId'),
-        parameters: {'userId': userId},
-      );
-    } catch (e) {
-      debugPrint("Mark All Notifications Read Error: $e");
-    }
+    await executeNeonHttp(
+        'UPDATE notifications SET "isRead" = true WHERE "userId" = \$1',
+        [userId]);
   }
 
-  // Upload User Document to Cloudinary & insert record into Neon PostgreSQL 'documents' table
+  // Upload User Document
   static Future<Map<String, dynamic>> uploadUserDocument({
     required String userId,
     required String name,
@@ -1620,15 +1426,9 @@ class DatabaseService {
     int? sizeBytes,
   }) async {
     try {
-      final conn = await getConnection();
-      if (conn == null) {
-        return {'success': false, 'message': 'Database connection failed.'};
-      }
-
       final docId = _generateUuid();
-      final now = DateTime.now().toUtc();
+      final nowStr = DateTime.now().toUtc().toIso8601String();
 
-      // Convert String category to valid enum e.g. PAYMENT_RECEIPT
       String catEnum = 'PAYMENT_RECEIPT';
       if (category.contains('KYC')) {
         catEnum = 'KYC';
@@ -1638,29 +1438,29 @@ class DatabaseService {
         catEnum = 'PROJECT_DOCUMENT';
       }
 
-      await conn.execute(
-        Sql.named('''
-          INSERT INTO documents (
-            "id", "name", "category", "fileUrl", "sizeBytes", "uploadedBy", "ownerUserId", "isPublic", "createdAt", "updatedAt"
-          ) VALUES (
-            @id, @name, @catEnum::"DocumentCategory", @fileUrl, @sizeBytes, @userId, @userId, false, @now, @now
-          )
-        '''),
-        parameters: {
-          'id': docId,
-          'name': name,
-          'catEnum': catEnum,
-          'fileUrl': fileUrl,
-          'sizeBytes': sizeBytes ?? 36800,
-          'userId': userId,
-          'now': now,
-        },
-      );
+      final ok = await executeNeonHttp('''
+        INSERT INTO documents (
+          "id", "name", "category", "fileUrl", "sizeBytes", "uploadedBy", "ownerUserId", "isPublic", "createdAt", "updatedAt"
+        ) VALUES (
+          \$1, \$2, \$3::"DocumentCategory", \$4, \$5, \$6, \$6, false, \$7, \$7
+        )
+      ''', [
+        docId,
+        name,
+        catEnum,
+        fileUrl,
+        sizeBytes ?? 36800,
+        userId,
+        nowStr,
+      ]);
 
-      return {
-        'success': true,
-        'message': 'Document uploaded successfully to database!',
-      };
+      if (ok) {
+        return {
+          'success': true,
+          'message': 'Document uploaded successfully to database!',
+        };
+      }
+      return {'success': false, 'message': 'Upload failed.'};
     } catch (e) {
       return {
         'success': false,
@@ -1669,7 +1469,7 @@ class DatabaseService {
     }
   }
 
-  // Fetch Categorized Documents & Contracts from Neon Postgres DB matching Website 1:1
+  // Fetch Categorized Documents & Contracts
   static Future<Map<String, List<Map<String, dynamic>>>> getDocumentsCategorized(String userId) async {
     if (userId.isEmpty) {
       return {
@@ -1684,19 +1484,6 @@ class DatabaseService {
     }
 
     try {
-      final conn = await getConnection();
-      if (conn == null) {
-        return {
-          'contracts': [],
-          'kycDocs': [],
-          'paymentReceipts': [],
-          'investmentReceipts': [],
-          'distributionStatements': [],
-          'harvestReports': [],
-          'projectDocs': [],
-        };
-      }
-
       final List<Map<String, dynamic>> contracts = [];
       final List<Map<String, dynamic>> kycDocs = [];
       final List<Map<String, dynamic>> paymentReceipts = [];
@@ -1705,40 +1492,35 @@ class DatabaseService {
       final List<Map<String, dynamic>> harvestReports = [];
       final List<Map<String, dynamic>> projectDocs = [];
 
-      // 1. Fetch Investment Contracts & Investment Receipts
-      final invRes = await conn.execute(
-        Sql.named('''
-          SELECT i."id", pr."title", pr."location", pr."returnType"::text, pr."expectedReturnPct",
-                 i."amountBdt", i."expectedReturnBdt", i."status"::text, i."createdAt",
-                 u."name", u."email", u."phone"
-          FROM investments i
-          JOIN investor_profiles p ON i."investorProfileId" = p.id
-          JOIN projects pr ON i."projectId" = pr.id
-          JOIN users u ON p."userId" = u."id"
-          WHERE p."userId" = @userId OR u."id" = @userId
-          ORDER BY i."createdAt" DESC
-        '''),
-        parameters: {'userId': userId},
-      );
+      final invRes = await queryNeonHttp('''
+        SELECT i."id", pr."title", pr."location", pr."returnType"::text, pr."expectedReturnPct",
+               i."amountBdt", i."expectedReturnBdt", i."status"::text, i."createdAt",
+               u."name", u."email", u."phone"
+        FROM investments i
+        JOIN investor_profiles p ON i."investorProfileId" = p.id
+        JOIN projects pr ON i."projectId" = pr.id
+        JOIN users u ON p."userId" = u."id"
+        WHERE p."userId" = \$1 OR u."id" = \$1
+        ORDER BY i."createdAt" DESC
+      ''', [userId]);
 
       for (final r in invRes) {
-        final invId = r[0].toString();
-        final projTitle = r[1]?.toString() ?? 'Biniyog Project';
-        final location = r[2]?.toString() ?? 'Dhaka, Bangladesh';
-        final returnType = r[3]?.toString() ?? 'Hybrid';
-        final returnPct = double.tryParse(r[4]?.toString() ?? '0.16') ?? 0.16;
-        final amt = double.tryParse(r[5]?.toString() ?? '0') ?? 0.0;
-        final expRet = double.tryParse(r[6]?.toString() ?? '0') ?? 0.0;
-        final status = r[7]?.toString() ?? 'PENDING';
-        final createdAt = r[8]?.toString() ?? '';
-        final userName = r[9]?.toString() ?? 'Investor';
-        final userEmail = r[10]?.toString() ?? '';
-        final userPhone = r[11]?.toString() ?? 'N/A';
+        final invId = r['id'].toString();
+        final projTitle = r['title']?.toString() ?? 'Biniyog Project';
+        final location = r['location']?.toString() ?? 'Dhaka, Bangladesh';
+        final returnType = r['returnType']?.toString() ?? 'Hybrid';
+        final returnPct = double.tryParse(r['expectedReturnPct']?.toString() ?? '0.16') ?? 0.16;
+        final amt = double.tryParse(r['amountBdt']?.toString() ?? '0') ?? 0.0;
+        final expRet = double.tryParse(r['expectedReturnBdt']?.toString() ?? '0') ?? 0.0;
+        final status = r['status']?.toString() ?? 'PENDING';
+        final createdAt = r['createdAt']?.toString() ?? '';
+        final userName = r['name']?.toString() ?? 'Investor';
+        final userEmail = r['email']?.toString() ?? '';
+        final userPhone = r['phone']?.toString() ?? 'N/A';
 
         final certNo = 'BC-${invId.substring(0, min(12, invId.length)).toUpperCase()}';
         final verifyUrl = 'https://biniyogclub.com/verify/$certNo';
 
-        // Contract Card (Top Section)
         contracts.add({
           'id': invId,
           'title': projTitle,
@@ -1747,7 +1529,6 @@ class DatabaseService {
           'createdAt': createdAt.length >= 10 ? createdAt.substring(0, 10) : createdAt,
         });
 
-        // Investment Receipt Card
         investmentReceipts.add({
           'id': invId,
           'name': 'Investment Receipt — $projTitle',
@@ -1770,54 +1551,46 @@ class DatabaseService {
         });
       }
 
-      // 2. Fetch User's KYC Status Document
-      final kycRes = await conn.execute(
-        Sql.named('''
-          SELECT k."id", k."status"::text, k."submittedAt", k."reviewedAt"
-          FROM kyc k
-          WHERE k."userId" = @userId
-        '''),
-        parameters: {'userId': userId},
-      );
+      final kycRes = await queryNeonHttp('''
+        SELECT k."id", k."status"::text, k."submittedAt", k."reviewedAt"
+        FROM kyc k
+        WHERE k."userId" = \$1
+      ''', [userId]);
 
       if (kycRes.isNotEmpty) {
         final kRow = kycRes.first;
-        final kStatus = kRow[1]?.toString() ?? 'SUBMITTED';
-        final subAt = kRow[2]?.toString() ?? '';
-        final revAt = kRow[3]?.toString() ?? '';
+        final kStatus = kRow['status']?.toString() ?? 'SUBMITTED';
+        final subAt = kRow['submittedAt']?.toString() ?? '';
+        final revAt = kRow['reviewedAt']?.toString() ?? '';
 
         String dateText = 'Submitted';
         if (subAt.length >= 10) dateText += ' ${subAt.substring(0, 10)}';
         if (revAt.length >= 10) dateText += ' · Reviewed ${revAt.substring(0, 10)}';
 
         kycDocs.add({
-          'id': kRow[0].toString(),
+          'id': kRow['id'].toString(),
           'title': 'KYC Verification',
           'subtitle': dateText,
           'status': kStatus == 'APPROVED' ? 'VERIFIED' : kStatus,
         });
       }
 
-      // 3. Fetch Uploaded Documents from 'documents' table
-      final docRes = await conn.execute(
-        Sql.named('''
-          SELECT d."id", d."name", d."category"::text, d."fileUrl", d."sizeBytes", d."createdAt"
-          FROM documents d
-          WHERE d."uploadedBy" = @userId OR d."ownerUserId" = @userId OR d."isPublic" = true
-          ORDER BY d."createdAt" DESC
-        '''),
-        parameters: {'userId': userId},
-      );
+      final docRes = await queryNeonHttp('''
+        SELECT d."id", d."name", d."category"::text, d."fileUrl", d."sizeBytes", d."createdAt"
+        FROM documents d
+        WHERE d."uploadedBy" = \$1 OR d."ownerUserId" = \$1 OR d."isPublic" = true
+        ORDER BY d."createdAt" DESC
+      ''', [userId]);
 
       for (final r in docRes) {
-        final cat = r[2]?.toString() ?? 'PROJECT_DOCUMENT';
+        final cat = r['category']?.toString() ?? 'PROJECT_DOCUMENT';
         final item = {
-          'id': r[0].toString(),
-          'name': r[1]?.toString() ?? 'Document',
+          'id': r['id'].toString(),
+          'name': r['name']?.toString() ?? 'Document',
           'category': cat,
-          'fileUrl': r[3]?.toString() ?? '',
-          'sizeBytes': int.tryParse(r[4]?.toString() ?? '0') ?? 36800,
-          'createdAt': r[5]?.toString() ?? '',
+          'fileUrl': r['fileUrl']?.toString() ?? '',
+          'sizeBytes': int.tryParse(r['sizeBytes']?.toString() ?? '0') ?? 36800,
+          'createdAt': r['createdAt']?.toString() ?? '',
         };
 
         if (cat == 'PAYMENT_RECEIPT') {
@@ -1854,69 +1627,59 @@ class DatabaseService {
     }
   }
 
-  // Fetch Specific User's Real KYC Status and Submitted Documents
+  // Fetch KYC Status
   static Future<Map<String, dynamic>> getKycStatus(String userId, {String? email}) async {
     try {
-      final conn = await getConnection();
-      if (conn == null) return {'status': 'NOT_STARTED'};
-
       String activeUserId = userId;
       String activeEmail = email ?? '';
 
       if (activeUserId.isEmpty && activeEmail.isEmpty) {
-        final latestUser = await conn.execute('SELECT "id", "email" FROM users ORDER BY "createdAt" DESC LIMIT 1');
+        final latestUser = await queryNeonHttp(
+            'SELECT "id", "email" FROM users ORDER BY "createdAt" DESC LIMIT 1');
         if (latestUser.isNotEmpty) {
-          activeUserId = latestUser.first[0].toString();
-          activeEmail = latestUser.first[1].toString();
+          activeUserId = latestUser.first['id'].toString();
+          activeEmail = latestUser.first['email'].toString();
         }
       }
 
-      final res = await conn.execute(
-        Sql.named('''
-          SELECT k."id", k."status"::text, k."fullName", k."documentType"::text, k."documentNumber",
-                 k."presentDivision", k."presentDistrict", k."reviewNote", k."submittedAt", k."reviewedAt"
-          FROM kyc k
-          JOIN users u ON k."userId" = u."id"
-          WHERE k."userId" = @userId OR (LOWER(u."email") = LOWER(@email) AND @email != '')
-        '''),
-        parameters: {
-          'userId': activeUserId,
-          'email': activeEmail,
-        },
-      );
+      final res = await queryNeonHttp('''
+        SELECT k."id", k."status"::text, k."fullName", k."documentType"::text, k."documentNumber",
+               k."presentDivision", k."presentDistrict", k."reviewNote", k."submittedAt", k."reviewedAt"
+        FROM kyc k
+        JOIN users u ON k."userId" = u."id"
+        WHERE k."userId" = \$1 OR (LOWER(u."email") = LOWER(\$2) AND \$2 != '')
+      ''', [activeUserId, activeEmail]);
 
       if (res.isEmpty) {
         return {'status': 'NOT_STARTED'};
       }
 
       final row = res.first;
-      final kycId = row[0].toString();
+      final kycId = row['id'].toString();
 
-      // Fetch uploaded documents for this specific KYC
-      final docsRes = await conn.execute(
-        Sql.named('SELECT "id", "documentType", "createdAt" FROM kyc_documents WHERE "kycId" = @kycId'),
-        parameters: {'kycId': kycId},
-      );
+      final docsRes = await queryNeonHttp(
+          'SELECT "id", "documentType", "createdAt" FROM kyc_documents WHERE "kycId" = \$1',
+          [kycId]);
 
       final List<Map<String, dynamic>> documents = docsRes.map((d) {
         return {
-          'id': d[0].toString(),
-          'type': d[1]?.toString() ?? 'DOCUMENT',
-          'createdAt': d[2]?.toString() ?? '',
+          'id': d['id'].toString(),
+          'type': d['documentType']?.toString() ?? 'DOCUMENT',
+          'createdAt': d['createdAt']?.toString() ?? '',
         };
       }).toList();
 
       return {
         'id': kycId,
-        'status': row[1]?.toString() ?? 'NOT_STARTED',
-        'fullName': row[2]?.toString() ?? '',
-        'documentType': row[3]?.toString() ?? '',
-        'documentNumber': row[4]?.toString() ?? '',
-        'division': row[5]?.toString() ?? '',
-        'district': row[6]?.toString() ?? '',
-        'reviewNote': row[7]?.toString(),
-        'submittedAt': row[8]?.toString() ?? '',
-        'reviewedAt': row[9]?.toString() ?? '',
+        'status': row['status']?.toString() ?? 'NOT_STARTED',
+        'fullName': row['fullName']?.toString() ?? '',
+        'documentType': row['documentType']?.toString() ?? '',
+        'documentNumber': row['documentNumber']?.toString() ?? '',
+        'division': row['presentDivision']?.toString() ?? '',
+        'district': row['presentDistrict']?.toString() ?? '',
+        'reviewNote': row['reviewNote']?.toString(),
+        'submittedAt': row['submittedAt']?.toString() ?? '',
+        'reviewedAt': row['reviewedAt']?.toString() ?? '',
         'documents': documents,
       };
     } catch (e) {
@@ -1925,39 +1688,33 @@ class DatabaseService {
     }
   }
 
-  // Fetch Specific User's Group Investments
+  // Fetch Group Investments
   static Future<List<Map<String, dynamic>>> getGroupInvestmentsData(String userId) async {
     if (userId.isEmpty) return [];
     try {
-      final conn = await getConnection();
-      if (conn == null) return [];
-
-      final res = await conn.execute(
-        Sql.named('''
-          SELECT gi."id", bg."name", ge."name", gt."name", gi."amountBdt", gi."plotNumber",
-                 gi."plotSizeSqft", gi."sharePercentage", gi."status"::text, gi."createdAt"
-          FROM group_investments gi
-          JOIN group_tiers gt ON gi."tierId" = gt."id"
-          JOIN group_entities ge ON gt."entityId" = ge."id"
-          JOIN business_groups bg ON ge."groupId" = bg."id"
-          WHERE gi."investorUserId" = @userId
-          ORDER BY gi."createdAt" DESC
-        '''),
-        parameters: {'userId': userId},
-      );
+      final res = await queryNeonHttp('''
+        SELECT gi."id", bg."name" as "groupName", ge."name" as "entityName", gt."name" as "tierName",
+               gi."amountBdt", gi."plotNumber", gi."plotSizeSqft", gi."sharePercentage", gi."status"::text, gi."createdAt"
+        FROM group_investments gi
+        JOIN group_tiers gt ON gi."tierId" = gt."id"
+        JOIN group_entities ge ON gt."entityId" = ge."id"
+        JOIN business_groups bg ON ge."groupId" = bg."id"
+        WHERE gi."investorUserId" = \$1
+        ORDER BY gi."createdAt" DESC
+      ''', [userId]);
 
       return res.map((r) {
         return {
-          'id': r[0].toString(),
-          'groupName': r[1]?.toString() ?? 'Business Group',
-          'entityName': r[2]?.toString() ?? 'Group Entity',
-          'tierName': r[3]?.toString() ?? 'Tier',
-          'amountBdt': double.tryParse(r[4]?.toString() ?? '0') ?? 0.0,
-          'plotNumber': r[5]?.toString() ?? 'N/A',
-          'plotSizeSqft': double.tryParse(r[6]?.toString() ?? '0') ?? 0.0,
-          'sharePercentage': double.tryParse(r[7]?.toString() ?? '0') ?? 0.0,
-          'status': r[8]?.toString() ?? 'PENDING',
-          'createdAt': r[9]?.toString() ?? '',
+          'id': r['id'].toString(),
+          'groupName': r['groupName']?.toString() ?? 'Business Group',
+          'entityName': r['entityName']?.toString() ?? 'Group Entity',
+          'tierName': r['tierName']?.toString() ?? 'Tier',
+          'amountBdt': double.tryParse(r['amountBdt']?.toString() ?? '0') ?? 0.0,
+          'plotNumber': r['plotNumber']?.toString() ?? 'N/A',
+          'plotSizeSqft': double.tryParse(r['plotSizeSqft']?.toString() ?? '0') ?? 0.0,
+          'sharePercentage': double.tryParse(r['sharePercentage']?.toString() ?? '0') ?? 0.0,
+          'status': r['status']?.toString() ?? 'PENDING',
+          'createdAt': r['createdAt']?.toString() ?? '',
         };
       }).toList();
     } catch (e) {
@@ -1966,61 +1723,48 @@ class DatabaseService {
     }
   }
 
-  // Fetch Real Investments Portfolio Data matching Next.js Investments Page
+  // Fetch Portfolio Data
   static Future<Map<String, dynamic>> getPortfolioData(String userId, {String? email}) async {
     try {
-      final conn = await getConnection();
-      if (conn == null) return {};
-
       String activeUserId = userId;
       String activeEmail = email ?? '';
 
       if (activeUserId.isEmpty && activeEmail.isNotEmpty) {
-        final uRes = await conn.execute(
-          Sql.named('SELECT "id" FROM users WHERE LOWER("email") = LOWER(@email)'),
-          parameters: {'email': activeEmail},
-        );
-        if (uRes.isNotEmpty) activeUserId = uRes.first[0].toString();
+        final uRes = await queryNeonHttp(
+            'SELECT "id" FROM users WHERE LOWER("email") = LOWER(\$1)',
+            [activeEmail]);
+        if (uRes.isNotEmpty) activeUserId = uRes.first['id'].toString();
       }
 
       if (activeUserId.isEmpty) {
-        final latestUser = await conn.execute('SELECT "id", "email" FROM users ORDER BY "createdAt" DESC LIMIT 1');
+        final latestUser = await queryNeonHttp(
+            'SELECT "id", "email" FROM users ORDER BY "createdAt" DESC LIMIT 1');
         if (latestUser.isNotEmpty) {
-          activeUserId = latestUser.first[0].toString();
-          activeEmail = latestUser.first[1].toString();
+          activeUserId = latestUser.first['id'].toString();
+          activeEmail = latestUser.first['email'].toString();
         }
       }
 
-      // 1. Fetch User's Investor Profile ID
       String? profileId;
-      final profRes = await conn.execute(
-        Sql.named('SELECT "id" FROM investor_profiles WHERE "userId" = @userId'),
-        parameters: {'userId': activeUserId},
-      );
+      final profRes = await queryNeonHttp(
+          'SELECT "id" FROM investor_profiles WHERE "userId" = \$1',
+          [activeUserId]);
       if (profRes.isNotEmpty) {
-        profileId = profRes.first[0].toString();
+        profileId = profRes.first['id'].toString();
       }
 
-      // 2. Query ALL Investments joined with Projects for this user
-      final invRes = await conn.execute(
-        Sql.named('''
-          SELECT i."id", pr."id" as projectId, pr."title", pr."category"::text, pr."slug",
-                 pr."durationDays", pr."location", i."amountBdt", i."expectedReturnBdt",
-                 i."actualReturnBdt", i."status"::text, i."createdAt", i."activatedAt",
-                 pr."fundedAmountBdt", pr."fundingGoalBdt", pr."expectedReturnPct"
-          FROM investments i
-          JOIN investor_profiles p ON i."investorProfileId" = p.id
-          JOIN projects pr ON i."projectId" = pr.id
-          JOIN users u ON p."userId" = u."id"
-          WHERE p."userId" = @userId OR (LOWER(u."email") = LOWER(@email) AND @email != '') OR i."investorProfileId" = @profileId
-          ORDER BY i."createdAt" DESC
-        '''),
-        parameters: {
-          'userId': activeUserId,
-          'email': activeEmail,
-          'profileId': profileId ?? activeUserId,
-        },
-      );
+      final invRes = await queryNeonHttp('''
+        SELECT i."id", pr."id" as "projectId", pr."title", pr."category"::text, pr."slug",
+               pr."durationDays", pr."location", i."amountBdt", i."expectedReturnBdt",
+               i."actualReturnBdt", i."status"::text, i."createdAt", i."activatedAt",
+               pr."fundedAmountBdt", pr."fundingGoalBdt", pr."expectedReturnPct"
+        FROM investments i
+        JOIN investor_profiles p ON i."investorProfileId" = p.id
+        JOIN projects pr ON i."projectId" = pr.id
+        JOIN users u ON p."userId" = u."id"
+        WHERE p."userId" = \$1 OR (LOWER(u."email") = LOWER(\$2) AND \$2 != '') OR i."investorProfileId" = \$3
+        ORDER BY i."createdAt" DESC
+      ''', [activeUserId, activeEmail, profileId ?? activeUserId]);
 
       double totalInvested = 0.0;
       double totalExpected = 0.0;
@@ -2029,24 +1773,23 @@ class DatabaseService {
       final List<Map<String, dynamic>> investmentsList = [];
 
       for (final r in invRes) {
-        final invId = r[0].toString();
-        final projectId = r[1].toString();
-        final title = r[2]?.toString() ?? 'Biniyog Project';
-        final category = r[3]?.toString() ?? 'SME';
-        final slug = r[4]?.toString() ?? '';
-        final durationDays = int.tryParse(r[5]?.toString() ?? '180') ?? 180;
-        final location = r[6]?.toString() ?? 'Bangladesh';
-        final amt = double.tryParse(r[7]?.toString() ?? '0') ?? 0.0;
-        final expRet = double.tryParse(r[8]?.toString() ?? '0') ?? 0.0;
-        final actRet = double.tryParse(r[9]?.toString() ?? '0');
-        final status = r[10]?.toString() ?? 'PENDING';
-        final createdAt = r[11]?.toString() ?? '';
-        final activatedAt = r[12]?.toString();
-        final funded = double.tryParse(r[13]?.toString() ?? '0') ?? 0.0;
-        final goal = double.tryParse(r[14]?.toString() ?? '1') ?? 1.0;
-        final returnPct = double.tryParse(r[15]?.toString() ?? '0.15') ?? 0.15;
+        final invId = r['id'].toString();
+        final projectId = r['projectId'].toString();
+        final title = r['title']?.toString() ?? 'Biniyog Project';
+        final category = r['category']?.toString() ?? 'SME';
+        final slug = r['slug']?.toString() ?? '';
+        final durationDays = int.tryParse(r['durationDays']?.toString() ?? '180') ?? 180;
+        final location = r['location']?.toString() ?? 'Bangladesh';
+        final amt = double.tryParse(r['amountBdt']?.toString() ?? '0') ?? 0.0;
+        final expRet = double.tryParse(r['expectedReturnBdt']?.toString() ?? '0') ?? 0.0;
+        final actRet = double.tryParse(r['actualReturnBdt']?.toString() ?? '0');
+        final status = r['status']?.toString() ?? 'PENDING';
+        final createdAt = r['createdAt']?.toString() ?? '';
+        final activatedAt = r['activatedAt']?.toString();
+        final funded = double.tryParse(r['fundedAmountBdt']?.toString() ?? '0') ?? 0.0;
+        final goal = double.tryParse(r['fundingGoalBdt']?.toString() ?? '1') ?? 1.0;
+        final returnPct = double.tryParse(r['expectedReturnPct']?.toString() ?? '0.15') ?? 0.15;
 
-        // ONLY APPROVED ACTIVE/MATURED/COMPLETED INVESTMENTS ADD TO TOTAL INVESTED
         if (status == 'ACTIVE' || status == 'MATURED' || status == 'COMPLETED') {
           totalInvested += amt;
           totalExpected += expRet;
@@ -2055,27 +1798,24 @@ class DatabaseService {
           totalActual += actRet;
         }
 
-        // Fetch latest manual payment submission for PAYMENT_PENDING
         Map<String, dynamic>? latestSubmission;
         if (status == 'PAYMENT_PENDING' || status == 'PENDING') {
-          final subRes = await conn.execute(
-            Sql.named('''
-              SELECT "id", "status"::text, "transactionRef", "rejectionReason", "createdAt"
-              FROM manual_payment_submissions
-              WHERE "investmentId" = @invId
-              ORDER BY "createdAt" DESC
-              LIMIT 1
-            '''),
-            parameters: {'invId': invId},
-          );
+          final subRes = await queryNeonHttp('''
+            SELECT "id", "status"::text, "transactionRef", "rejectionReason", "createdAt"
+            FROM manual_payment_submissions
+            WHERE "investmentId" = \$1
+            ORDER BY "createdAt" DESC
+            LIMIT 1
+          ''', [invId]);
+
           if (subRes.isNotEmpty) {
             final s = subRes.first;
             latestSubmission = {
-              'id': s[0].toString(),
-              'status': s[1]?.toString() ?? 'SUBMITTED',
-              'transactionRef': s[2]?.toString() ?? '',
-              'rejectionReason': s[3]?.toString(),
-              'createdAt': s[4]?.toString() ?? '',
+              'id': s['id'].toString(),
+              'status': s['status']?.toString() ?? 'SUBMITTED',
+              'transactionRef': s['transactionRef']?.toString() ?? '',
+              'rejectionReason': s['rejectionReason']?.toString(),
+              'createdAt': s['createdAt']?.toString() ?? '',
             };
           }
         }
@@ -2101,8 +1841,7 @@ class DatabaseService {
         });
       }
 
-      // Fetch Bank Accounts for Payment Submission
-      final bankRes = await conn.execute('''
+      final bankRes = await queryNeonHttp('''
         SELECT "id", "bankName", "accountName", "accountNumber", "branchName", "mobileNumber"
         FROM bank_accounts
         WHERE "isActive" = true
@@ -2111,12 +1850,12 @@ class DatabaseService {
 
       final List<Map<String, dynamic>> bankAccounts = bankRes.map((r) {
         return {
-          'id': r[0].toString(),
-          'bankName': r[1]?.toString() ?? 'Bank',
-          'accountName': r[2]?.toString() ?? 'Biniyog Club',
-          'accountNumber': r[3]?.toString() ?? '',
-          'branchName': r[4]?.toString() ?? '',
-          'mobileNumber': r[5]?.toString() ?? '',
+          'id': r['id'].toString(),
+          'bankName': r['bankName']?.toString() ?? 'Bank',
+          'accountName': r['accountName']?.toString() ?? 'Biniyog Club',
+          'accountNumber': r['accountNumber']?.toString() ?? '',
+          'branchName': r['branchName']?.toString() ?? '',
+          'mobileNumber': r['mobileNumber']?.toString() ?? '',
         };
       }).toList();
 
@@ -2133,7 +1872,7 @@ class DatabaseService {
     }
   }
 
-  // Submit Manual Payment Proof to Neon Postgres DB
+  // Submit Manual Payment Proof
   static Future<Map<String, dynamic>> submitManualPaymentProof({
     required String investmentId,
     required String userId,
@@ -2144,53 +1883,36 @@ class DatabaseService {
     String? notes,
   }) async {
     try {
-      final conn = await getConnection();
-      if (conn == null) {
-        return {'success': false, 'message': 'Database connection failed.'};
-      }
-
       final submissionId = _generateUuid();
-      final now = DateTime.now().toUtc();
+      final nowStr = DateTime.now().toUtc().toIso8601String();
 
-      // Insert into manual_payment_submissions table
-      await conn.execute(
-        Sql.named('''
-          INSERT INTO manual_payment_submissions (
-            "id", "investmentId", "submittedBy", "status", "amountBdt",
-            "bankAccountId", "paymentMethod", "transactionRef", "proofFileUrl",
-            "proofMimeType", "notes", "createdAt", "updatedAt"
-          ) VALUES (
-            @id, @investmentId, @submittedBy, 'SUBMITTED'::"ManualPaymentStatus", @amountBdt,
-            @bankAccountId, 'BANK_TRANSFER', @transactionRef, @proofFileUrl,
-            'image/png', @notes, @createdAt, @updatedAt
-          )
-        '''),
-        parameters: {
-          'id': submissionId,
-          'investmentId': investmentId,
-          'submittedBy': userId,
-          'amountBdt': amountBdt,
-          'bankAccountId': bankAccountId.isEmpty ? null : bankAccountId,
-          'transactionRef': transactionRef,
-          'proofFileUrl': proofFileUrl.isEmpty ? 'receipt.png' : proofFileUrl,
-          'notes': notes,
-          'createdAt': now,
-          'updatedAt': now,
-        },
-      );
+      await executeNeonHttp('''
+        INSERT INTO manual_payment_submissions (
+          "id", "investmentId", "submittedBy", "status", "amountBdt",
+          "bankAccountId", "paymentMethod", "transactionRef", "proofFileUrl",
+          "proofMimeType", "notes", "createdAt", "updatedAt"
+        ) VALUES (
+          \$1, \$2, \$3, 'SUBMITTED'::"ManualPaymentStatus", \$4,
+          \$5, 'BANK_TRANSFER', \$6, \$7,
+          'image/png', \$8, \$9, \$9
+        )
+      ''', [
+        submissionId,
+        investmentId,
+        userId,
+        amountBdt,
+        bankAccountId.isEmpty ? null : bankAccountId,
+        transactionRef,
+        proofFileUrl.isEmpty ? 'receipt.png' : proofFileUrl,
+        notes,
+        nowStr,
+      ]);
 
-      // Update Investment status to PAYMENT_PENDING
-      await conn.execute(
-        Sql.named('''
-          UPDATE investments
-          SET "status" = 'PAYMENT_PENDING'::"InvestmentStatus", "paymentPendingAt" = @now, "updatedAt" = @now
-          WHERE "id" = @investmentId
-        '''),
-        parameters: {
-          'investmentId': investmentId,
-          'now': now,
-        },
-      );
+      await executeNeonHttp('''
+        UPDATE investments
+        SET "status" = 'PAYMENT_PENDING'::"InvestmentStatus", "paymentPendingAt" = \$1, "updatedAt" = \$1
+        WHERE "id" = \$2
+      ''', [nowStr, investmentId]);
 
       return {
         'success': true,
@@ -2204,32 +1926,28 @@ class DatabaseService {
     }
   }
 
-  // Fetch Open Projects & Updates with Cover Image & Location
+  // Fetch Projects Data
   static Future<Map<String, dynamic>> getProjectsData() async {
     try {
-      final conn = await getConnection();
-      if (conn == null) return {};
-
-      // Fetch Projects
-      final projectsRes = await conn.execute('''
+      final projectsRes = await queryNeonHttp('''
         SELECT p."id", p."title", p."category"::text, p."description", p."fundingGoalBdt", p."fundedAmountBdt",
                p."minInvestmentBdt", p."expectedReturnPct", p."durationDays", p."coverImageUrl", p."status"::text,
                p."location", p."fundingDeadline",
-               (SELECT COUNT(DISTINCT i."investorProfileId") FROM investments i WHERE i."projectId" = p."id") as investorsCount
+               (SELECT COUNT(DISTINCT i."investorProfileId") FROM investments i WHERE i."projectId" = p."id") as "investorsCount"
         FROM projects p
         ORDER BY p."createdAt" DESC
       ''');
 
       final List<Map<String, dynamic>> projects = projectsRes.map((r) {
-        final goal = double.tryParse(r[4]?.toString() ?? '1') ?? 1.0;
-        final funded = double.tryParse(r[5]?.toString() ?? '0') ?? 0.0;
+        final goal = double.tryParse(r['fundingGoalBdt']?.toString() ?? '1') ?? 1.0;
+        final funded = double.tryParse(r['fundedAmountBdt']?.toString() ?? '0') ?? 0.0;
         final pct = goal > 0 ? (funded / goal).clamp(0.0, 1.0) : 0.0;
 
-        final rawCover = r[9]?.toString();
+        final rawCover = r['coverImageUrl']?.toString();
         final coverUrl = formatImageUrl(rawCover);
 
-        final location = r[11]?.toString() ?? 'Narayanganj';
-        final deadlineStr = r[12]?.toString();
+        final location = r['location']?.toString() ?? 'Narayanganj';
+        final deadlineStr = r['fundingDeadline']?.toString();
         int daysLeft = 116;
         if (deadlineStr != null) {
           try {
@@ -2238,30 +1956,29 @@ class DatabaseService {
           } catch (_) {}
         }
 
-        final investorsCount = int.tryParse(r[13]?.toString() ?? '1') ?? 1;
+        final investorsCount = int.tryParse(r['investorsCount']?.toString() ?? '1') ?? 1;
 
         return {
-          'id': r[0].toString(),
-          'title': r[1]?.toString() ?? 'Biniyog Project',
-          'category': r[2]?.toString() ?? 'SME',
-          'description': r[3]?.toString() ?? '',
+          'id': r['id'].toString(),
+          'title': r['title']?.toString() ?? 'Biniyog Project',
+          'category': r['category']?.toString() ?? 'SME',
+          'description': r['description']?.toString() ?? '',
           'fundingGoalBdt': goal,
           'fundedAmountBdt': funded,
           'progress': pct,
-          'minInvestmentBdt': double.tryParse(r[6]?.toString() ?? '10000') ?? 10000.0,
-          'expectedReturnPct': double.tryParse(r[7]?.toString() ?? '0.15') ?? 0.15,
-          'durationDays': int.tryParse(r[8]?.toString() ?? '180') ?? 180,
+          'minInvestmentBdt': double.tryParse(r['minInvestmentBdt']?.toString() ?? '10000') ?? 10000.0,
+          'expectedReturnPct': double.tryParse(r['expectedReturnPct']?.toString() ?? '0.15') ?? 0.15,
+          'durationDays': int.tryParse(r['durationDays']?.toString() ?? '180') ?? 180,
           'coverImageUrl': coverUrl,
-          'status': r[10]?.toString() ?? 'FUNDRAISING',
+          'status': r['status']?.toString() ?? 'FUNDRAISING',
           'location': location.isEmpty ? 'Bangladesh' : location,
           'daysLeft': daysLeft,
           'investorsCount': investorsCount,
         };
       }).toList();
 
-      // Fetch Project Updates
-      final updatesRes = await conn.execute('''
-        SELECT u."id", u."title", u."content", u."type"::text, u."createdAt", p."title"
+      final updatesRes = await queryNeonHttp('''
+        SELECT u."id", u."title", u."content", u."type"::text, u."createdAt", p."title" as "projectTitle"
         FROM project_updates u
         JOIN projects p ON u."projectId" = p."id"
         WHERE u."isPublished" = true
@@ -2271,12 +1988,12 @@ class DatabaseService {
 
       final List<Map<String, dynamic>> updates = updatesRes.map((r) {
         return {
-          'id': r[0].toString(),
-          'title': r[1]?.toString() ?? 'Project Update',
-          'content': r[2]?.toString() ?? '',
-          'type': r[3]?.toString() ?? 'GENERAL',
-          'createdAt': r[4]?.toString() ?? '',
-          'projectTitle': r[5]?.toString() ?? 'Project',
+          'id': r['id'].toString(),
+          'title': r['title']?.toString() ?? 'Project Update',
+          'content': r['content']?.toString() ?? '',
+          'type': r['type']?.toString() ?? 'GENERAL',
+          'createdAt': r['createdAt']?.toString() ?? '',
+          'projectTitle': r['projectTitle']?.toString() ?? 'Project',
         };
       }).toList();
 
@@ -2290,62 +2007,51 @@ class DatabaseService {
     }
   }
 
-  // Fetch Specific User's Transactions Statement
+  // Fetch Transactions
   static Future<List<Map<String, dynamic>>> getTransactionsData(String userId) async {
     if (userId.isEmpty) return [];
     try {
-      final conn = await getConnection();
-      if (conn == null) return [];
-
-      // Fetch Payments
-      final payRes = await conn.execute(
-        Sql.named('''
-          SELECT p."id", p."amountBdt", p."feeBdt", p."netAmountBdt", p."direction"::text, p."method"::text, p."status"::text, p."description", p."createdAt"
-          FROM payments p
-          JOIN wallets w ON p."walletId" = w.id
-          WHERE w."userId" = @userId
-          ORDER BY p."createdAt" DESC
-        '''),
-        parameters: {'userId': userId},
-      );
+      final payRes = await queryNeonHttp('''
+        SELECT p."id", p."amountBdt", p."feeBdt", p."netAmountBdt", p."direction"::text, p."method"::text, p."status"::text, p."description", p."createdAt"
+        FROM payments p
+        JOIN wallets w ON p."walletId" = w.id
+        WHERE w."userId" = \$1
+        ORDER BY p."createdAt" DESC
+      ''', [userId]);
 
       final List<Map<String, dynamic>> list = payRes.map((r) {
         return {
-          'id': r[0].toString(),
-          'amountBdt': double.tryParse(r[1]?.toString() ?? '0') ?? 0.0,
-          'feeBdt': double.tryParse(r[2]?.toString() ?? '0') ?? 0.0,
-          'netAmountBdt': double.tryParse(r[3]?.toString() ?? '0') ?? 0.0,
-          'direction': r[4]?.toString() ?? 'INBOUND',
-          'method': r[5]?.toString() ?? 'BANK_TRANSFER',
-          'status': r[6]?.toString() ?? 'COMPLETED',
-          'description': r[7]?.toString() ?? 'Wallet Transaction',
-          'createdAt': r[8]?.toString() ?? '',
+          'id': r['id'].toString(),
+          'amountBdt': double.tryParse(r['amountBdt']?.toString() ?? '0') ?? 0.0,
+          'feeBdt': double.tryParse(r['feeBdt']?.toString() ?? '0') ?? 0.0,
+          'netAmountBdt': double.tryParse(r['netAmountBdt']?.toString() ?? '0') ?? 0.0,
+          'direction': r['direction']?.toString() ?? 'INBOUND',
+          'method': r['method']?.toString() ?? 'BANK_TRANSFER',
+          'status': r['status']?.toString() ?? 'COMPLETED',
+          'description': r['description']?.toString() ?? 'Wallet Transaction',
+          'createdAt': r['createdAt']?.toString() ?? '',
         };
       }).toList();
 
-      // Fetch Withdrawals
-      final withRes = await conn.execute(
-        Sql.named('''
-          SELECT w."id", w."amountBdt", w."feeBdt", w."netAmountBdt", w."method"::text, w."status"::text, w."bankName", w."requestedAt"
-          FROM withdrawals w
-          JOIN wallets wa ON w."walletId" = wa.id
-          WHERE wa."userId" = @userId
-          ORDER BY w."requestedAt" DESC
-        '''),
-        parameters: {'userId': userId},
-      );
+      final withRes = await queryNeonHttp('''
+        SELECT w."id", w."amountBdt", w."feeBdt", w."netAmountBdt", w."method"::text, w."status"::text, w."bankName", w."requestedAt"
+        FROM withdrawals w
+        JOIN wallets wa ON w."walletId" = wa.id
+        WHERE wa."userId" = \$1
+        ORDER BY w."requestedAt" DESC
+      ''', [userId]);
 
       for (final r in withRes) {
         list.add({
-          'id': r[0].toString(),
-          'amountBdt': double.tryParse(r[1]?.toString() ?? '0') ?? 0.0,
-          'feeBdt': double.tryParse(r[2]?.toString() ?? '0') ?? 0.0,
-          'netAmountBdt': double.tryParse(r[3]?.toString() ?? '0') ?? 0.0,
+          'id': r['id'].toString(),
+          'amountBdt': double.tryParse(r['amountBdt']?.toString() ?? '0') ?? 0.0,
+          'feeBdt': double.tryParse(r['feeBdt']?.toString() ?? '0') ?? 0.0,
+          'netAmountBdt': double.tryParse(r['netAmountBdt']?.toString() ?? '0') ?? 0.0,
           'direction': 'OUTBOUND',
-          'method': r[4]?.toString() ?? 'BANK_TRANSFER',
-          'status': r[5]?.toString() ?? 'PENDING',
-          'description': 'Withdrawal to ${r[6]?.toString() ?? 'Bank'}',
-          'createdAt': r[7]?.toString() ?? '',
+          'method': r['method']?.toString() ?? 'BANK_TRANSFER',
+          'status': r['status']?.toString() ?? 'PENDING',
+          'description': 'Withdrawal to ${r['bankName']?.toString() ?? 'Bank'}',
+          'createdAt': r['requestedAt']?.toString() ?? '',
         });
       }
 
@@ -2362,25 +2068,15 @@ class DatabaseService {
     if (fileData == null || fileData.isEmpty) return;
     try {
       final docId = _generateUuid();
-      final now = DateTime.now().toUtc();
+      final nowStr = DateTime.now().toUtc().toIso8601String();
 
-      await conn.execute(
-        Sql.named('''
-          INSERT INTO kyc_documents (
-            "id", "kycId", "documentType", "storageKey", "mimeType", "sizeBytes", "createdAt"
-          ) VALUES (
-            @id, @kycId, @docType, @storageKey, 'image/png', @sizeBytes, @createdAt
-          )
-        '''),
-        parameters: {
-          'id': docId,
-          'kycId': kycId,
-          'docType': docType,
-          'storageKey': fileData, // Base64 or Storage Key
-          'sizeBytes': fileData.length,
-          'createdAt': now,
-        },
-      );
+      await executeNeonHttp('''
+        INSERT INTO kyc_documents (
+          "id", "kycId", "documentType", "storageKey", "mimeType", "sizeBytes", "createdAt"
+        ) VALUES (
+          \$1, \$2, \$3, \$4, 'image/png', \$5, \$6
+        )
+      ''', [docId, kycId, docType, fileData, fileData.length, nowStr]);
     } catch (e) {
       debugPrint("Save KYC Document Warning: $e");
     }

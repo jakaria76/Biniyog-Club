@@ -12,10 +12,18 @@ class InvestmentsPage extends StatefulWidget {
 }
 
 class _InvestmentsPageState extends State<InvestmentsPage> {
+  // ═════════════════════════════════════════════════════════
+  // EXPECTED RETURN RANGE — ekhane change korlei shob jaygay bodlabe
+  // ═════════════════════════════════════════════════════════
+  static const double minReturnRate = 0.16; // 16%
+  static const double maxReturnRate = 0.22; // 22%
+
   bool _isLoading = true;
+  Map<String, dynamic>? _user;
 
   double _totalInvested = 0.0;
-  double _totalExpected = 0.0;
+  double _totalExpectedMin = 0.0;
+  double _totalExpectedMax = 0.0;
   double _totalActual = 0.0;
 
   String _selectedStatusFilter = 'ALL';
@@ -23,8 +31,22 @@ class _InvestmentsPageState extends State<InvestmentsPage> {
   List<Map<String, dynamic>> _investments = [];
   List<Map<String, dynamic>> _bankAccounts = [];
 
-  static const Color primaryTeal = Color(0xFF047857);
-  static const Color primaryDarkTeal = Color(0xFF065F46);
+  // ─── Palette ───
+  static const Color emerald = Color(0xFF0E4A37);
+  static const Color emeraldDeep = Color(0xFF0A3327);
+  static const Color emeraldSoft = Color(0xFFE3F0E9);
+  static const Color gold = Color(0xFFB8935A);
+  static const Color goldLight = Color(0xFFD9BE8C);
+  static const Color goldDeep = Color(0xFF8A6A3A);
+  static const Color goldSoft = Color(0xFFF6EEDF);
+  static const Color lapis = Color(0xFF26437A);
+  static const Color lapisSoft = Color(0xFFE5EAF4);
+  static const Color terracotta = Color(0xFFA5523A);
+  static const Color ivory = Color(0xFFF7F4EE);
+  static const Color ink = Color(0xFF1C2421);
+  static const Color muted = Color(0xFF6E736F);
+  static const Color line = Color(0xFFE8E2D7);
+  static const Color danger = Color(0xFFB4413A);
 
   static const Map<String, String> categoryLabels = {
     'REAL_ESTATE': 'Real Estate',
@@ -42,18 +64,93 @@ class _InvestmentsPageState extends State<InvestmentsPage> {
     'OTHER': 'Other',
   };
 
+  static const List<String> _months = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+  ];
+
   @override
   void initState() {
     super.initState();
     _loadInvestmentsData();
   }
 
+  // ═════════════════════════════════════════════════════════
+  // RETURN CALCULATION LOGIC
+  // ═════════════════════════════════════════════════════════
+
+  String get _rangeLabel {
+    String p(double r) {
+      final v = r * 100;
+      return v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(1);
+    }
+
+    return '${p(minReturnRate)}–${p(maxReturnRate)}%';
+  }
+
+  DateTime? _parseDate(dynamic s) {
+    if (s == null) return null;
+    return DateTime.tryParse(s.toString())?.toLocal();
+  }
+
+  String _fmtDate(DateTime? d) {
+    if (d == null) return '—';
+    return '${_months[d.month - 1]} ${d.day}, ${d.year}';
+  }
+
+  /// Ekta investment er shob hisab
+  /// 100000 → return 16000–22000, total 116000–122000
+  Map<String, dynamic> _calc(Map<String, dynamic> inv) {
+    final double principal = (inv['amountBdt'] as num?)?.toDouble() ?? 0.0;
+
+    final double expectedMin = principal * minReturnRate;
+    final double expectedMax = principal * maxReturnRate;
+    final double totalMin = principal + expectedMin;
+    final double totalMax = principal + expectedMax;
+
+    final int durationDays = (inv['durationDays'] as num?)?.toInt() ?? 0;
+    final DateTime? start =
+        _parseDate(inv['activatedAt']) ?? _parseDate(inv['createdAt']);
+    final DateTime? maturity = start?.add(Duration(days: durationDays));
+    final int daysLeft = maturity == null
+        ? 0
+        : maturity.difference(DateTime.now()).inDays.clamp(0, 100000);
+
+    final double goal = (inv['fundingGoalBdt'] as num?)?.toDouble() ?? 0.0;
+    final double funded = (inv['fundedAmountBdt'] as num?)?.toDouble() ?? 0.0;
+    final double progress = goal > 0 ? (funded / goal).clamp(0.0, 1.0) : 0.0;
+
+    final double received =
+        (inv['actualReturnBdt'] as num?)?.toDouble() ?? 0.0;
+
+    return {
+      'principal': principal,
+      'expectedMin': expectedMin,
+      'expectedMax': expectedMax,
+      'totalMin': totalMin,
+      'totalMax': totalMax,
+      'durationDays': durationDays,
+      'start': start,
+      'maturity': maturity,
+      'daysLeft': daysLeft,
+      'progress': progress,
+      'received': received,
+    };
+  }
+
+  bool _countsAsInvested(String status) =>
+      status == 'ACTIVE' || status == 'MATURED' || status == 'COMPLETED';
+
+  // ═════════════════════════════════════════════════════════
+  // DATA
+  // ═════════════════════════════════════════════════════════
   Future<void> _loadInvestmentsData() async {
     setState(() => _isLoading = true);
 
     var userData = await AuthService.getUserData();
 
-    if (userData == null || (userData['id'] == null && userData['email'] == null)) {
+    if (userData == null ||
+        (userData['id'] == null && userData['email'] == null)) {
       final conn = await DatabaseService.getConnection();
       if (conn != null) {
         final res = await conn.execute(
@@ -74,19 +171,31 @@ class _InvestmentsPageState extends State<InvestmentsPage> {
     final userEmail = userData?['email']?.toString() ?? '';
 
     final pData =
-        await DatabaseService.getPortfolioData(userId, email: userEmail);
+    await DatabaseService.getPortfolioData(userId, email: userEmail);
 
     if (mounted) {
       setState(() {
+        _user = userData;
         if (pData.isNotEmpty) {
-          _totalInvested = (pData['totalInvested'] as double? ?? 0.0);
-          _totalExpected = (pData['totalExpected'] as double? ?? 0.0);
-          _totalActual = (pData['totalActual'] as double? ?? 0.0);
-
           _investments =
-              (pData['investments'] as List<Map<String, dynamic>>? ?? []);
+          (pData['investments'] as List<Map<String, dynamic>>? ?? []);
           _bankAccounts =
-              (pData['bankAccounts'] as List<Map<String, dynamic>>? ?? []);
+          (pData['bankAccounts'] as List<Map<String, dynamic>>? ?? []);
+
+          double invested = 0, expMin = 0, expMax = 0, actual = 0;
+          for (final inv in _investments) {
+            final c = _calc(inv);
+            if (_countsAsInvested(inv['status']?.toString() ?? '')) {
+              invested += c['principal'] as double;
+              expMin += c['expectedMin'] as double;
+              expMax += c['expectedMax'] as double;
+            }
+            actual += c['received'] as double;
+          }
+          _totalInvested = invested;
+          _totalExpectedMin = expMin;
+          _totalExpectedMax = expMax;
+          _totalActual = actual;
         }
         _isLoading = false;
       });
@@ -95,61 +204,77 @@ class _InvestmentsPageState extends State<InvestmentsPage> {
 
   String _fmtBdt(double amount) {
     return '৳${amount.toStringAsFixed(0).replaceAllMapped(
-          RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'),
+      RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'),
           (Match m) => '${m[1]},',
-        )}';
+    )}';
   }
 
   String _formatBdtFull(double amount) {
     return 'BDT ${amount.toStringAsFixed(2).replaceAllMapped(
-          RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'),
+      RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'),
           (Match m) => '${m[1]},',
-        )}';
+    )}';
+  }
+
+  String _fmtRange(double min, double max) =>
+      '${_fmtBdt(min)} – ${_fmtBdt(max)}';
+
+  String _fmtRangeFull(double min, double max) =>
+      '${_formatBdtFull(min)} – ${_formatBdtFull(max)}';
+
+  String _certNo(Map<String, dynamic> inv) {
+    final id = inv['id']?.toString() ?? '';
+    return 'BC-${id.substring(0, id.length >= 12 ? 12 : id.length).toUpperCase()}';
   }
 
   List<Map<String, dynamic>> get _filteredInvestments {
-    if (_selectedStatusFilter == 'ALL') return _investments;
-    if (_selectedStatusFilter == 'ACTIVE') {
-      return _investments.where((i) => i['status'] == 'ACTIVE').toList();
+    switch (_selectedStatusFilter) {
+      case 'ACTIVE':
+        return _investments.where((i) => i['status'] == 'ACTIVE').toList();
+      case 'AWAITING_PAYMENT':
+        return _investments
+            .where((i) => i['status'] == 'PAYMENT_PENDING')
+            .toList();
+      case 'DRAFT':
+        return _investments.where((i) => i['status'] == 'PENDING').toList();
+      case 'COMPLETED':
+        return _investments
+            .where((i) =>
+        i['status'] == 'COMPLETED' || i['status'] == 'MATURED')
+            .toList();
+      case 'CANCELLED':
+        return _investments
+            .where((i) => i['status'] == 'CANCELLED')
+            .toList();
+      default:
+        return _investments;
     }
-    if (_selectedStatusFilter == 'AWAITING_PAYMENT') {
-      return _investments
-          .where((i) => i['status'] == 'PAYMENT_PENDING' || i['status'] == 'PENDING')
-          .toList();
-    }
-    if (_selectedStatusFilter == 'DRAFT') {
-      return _investments.where((i) => i['status'] == 'PENDING').toList();
-    }
-    if (_selectedStatusFilter == 'COMPLETED') {
-      return _investments
-          .where((i) => i['status'] == 'COMPLETED' || i['status'] == 'MATURED')
-          .toList();
-    }
-    if (_selectedStatusFilter == 'CANCELLED') {
-      return _investments.where((i) => i['status'] == 'CANCELLED').toList();
-    }
-    return _investments;
   }
 
-  // Interactive Certificate Modal Viewer
+  // ═════════════════════════════════════════════════════════
+  // CERTIFICATE
+  // ═════════════════════════════════════════════════════════
   void _openCertificateViewer(Map<String, dynamic> inv) {
-    final String invId = inv['id']?.toString() ?? '';
-    final String certNo =
-        'BC-${invId.substring(0, invId.length >= 12 ? 12 : invId.length).toUpperCase()}';
-    final String issuedDate = inv['createdAt']?.toString() ?? 'Oct 8, 2026';
+    final c = _calc(inv);
+    final String certNo = _certNo(inv);
+    final String issuedDate = _fmtDate(_parseDate(inv['createdAt']));
     final String status = inv['status']?.toString() ?? 'CONFIRMED';
 
-    final double amtInvested = (inv['amountBdt'] as double? ?? 100000.0);
-    final double expReturn = (inv['expectedReturnBdt'] as double? ?? 1600000.0);
-    final double totalValue = amtInvested + expReturn;
+    final double amtInvested = c['principal'] as double;
+    final double expMin = c['expectedMin'] as double;
+    final double expMax = c['expectedMax'] as double;
+    final double totMin = c['totalMin'] as double;
+    final double totMax = c['totalMax'] as double;
 
-    final String name = inv['userName']?.toString() ?? 'jmjakaria';
-    final String email = inv['userEmail']?.toString() ?? 'jmjakaria221@gmail.com';
-    final String phone = inv['userPhone']?.toString() ?? '01317536551';
+    final String name = _user?['name']?.toString() ?? 'Investor';
+    final String email = _user?['email']?.toString() ?? '—';
+    final String phone = (_user?['phone']?.toString().isNotEmpty ?? false)
+        ? _user!['phone'].toString()
+        : '—';
 
     final String projTitle = inv['title']?.toString() ?? 'Biniyog Project';
-    final String location = inv['location']?.toString() ?? 'Dhaka, Bangladesh';
-    final String returnType = inv['returnType']?.toString() ?? 'Hybrid';
+    final String location = inv['location']?.toString() ?? 'Bangladesh';
+    final String returnType = inv['returnType']?.toString() ?? 'Profit Share';
 
     final String verifyUrl = 'https://biniyogclub.com/verify/$certNo';
 
@@ -161,36 +286,50 @@ class _InvestmentsPageState extends State<InvestmentsPage> {
         return Container(
           height: MediaQuery.of(context).size.height * 0.92,
           decoration: const BoxDecoration(
-            color: Colors.white,
+            color: ivory,
             borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
           ),
           child: Column(
             children: [
+              const SizedBox(height: 10),
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: line,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
               Padding(
-                padding: const EdgeInsets.all(16.0),
+                padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
                 child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     IconButton(
-                      icon: const Icon(Icons.close_rounded, size: 24),
+                      icon: const Icon(Icons.close_rounded, color: ink),
                       onPressed: () => Navigator.pop(context),
                     ),
-                    Text(
-                      LanguageService.tr('Investment Certificate', 'ইনভেস্টমেন্ট সার্টিফিকেট'),
-                      style: const TextStyle(
+                    Expanded(
+                      child: Text(
+                        LanguageService.tr('Investment Certificate',
+                            'ইনভেস্টমেন্ট সার্টিফিকেট'),
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
                           fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                          color: primaryDarkTeal),
+                          fontWeight: FontWeight.w700,
+                          color: ink,
+                        ),
+                      ),
                     ),
                     IconButton(
-                      icon: const Icon(Icons.share_rounded, color: primaryTeal),
+                      icon: const Icon(Icons.ios_share_rounded,
+                          color: emerald),
                       onPressed: () {
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
                             content: Text(LanguageService.tr(
-                                'Certificate link copied to clipboard!',
-                                'সার্টিফিকেট লিঙ্ক কপি হয়েছে!')),
-                            backgroundColor: primaryTeal,
+                                'Certificate link copied!',
+                                'সার্টিফিকেট লিঙ্ক কপি হয়েছে!')),
+                            backgroundColor: emerald,
                           ),
                         );
                       },
@@ -198,287 +337,175 @@ class _InvestmentsPageState extends State<InvestmentsPage> {
                   ],
                 ),
               ),
-              const Divider(height: 1),
-
               Expanded(
                 child: SingleChildScrollView(
-                  padding: const EdgeInsets.all(18.0),
+                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
                   child: Container(
                     decoration: BoxDecoration(
                       color: Colors.white,
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: Colors.grey.shade300),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withAlpha(10),
-                          blurRadius: 16,
-                          offset: const Offset(0, 6),
-                        ),
-                      ],
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(color: gold.withAlpha(110)),
                     ),
+                    clipBehavior: Clip.antiAlias,
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         Container(
                           height: 6,
                           decoration: const BoxDecoration(
-                            color: primaryTeal,
-                            borderRadius: BorderRadius.vertical(
-                                top: Radius.circular(15)),
+                            gradient:
+                            LinearGradient(colors: [emerald, gold]),
                           ),
                         ),
                         Padding(
-                          padding: const EdgeInsets.all(20.0),
+                          padding: const EdgeInsets.all(20),
                           child: Column(
                             children: [
-                              Text(
+                              const Text(
                                 'INVESTMENT CERTIFICATE',
                                 textAlign: TextAlign.center,
                                 style: TextStyle(
-                                  fontSize: 22,
-                                  fontWeight: FontWeight.w900,
-                                  color: Colors.grey.shade900,
-                                  letterSpacing: 2.0,
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.w800,
+                                  color: emeraldDeep,
+                                  letterSpacing: 2,
                                 ),
                               ),
                               const SizedBox(height: 4),
-                              Text(
+                              const Text(
                                 'This document confirms a verified investment on the Biniyog Club platform',
                                 textAlign: TextAlign.center,
-                                style: TextStyle(
-                                    fontSize: 11.5, color: Colors.grey[600]),
+                                style:
+                                TextStyle(fontSize: 11.5, color: muted),
                               ),
                               const SizedBox(height: 18),
 
-                              // Metadata Bar
                               Container(
                                 padding: const EdgeInsets.all(12),
                                 decoration: BoxDecoration(
-                                  color: const Color(0xFFF1F5F9),
-                                  borderRadius: BorderRadius.circular(10),
+                                  color: ivory,
+                                  borderRadius: BorderRadius.circular(12),
                                 ),
                                 child: Row(
-                                  mainAxisAlignment:
-                                      MainAxisAlignment.spaceBetween,
                                   children: [
-                                    Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text('CERTIFICATE NO.',
-                                            style: TextStyle(
-                                                fontSize: 8.5,
-                                                color: Colors.grey[600],
-                                                fontWeight: FontWeight.bold)),
-                                        Text(certNo,
-                                            style: const TextStyle(
-                                                fontSize: 11.5,
-                                                fontWeight: FontWeight.bold)),
-                                      ],
+                                    Expanded(
+                                        child: _certMeta(
+                                            'CERTIFICATE NO.', certNo)),
+                                    Expanded(
+                                        child: _certMeta(
+                                            'ISSUED DATE', issuedDate)),
+                                    _statusPill(status),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+
+                              // Principal + expected return range
+                              Container(
+                                padding: const EdgeInsets.all(16),
+                                decoration: BoxDecoration(
+                                  color: emeraldSoft,
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                                child: Column(
+                                  children: [
+                                    _certKpi(
+                                      'AMOUNT INVESTED',
+                                      _formatBdtFull(amtInvested),
+                                      'Principal',
                                     ),
-                                    Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text('ISSUED DATE',
-                                            style: TextStyle(
-                                                fontSize: 8.5,
-                                                color: Colors.grey[600],
-                                                fontWeight: FontWeight.bold)),
-                                        Text(issuedDate,
-                                            style: const TextStyle(
-                                                fontSize: 11.5,
-                                                fontWeight: FontWeight.bold)),
-                                      ],
-                                    ),
-                                    Container(
+                                    Padding(
                                       padding: const EdgeInsets.symmetric(
-                                          horizontal: 10, vertical: 4),
-                                      decoration: BoxDecoration(
-                                        color: Colors.green.shade50,
-                                        borderRadius: BorderRadius.circular(6),
-                                        border: Border.all(
-                                            color: Colors.green.shade200),
-                                      ),
-                                      child: Text(
-                                        status,
-                                        style: TextStyle(
-                                          fontSize: 10,
-                                          fontWeight: FontWeight.bold,
-                                          color: Colors.green.shade800,
-                                        ),
-                                      ),
+                                          vertical: 12),
+                                      child: Container(
+                                          height: 1,
+                                          color: emerald.withAlpha(35)),
                                     ),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(height: 18),
-
-                              // Highlight KPI Box
-                              Container(
-                                padding: const EdgeInsets.all(16),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFF0FDF4),
-                                  borderRadius: BorderRadius.circular(14),
-                                  border: Border.all(
-                                      color: Colors.green.shade200),
-                                ),
-                                child: Row(
-                                  children: [
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Text('AMOUNT INVESTED',
-                                              style: TextStyle(
-                                                  fontSize: 8.5,
-                                                  fontWeight: FontWeight.bold,
-                                                  color: Colors.grey[700])),
-                                          const SizedBox(height: 2),
-                                          Text(_formatBdtFull(amtInvested),
-                                              style: const TextStyle(
-                                                  fontSize: 14,
-                                                  fontWeight: FontWeight.bold,
-                                                  color: primaryTeal)),
-                                          Text('Principal',
-                                              style: TextStyle(
-                                                  fontSize: 8.5,
-                                                  color: Colors.grey[500])),
-                                        ],
-                                      ),
-                                    ),
-                                    Container(
-                                        height: 36,
-                                        width: 1,
-                                        color: Colors.green.shade200),
-                                    const SizedBox(width: 10),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Text('EXPECTED RETURN',
-                                              style: TextStyle(
-                                                  fontSize: 8.5,
-                                                  fontWeight: FontWeight.bold,
-                                                  color: Colors.grey[700])),
-                                          const SizedBox(height: 2),
-                                          Text(_formatBdtFull(expReturn),
-                                              style: const TextStyle(
-                                                  fontSize: 14,
-                                                  fontWeight: FontWeight.bold,
-                                                  color: primaryTeal)),
-                                          Text('16% of principal',
-                                              style: TextStyle(
-                                                  fontSize: 8.5,
-                                                  color: Colors.grey[500])),
-                                        ],
-                                      ),
+                                    _certKpi(
+                                      'EXPECTED RETURN',
+                                      _fmtRangeFull(expMin, expMax),
+                                      '$_rangeLabel of principal',
                                     ),
                                   ],
                                 ),
                               ),
                               const SizedBox(height: 20),
 
-                              // INVESTOR DETAILS
                               _buildCertSectionHeader('INVESTOR DETAILS'),
-                              Container(
-                                padding: const EdgeInsets.all(14),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFF8FAFC),
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                child: Column(
-                                  children: [
-                                    _buildCertDetailRow('Full Name', name),
-                                    const SizedBox(height: 8),
-                                    _buildCertDetailRow('Email Address', email),
-                                    const SizedBox(height: 8),
-                                    _buildCertDetailRow('Phone Number', phone),
-                                  ],
-                                ),
-                              ),
+                              _certBlock([
+                                _buildCertDetailRow('Full Name', name),
+                                _buildCertDetailRow('Email Address', email),
+                                _buildCertDetailRow('Phone Number', phone),
+                              ]),
                               const SizedBox(height: 18),
 
-                              // PROJECT DETAILS
                               _buildCertSectionHeader('PROJECT DETAILS'),
-                              Container(
-                                padding: const EdgeInsets.all(14),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFF8FAFC),
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                child: Column(
-                                  children: [
-                                    _buildCertDetailRow(
-                                        'Project Title', projTitle),
-                                    const SizedBox(height: 8),
-                                    _buildCertDetailRow('Location', location),
-                                    const SizedBox(height: 8),
-                                    _buildCertDetailRow('Return Type', returnType),
-                                  ],
+                              _certBlock([
+                                _buildCertDetailRow(
+                                    'Project Title', projTitle),
+                                _buildCertDetailRow('Location', location),
+                                _buildCertDetailRow(
+                                    'Return Type', returnType),
+                              ]),
+                              const SizedBox(height: 18),
+
+                              _buildCertSectionHeader('INVESTMENT TERMS'),
+                              _certBlock([
+                                _buildCertDetailRow(
+                                    'Investment Date', issuedDate),
+                                _buildCertDetailRow('Maturity Date',
+                                    _fmtDate(c['maturity'] as DateTime?)),
+                                _buildCertDetailRow('Principal Amount',
+                                    _formatBdtFull(amtInvested)),
+                                _buildCertDetailRow(
+                                    'Expected Return Rate', _rangeLabel),
+                                _buildCertDetailRow('Expected Return',
+                                    _fmtRangeFull(expMin, expMax)),
+                                _buildCertDetailRow('Total Expected Value',
+                                    _fmtRangeFull(totMin, totMax)),
+                              ]),
+                              const SizedBox(height: 12),
+                              const Text(
+                                'Expected return is an estimated range and is not guaranteed. Final returns depend on actual project performance.',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontSize: 9.5,
+                                  color: muted,
+                                  height: 1.4,
                                 ),
                               ),
                               const SizedBox(height: 18),
 
-                              // INVESTMENT TERMS
-                              _buildCertSectionHeader('INVESTMENT TERMS'),
-                              Container(
-                                padding: const EdgeInsets.all(14),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFF8FAFC),
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                child: Column(
-                                  children: [
-                                    _buildCertDetailRow(
-                                        'Investment Date', issuedDate),
-                                    const SizedBox(height: 8),
-                                    _buildCertDetailRow(
-                                        'Principal Amount', _formatBdtFull(amtInvested)),
-                                    const SizedBox(height: 8),
-                                    _buildCertDetailRow(
-                                        'Expected Return', _formatBdtFull(expReturn)),
-                                    const SizedBox(height: 8),
-                                    _buildCertDetailRow(
-                                        'Total Expected Value', _formatBdtFull(totalValue)),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(height: 20),
-
-                              // VERIFY THIS CERTIFICATE
                               Container(
                                 padding: const EdgeInsets.all(16),
                                 decoration: BoxDecoration(
-                                  color: const Color(0xFFFFFBEB),
+                                  color: goldSoft,
                                   borderRadius: BorderRadius.circular(14),
-                                  border: Border.all(
-                                      color: Colors.amber.shade300),
+                                  border:
+                                  Border.all(color: gold.withAlpha(90)),
                                 ),
                                 child: Row(
                                   children: [
                                     Expanded(
                                       child: Column(
                                         crossAxisAlignment:
-                                            CrossAxisAlignment.start,
+                                        CrossAxisAlignment.start,
                                         children: [
-                                          Text(
+                                          const Text(
                                             'VERIFY THIS CERTIFICATE',
                                             style: TextStyle(
                                               fontSize: 12,
-                                              fontWeight: FontWeight.bold,
-                                              color: Colors.amber.shade900,
+                                              fontWeight: FontWeight.w700,
+                                              color: goldDeep,
                                             ),
                                           ),
                                           const SizedBox(height: 4),
-                                          Text(
-                                            'Scan the QR code or visit the URL below to confirm this certificate is genuine. The verification page shows the original, uneditable record from our database.',
+                                          const Text(
+                                            'Scan the QR code or visit the URL below to confirm this certificate is genuine.',
                                             style: TextStyle(
-                                              fontSize: 10,
-                                              color: Colors.grey[700],
-                                              height: 1.3,
+                                              fontSize: 10.5,
+                                              color: muted,
+                                              height: 1.35,
                                             ),
                                           ),
                                           const SizedBox(height: 8),
@@ -486,24 +513,21 @@ class _InvestmentsPageState extends State<InvestmentsPage> {
                                             verifyUrl,
                                             style: const TextStyle(
                                               fontSize: 10,
-                                              fontWeight: FontWeight.bold,
-                                              color: primaryTeal,
+                                              fontWeight: FontWeight.w700,
+                                              color: emerald,
                                             ),
                                           ),
                                         ],
                                       ),
                                     ),
                                     const SizedBox(width: 12),
-
-                                    // Real Scannable QR Code
                                     Container(
                                       padding: const EdgeInsets.all(6),
                                       decoration: BoxDecoration(
                                         color: Colors.white,
                                         borderRadius:
-                                            BorderRadius.circular(10),
-                                        border: Border.all(
-                                            color: Colors.grey.shade300),
+                                        BorderRadius.circular(10),
+                                        border: Border.all(color: line),
                                       ),
                                       child: QrImageView(
                                         data: verifyUrl,
@@ -515,15 +539,14 @@ class _InvestmentsPageState extends State<InvestmentsPage> {
                                   ],
                                 ),
                               ),
-                              const SizedBox(height: 24),
+                              const SizedBox(height: 22),
 
-                              // Footer
                               Container(
+                                width: double.infinity,
                                 padding: const EdgeInsets.all(12),
-                                decoration: const BoxDecoration(
-                                  color: primaryDarkTeal,
-                                  borderRadius: BorderRadius.vertical(
-                                      bottom: Radius.circular(12)),
+                                decoration: BoxDecoration(
+                                  color: emeraldDeep,
+                                  borderRadius: BorderRadius.circular(12),
                                 ),
                                 child: Column(
                                   children: [
@@ -531,13 +554,13 @@ class _InvestmentsPageState extends State<InvestmentsPage> {
                                       'Biniyog Club',
                                       style: TextStyle(
                                         color: Colors.white,
-                                        fontWeight: FontWeight.bold,
+                                        fontWeight: FontWeight.w700,
                                         fontSize: 13,
                                       ),
                                     ),
                                     const SizedBox(height: 2),
                                     Text(
-                                      'Agricultural Investment Platform | Dhaka, Bangladesh',
+                                      'Investment Platform | Dhaka, Bangladesh',
                                       style: TextStyle(
                                         color: Colors.white.withAlpha(200),
                                         fontSize: 9.5,
@@ -546,7 +569,7 @@ class _InvestmentsPageState extends State<InvestmentsPage> {
                                     Text(
                                       'info@biniyogclub.com | www.biniyogclub.com',
                                       style: TextStyle(
-                                        color: Colors.white.withAlpha(180),
+                                        color: Colors.white.withAlpha(170),
                                         fontSize: 9,
                                       ),
                                     ),
@@ -561,30 +584,32 @@ class _InvestmentsPageState extends State<InvestmentsPage> {
                   ),
                 ),
               ),
-
-              // Bottom Action Button
               Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: ElevatedButton.icon(
-                  onPressed: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(LanguageService.tr(
-                            'Downloading Certificate PDF ($certNo)...',
-                            'সার্টিফিকেট পিডিএফ ডাউনলোড করা হচ্ছে...')),
-                        backgroundColor: primaryTeal,
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                child: SafeArea(
+                  top: false,
+                  child: FilledButton.icon(
+                    onPressed: () {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(LanguageService.tr(
+                              'Downloading Certificate PDF ($certNo)...',
+                              'সার্টিফিকেট পিডিএফ ডাউনলোড করা হচ্ছে...')),
+                          backgroundColor: emerald,
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.download_rounded),
+                    label: Text(LanguageService.tr(
+                        'Download Certificate PDF',
+                        'সার্টিফিকেট ডাউনলোড করুন')),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: emerald,
+                      foregroundColor: Colors.white,
+                      minimumSize: const Size(double.infinity, 52),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
                       ),
-                    );
-                  },
-                  icon: const Icon(Icons.download_rounded),
-                  label: Text(LanguageService.tr(
-                      'Download Certificate PDF', 'সার্টিফিকেট ডাউনলোড করুন')),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: primaryTeal,
-                    foregroundColor: Colors.white,
-                    minimumSize: const Size(double.infinity, 50),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
                     ),
                   ),
                 ),
@@ -596,20 +621,84 @@ class _InvestmentsPageState extends State<InvestmentsPage> {
     );
   }
 
+  Widget _certMeta(String label, String value) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label,
+            style: const TextStyle(
+                fontSize: 8.5, color: muted, fontWeight: FontWeight.w700)),
+        const SizedBox(height: 2),
+        Text(value,
+            style: const TextStyle(
+                fontSize: 11.5, fontWeight: FontWeight.w700, color: ink)),
+      ],
+    );
+  }
+
+  Widget _certKpi(String label, String value, String sub) {
+    return Row(
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label,
+                  style: const TextStyle(
+                      fontSize: 9,
+                      fontWeight: FontWeight.w700,
+                      color: muted,
+                      letterSpacing: 0.4)),
+              const SizedBox(height: 3),
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Text(value,
+                    style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: emerald)),
+              ),
+              Text(sub, style: const TextStyle(fontSize: 9.5, color: muted)),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _certBlock(List<Widget> rows) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: ivory,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        children: [
+          for (int i = 0; i < rows.length; i++) ...[
+            rows[i],
+            if (i != rows.length - 1) const SizedBox(height: 9),
+          ],
+        ],
+      ),
+    );
+  }
+
   Widget _buildCertSectionHeader(String title) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 8.0),
+      padding: const EdgeInsets.only(bottom: 8),
       child: Row(
         children: [
-          Container(width: 4, height: 14, color: primaryTeal),
+          Container(width: 4, height: 14, color: gold),
           const SizedBox(width: 8),
           Text(
             title,
             style: const TextStyle(
               fontSize: 12,
-              fontWeight: FontWeight.bold,
+              fontWeight: FontWeight.w700,
               letterSpacing: 1.0,
-              color: primaryDarkTeal,
+              color: emeraldDeep,
             ),
           ),
         ],
@@ -619,10 +708,9 @@ class _InvestmentsPageState extends State<InvestmentsPage> {
 
   Widget _buildCertDetailRow(String label, String val) {
     return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label, style: TextStyle(fontSize: 11, color: Colors.grey[600])),
+        Text(label, style: const TextStyle(fontSize: 11, color: muted)),
         const SizedBox(width: 10),
         Expanded(
           child: Text(
@@ -630,8 +718,8 @@ class _InvestmentsPageState extends State<InvestmentsPage> {
             textAlign: TextAlign.end,
             style: const TextStyle(
               fontSize: 11.5,
-              fontWeight: FontWeight.bold,
-              color: Colors.black87,
+              fontWeight: FontWeight.w700,
+              color: ink,
             ),
           ),
         ),
@@ -639,16 +727,41 @@ class _InvestmentsPageState extends State<InvestmentsPage> {
     );
   }
 
-  // Submit Payment Proof Bottom Sheet Modal
+  // ═════════════════════════════════════════════════════════
+  // SUBMIT PROOF
+  // ═════════════════════════════════════════════════════════
   void _showSubmitProofModal(Map<String, dynamic> inv) {
-    final trxFefController = TextEditingController();
+    final trxRefController = TextEditingController();
     final notesController = TextEditingController();
     String selectedBankId =
-        _bankAccounts.isNotEmpty ? _bankAccounts.first['id'].toString() : '';
+    _bankAccounts.isNotEmpty ? _bankAccounts.first['id'].toString() : '';
+    bool submitting = false;
+    final c = _calc(inv);
+
+    InputDecoration deco(String label, String hint) => InputDecoration(
+      labelText: label,
+      hintText: hint,
+      filled: true,
+      fillColor: ivory,
+      labelStyle: const TextStyle(color: muted, fontSize: 13),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: line),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: line),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: emerald, width: 1.4),
+      ),
+    );
 
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      backgroundColor: Colors.white,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
@@ -657,159 +770,188 @@ class _InvestmentsPageState extends State<InvestmentsPage> {
           builder: (context, setModalState) {
             return Padding(
               padding: EdgeInsets.only(
-                top: 24,
+                top: 20,
                 left: 20,
                 right: 20,
                 bottom: MediaQuery.of(context).viewInsets.bottom + 24,
               ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        LanguageService.tr('Submit Payment Proof', 'পেমেন্ট প্রুফ সাবমিট করুন'),
-                        style: const TextStyle(
-                            fontSize: 18, fontWeight: FontWeight.bold),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.close_rounded),
-                        onPressed: () => Navigator.pop(context),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '${inv['title']} · ${_fmtBdt(inv['amountBdt'] as double)}',
-                    style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.bold,
-                        color: primaryTeal),
-                  ),
-                  const SizedBox(height: 16),
-
-                  Text(
-                    LanguageService.tr('Select Platform Bank Account', 'প্ল্যাটফর্মের ব্যাংক অ্যাকাউন্ট বেছে নিন'),
-                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 6),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    decoration: BoxDecoration(
-                      color: Colors.grey.shade50,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.grey.shade300),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            LanguageService.tr('Submit Payment Proof',
+                                'পেমেন্ট প্রুফ সাবমিট করুন'),
+                            style: const TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w700,
+                                color: ink),
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close_rounded),
+                          onPressed: () => Navigator.pop(context),
+                        ),
+                      ],
                     ),
-                    child: DropdownButtonHideUnderline(
-                      child: DropdownButton<String>(
-                        value: selectedBankId.isNotEmpty ? selectedBankId : null,
-                        isExpanded: true,
-                        hint: Text(LanguageService.tr('Choose Bank Account', 'ব্যাংক অ্যাকাউন্ট বেছে নিন')),
-                        items: _bankAccounts.map((b) {
-                          return DropdownMenuItem<String>(
-                            value: b['id'].toString(),
-                            child: Text(
-                              '${b['bankName']} (${b['accountNumber']})',
-                              style: const TextStyle(fontSize: 13),
+                    Text(
+                      '${inv['title']} · ${_fmtBdt(c['principal'] as double)}',
+                      style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: emerald),
+                    ),
+                    const SizedBox(height: 18),
+                    Text(
+                      LanguageService.tr('Select Platform Bank Account',
+                          'প্ল্যাটফর্মের ব্যাংক অ্যাকাউন্ট বেছে নিন'),
+                      style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: ink),
+                    ),
+                    const SizedBox(height: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      decoration: BoxDecoration(
+                        color: ivory,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: line),
+                      ),
+                      child: DropdownButtonHideUnderline(
+                        child: DropdownButton<String>(
+                          value: selectedBankId.isNotEmpty
+                              ? selectedBankId
+                              : null,
+                          isExpanded: true,
+                          hint: Text(LanguageService.tr(
+                              'Choose Bank Account',
+                              'ব্যাংক অ্যাকাউন্ট বেছে নিন')),
+                          items: _bankAccounts.map((b) {
+                            return DropdownMenuItem<String>(
+                              value: b['id'].toString(),
+                              child: Text(
+                                '${b['bankName']} (${b['accountNumber']})',
+                                style: const TextStyle(fontSize: 13),
+                              ),
+                            );
+                          }).toList(),
+                          onChanged: (val) {
+                            if (val != null) {
+                              setModalState(() => selectedBankId = val);
+                            }
+                          },
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    TextField(
+                      controller: trxRefController,
+                      decoration: deco(
+                        LanguageService.tr(
+                            'Deposit Slip No / Transaction Ref',
+                            'ডিপোজিট স্লিপ নম্বর / ট্রানজেকশন রেফ'),
+                        'e.g. TRX987654321',
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: notesController,
+                      decoration: deco(
+                        LanguageService.tr(
+                            'Notes / Depositor Name (optional)',
+                            'নোটস / জমাদানকারীর নাম (ঐচ্ছিক)'),
+                        'e.g. Transferred from City Bank',
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    FilledButton(
+                      onPressed: submitting
+                          ? null
+                          : () async {
+                        final ref = trxRefController.text.trim();
+                        if (ref.isEmpty) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(LanguageService.tr(
+                                  'Please enter transaction reference / deposit slip no.',
+                                  'ট্রানজেকশন রেফারেন্স বা জমা স্লিপ নম্বর লিখুন।')),
+                              backgroundColor: danger,
                             ),
                           );
-                        }).toList(),
-                        onChanged: (val) {
-                          if (val != null) {
-                            setModalState(() => selectedBankId = val);
-                          }
-                        },
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
+                          return;
+                        }
+                        setModalState(() => submitting = true);
 
-                  TextField(
-                    controller: trxFefController,
-                    decoration: InputDecoration(
-                      labelText: LanguageService.tr('Bank Deposit Slip No / Transaction Ref', 'ডিপোজিট স্লিপ নম্বর / ট্রানজেকশন রেফ'),
-                      hintText: 'e.g. TRX987654321',
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
+                        final userData =
+                        await AuthService.getUserData();
+                        final userId =
+                            userData?['id']?.toString() ?? '';
 
-                  TextField(
-                    controller: notesController,
-                    decoration: InputDecoration(
-                      labelText: LanguageService.tr('Optional Notes / Depositor Name', 'নোটস / জমাদানকারীর নাম (ঐচ্ছিক)'),
-                      hintText: 'e.g. Transferred from City Bank',
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-
-                  ElevatedButton(
-                    onPressed: () async {
-                      final ref = trxFefController.text.trim();
-                      if (ref.isEmpty) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(LanguageService.tr('Please enter transaction reference / deposit slip no.', 'ট্রানজেকশন রেফারেন্স বা জমা স্লিপ নম্বর লিখুন।')),
-                            backgroundColor: Colors.redAccent,
-                          ),
+                        final res = await DatabaseService
+                            .submitManualPaymentProof(
+                          investmentId: inv['id'].toString(),
+                          userId: userId,
+                          amountBdt: c['principal'] as double,
+                          transactionRef: ref,
+                          bankAccountId: selectedBankId,
+                          proofFileUrl: 'deposit_receipt.png',
+                          notes: notesController.text.trim(),
                         );
-                        return;
-                      }
 
-                      final userData = await AuthService.getUserData();
-                      final userId = userData?['id']?.toString() ?? '';
+                        if (!context.mounted) return;
+                        Navigator.pop(context);
 
-                      final res = await DatabaseService.submitManualPaymentProof(
-                        investmentId: inv['id'].toString(),
-                        userId: userId,
-                        amountBdt: inv['amountBdt'] as double,
-                        transactionRef: ref,
-                        bankAccountId: selectedBankId,
-                        proofFileUrl: 'deposit_receipt.png',
-                        notes: notesController.text.trim(),
-                      );
-
-                      if (!context.mounted) return;
-                      Navigator.pop(context);
-
-                      if (res['success'] == true) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(LanguageService.tr('Payment proof submitted! Pending Admin review.', 'পেমেন্ট প্রুফ সাবমিট হয়েছে! এডমিন পর্যালোচনার অপেক্ষায়।')),
-                            backgroundColor: primaryTeal,
-                          ),
-                        );
-                        _loadInvestmentsData();
-                      } else {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(res['message'] ?? 'Failed to submit.'),
-                            backgroundColor: Colors.redAccent,
-                          ),
-                        );
-                      }
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: primaryTeal,
-                      foregroundColor: Colors.white,
-                      minimumSize: const Size(double.infinity, 50),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
+                        if (res['success'] == true) {
+                          ScaffoldMessenger.of(this.context)
+                              .showSnackBar(
+                            SnackBar(
+                              content: Text(LanguageService.tr(
+                                  'Payment proof submitted! Pending admin review.',
+                                  'পেমেন্ট প্রুফ সাবমিট হয়েছে! এডমিন পর্যালোচনার অপেক্ষায়।')),
+                              backgroundColor: emerald,
+                            ),
+                          );
+                          _loadInvestmentsData();
+                        } else {
+                          ScaffoldMessenger.of(this.context)
+                              .showSnackBar(
+                            SnackBar(
+                              content: Text(res['message'] ??
+                                  'Failed to submit.'),
+                              backgroundColor: danger,
+                            ),
+                          );
+                        }
+                      },
+                      style: FilledButton.styleFrom(
+                        backgroundColor: emerald,
+                        foregroundColor: Colors.white,
+                        minimumSize: const Size(double.infinity, 52),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                      ),
+                      child: submitting
+                          ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                            color: Colors.white, strokeWidth: 2),
+                      )
+                          : Text(
+                        LanguageService.tr('Submit Payment Proof',
+                            'পেমেন্ট প্রুফ জমা দিন'),
+                        style: const TextStyle(
+                            fontSize: 15, fontWeight: FontWeight.w700),
                       ),
                     ),
-                    child: Text(
-                      LanguageService.tr('Submit Payment Proof', 'পেমেন্ট প্রুফ জমা দিন'),
-                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             );
           },
@@ -818,236 +960,264 @@ class _InvestmentsPageState extends State<InvestmentsPage> {
     );
   }
 
+  // ═════════════════════════════════════════════════════════
+  // BUILD
+  // ═════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<String>(
       valueListenable: LanguageService.currentLanguage,
       builder: (context, lang, child) {
         return Scaffold(
-          backgroundColor: const Color(0xFFF4F7F6),
+          backgroundColor: ivory,
           appBar: AppBar(
-            backgroundColor: Colors.white,
-            elevation: 0.5,
-            iconTheme: const IconThemeData(color: primaryTeal),
+            backgroundColor: ivory,
+            surfaceTintColor: Colors.transparent,
+            elevation: 0,
+            iconTheme: const IconThemeData(color: ink),
             title: Text(
               LanguageService.tr('Investments', 'ইনভেস্টমেন্টস'),
               style: const TextStyle(
-                color: Colors.black87,
-                fontWeight: FontWeight.bold,
+                color: ink,
+                fontWeight: FontWeight.w700,
                 fontSize: 18,
               ),
             ),
           ),
           body: _isLoading
-              ? const Center(child: CircularProgressIndicator(color: primaryTeal))
+              ? const Center(
+              child: CircularProgressIndicator(
+                  color: emerald, strokeWidth: 2.4))
               : RefreshIndicator(
-                  onRefresh: _loadInvestmentsData,
-                  color: primaryTeal,
-                  child: SingleChildScrollView(
-                    physics: const AlwaysScrollableScrollPhysics(),
-                    padding: const EdgeInsets.all(16.0),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          LanguageService.tr(
-                              '${_investments.length} total investment',
-                              'মোট ${_investments.length} টি বিনিয়োগ'),
-                          style: TextStyle(fontSize: 13, color: Colors.grey[600]),
-                        ),
-                        const SizedBox(height: 14),
-
-                        // 1. KPI Cards Row
-                        _buildKpiRow(),
-                        const SizedBox(height: 18),
-
-                        // 2. Status Filter Pills Bar
-                        _buildStatusFilterBar(),
-                        const SizedBox(height: 18),
-
-                        // 3. Investments List
-                        _filteredInvestments.isEmpty
-                            ? _buildEmptyInvestmentsCard()
-                            : ListView.separated(
-                                shrinkWrap: true,
-                                physics: const NeverScrollableScrollPhysics(),
-                                itemCount: _filteredInvestments.length,
-                                separatorBuilder: (context, index) =>
-                                    const SizedBox(height: 16),
-                                itemBuilder: (context, index) {
-                                  final inv = _filteredInvestments[index];
-                                  return _buildInvestmentCard(inv);
-                                },
-                              ),
-                        const SizedBox(height: 24),
-                      ],
-                    ),
-                  ),
+            onRefresh: _loadInvestmentsData,
+            color: emerald,
+            child: ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 40),
+              children: [
+                Text(
+                  LanguageService.tr(
+                      '${_investments.length} total investments',
+                      'মোট ${_investments.length} টি বিনিয়োগ'),
+                  style: const TextStyle(fontSize: 13, color: muted),
                 ),
+                const SizedBox(height: 14),
+                _buildKpiSection(),
+                const SizedBox(height: 18),
+                _buildStatusFilterBar(),
+                const SizedBox(height: 18),
+                if (_filteredInvestments.isEmpty)
+                  _buildEmptyInvestmentsCard()
+                else
+                  ..._filteredInvestments.map((inv) => Padding(
+                    padding: const EdgeInsets.only(bottom: 16),
+                    child: _buildInvestmentCard(inv),
+                  )),
+              ],
+            ),
+          ),
         );
       },
     );
   }
 
-  // 3 KPI Cards Row
-  Widget _buildKpiRow() {
-    return Row(
+  // ─── KPI Section ──────────────────────────────────────────
+  Widget _buildKpiSection() {
+    return Column(
       children: [
-        Expanded(
-          child: Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: Colors.grey.shade200),
+        Row(
+          children: [
+            Expanded(
+              child: _kpiCard(
+                LanguageService.tr('Total Invested', 'মোট বিনিয়োগ'),
+                _fmtBdt(_totalInvested),
+                Icons.account_balance_wallet_outlined,
+                emerald,
+                emeraldSoft,
+              ),
             ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(LanguageService.tr('Total Invested', 'মোট বিনিয়োগ'),
-                    style: TextStyle(fontSize: 10, color: Colors.grey[600])),
-                const SizedBox(height: 4),
-                Text(_fmtBdt(_totalInvested),
-                    style: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.bold,
-                        color: primaryTeal)),
-              ],
+            const SizedBox(width: 10),
+            Expanded(
+              child: _kpiCard(
+                LanguageService.tr('Returns Received', 'প্রাপ্ত লাভ'),
+                _fmtBdt(_totalActual),
+                Icons.savings_outlined,
+                lapis,
+                lapisSoft,
+              ),
             ),
-          ),
+          ],
         ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: Colors.grey.shade200),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(LanguageService.tr('Expected Returns', 'প্রত্যাশিত লাভ'),
-                    style: TextStyle(fontSize: 10, color: Colors.grey[600])),
-                const SizedBox(height: 4),
-                Text(_fmtBdt(_totalExpected),
-                    style: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.bold,
-                        color: primaryTeal)),
-              ],
-            ),
+        const SizedBox(height: 10),
+        // Expected return range — full width
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: goldSoft,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: gold.withAlpha(70)),
           ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: Colors.grey.shade200),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(LanguageService.tr('Returns Received', 'প্রাপ্ত লাভ'),
-                    style: TextStyle(fontSize: 10, color: Colors.grey[600])),
-                const SizedBox(height: 4),
-                Text(_fmtBdt(_totalActual),
-                    style: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.bold,
-                        color: primaryTeal)),
-              ],
-            ),
+          child: Row(
+            children: [
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: goldDeep,
+                  borderRadius: BorderRadius.circular(11),
+                ),
+                child: const Icon(Icons.trending_up_rounded,
+                    size: 18, color: Colors.white),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      LanguageService.tr(
+                          'Expected Return ($_rangeLabel)',
+                          'প্রত্যাশিত লাভ ($_rangeLabel)'),
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: goldDeep.withAlpha(220),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        _fmtRange(_totalExpectedMin, _totalExpectedMax),
+                        style: const TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w700,
+                          color: goldDeep,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
         ),
       ],
     );
   }
 
-  // Filter Pills Bar with Count Badges (Matching Website Screenshot 1:1)
+  Widget _kpiCard(
+      String label, String value, IconData icon, Color color, Color soft) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: soft,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 30,
+            height: 30,
+            decoration: BoxDecoration(
+              color: color,
+              borderRadius: BorderRadius.circular(9),
+            ),
+            child: Icon(icon, size: 16, color: Colors.white),
+          ),
+          const SizedBox(height: 10),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              value,
+              style: TextStyle(
+                  fontSize: 17, fontWeight: FontWeight.w700, color: color),
+            ),
+          ),
+          const SizedBox(height: 1),
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: 11, color: color.withAlpha(200)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ─── Filter Bar ───────────────────────────────────────────
   Widget _buildStatusFilterBar() {
-    final int allCount = _investments.length;
-    final int activeCount =
-        _investments.where((i) => i['status'] == 'ACTIVE').length;
-    final int awaitingCount = _investments
-        .where((i) => i['status'] == 'PAYMENT_PENDING' || i['status'] == 'PENDING')
+    int count(bool Function(String) test) => _investments
+        .where((i) => test(i['status']?.toString() ?? ''))
         .length;
-    final int draftCount =
-        _investments.where((i) => i['status'] == 'PENDING').length;
-    final int completedCount = _investments
-        .where((i) => i['status'] == 'COMPLETED' || i['status'] == 'MATURED')
-        .length;
-    final int cancelledCount =
-        _investments.where((i) => i['status'] == 'CANCELLED').length;
 
     final filters = [
-      {'label': 'All', 'bn': 'সব', 'count': allCount, 'key': 'ALL'},
-      {'label': 'Active', 'bn': 'একটিভ', 'count': activeCount, 'key': 'ACTIVE'},
-      {'label': 'Awaiting Payment', 'bn': 'অপেক্ষমান', 'count': awaitingCount, 'key': 'AWAITING_PAYMENT'},
-      {'label': 'Draft', 'bn': 'ড্রাফট', 'count': draftCount, 'key': 'DRAFT'},
-      {'label': 'Completed', 'bn': 'সম্পন্ন', 'count': completedCount, 'key': 'COMPLETED'},
-      {'label': 'Cancelled', 'bn': 'বাতিল', 'count': cancelledCount, 'key': 'CANCELLED'},
+      ('All', 'সব', _investments.length, 'ALL'),
+      ('Active', 'একটিভ', count((s) => s == 'ACTIVE'), 'ACTIVE'),
+      ('Awaiting Payment', 'পেমেন্ট অপেক্ষমান',
+      count((s) => s == 'PAYMENT_PENDING'), 'AWAITING_PAYMENT'),
+      ('Draft', 'ড্রাফট', count((s) => s == 'PENDING'), 'DRAFT'),
+      ('Completed', 'সম্পন্ন',
+      count((s) => s == 'COMPLETED' || s == 'MATURED'), 'COMPLETED'),
+      ('Cancelled', 'বাতিল', count((s) => s == 'CANCELLED'), 'CANCELLED'),
     ];
 
     return SizedBox(
-      height: 36,
-      child: ListView.builder(
+      height: 38,
+      child: ListView.separated(
         scrollDirection: Axis.horizontal,
         itemCount: filters.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
         itemBuilder: (context, index) {
           final f = filters[index];
-          final bool isSel = _selectedStatusFilter == f['key'];
-          final int count = f['count'] as int;
+          final bool isSel = _selectedStatusFilter == f.$4;
 
-          return Container(
-            margin: const EdgeInsets.only(right: 8),
-            child: ChoiceChip(
-              label: Row(
-                mainAxisSize: MainAxisSize.min,
+          return GestureDetector(
+            onTap: () => setState(() => _selectedStatusFilter = f.$4),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: isSel ? emerald : Colors.white,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: isSel ? emerald : line),
+              ),
+              child: Row(
                 children: [
-                  Text(LanguageService.tr(
-                      f['label'] as String, f['bn'] as String)),
-                  if (count > 0) ...[
-                    const SizedBox(width: 5),
+                  Text(
+                    LanguageService.tr(f.$1, f.$2),
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: isSel ? FontWeight.w700 : FontWeight.w500,
+                      color: isSel ? Colors.white : ink,
+                    ),
+                  ),
+                  if (f.$3 > 0) ...[
+                    const SizedBox(width: 6),
                     Container(
                       padding: const EdgeInsets.symmetric(
                           horizontal: 6, vertical: 1),
                       decoration: BoxDecoration(
-                        color: isSel ? Colors.white24 : Colors.grey.shade200,
+                        color: isSel ? gold : ivory,
                         borderRadius: BorderRadius.circular(10),
                       ),
                       child: Text(
-                        '$count',
+                        '${f.$3}',
                         style: TextStyle(
                           fontSize: 10,
-                          fontWeight: FontWeight.bold,
-                          color: isSel ? Colors.white : Colors.black87,
+                          fontWeight: FontWeight.w700,
+                          color: isSel ? Colors.white : ink,
                         ),
                       ),
                     ),
                   ],
                 ],
               ),
-              selected: isSel,
-              selectedColor: primaryTeal,
-              labelStyle: TextStyle(
-                fontSize: 11.5,
-                fontWeight: isSel ? FontWeight.bold : FontWeight.normal,
-                color: isSel ? Colors.white : Colors.black87,
-              ),
-              backgroundColor: Colors.white,
-              side: BorderSide(
-                color: isSel ? primaryTeal : Colors.grey.shade300,
-              ),
-              onSelected: (selected) {
-                if (selected) {
-                  setState(() => _selectedStatusFilter = f['key'] as String);
-                }
-              },
             ),
           );
         },
@@ -1055,77 +1225,117 @@ class _InvestmentsPageState extends State<InvestmentsPage> {
     );
   }
 
-  // Single Investment Card (Matching Website Screenshot 1:1!)
+  // ─── Status helpers ───────────────────────────────────────
+  String _statusText(String st) {
+    switch (st) {
+      case 'ACTIVE':
+        return LanguageService.tr('Active', 'একটিভ');
+      case 'PAYMENT_PENDING':
+        return LanguageService.tr('Awaiting Payment', 'পেমেন্ট অপেক্ষমান');
+      case 'COMPLETED':
+      case 'MATURED':
+        return LanguageService.tr('Completed', 'সম্পন্ন');
+      case 'CANCELLED':
+        return LanguageService.tr('Cancelled', 'বাতিল');
+      case 'CONFIRMED':
+        return LanguageService.tr('Confirmed', 'নিশ্চিত');
+      default:
+        return LanguageService.tr('Draft', 'ড্রাফট');
+    }
+  }
+
+  Color _statusColor(String st) {
+    switch (st) {
+      case 'ACTIVE':
+      case 'CONFIRMED':
+        return emerald;
+      case 'PAYMENT_PENDING':
+        return goldDeep;
+      case 'COMPLETED':
+      case 'MATURED':
+        return lapis;
+      case 'CANCELLED':
+        return danger;
+      default:
+        return terracotta;
+    }
+  }
+
+  Widget _statusPill(String status) {
+    final c = _statusColor(status);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+      decoration: BoxDecoration(
+        color: c.withAlpha(25),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 6,
+            height: 6,
+            decoration: BoxDecoration(color: c, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 5),
+          Text(
+            _statusText(status),
+            style: TextStyle(
+                fontSize: 10.5, fontWeight: FontWeight.w700, color: c),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ─── Investment Card ──────────────────────────────────────
   Widget _buildInvestmentCard(Map<String, dynamic> inv) {
-    final String invId = inv['id']?.toString() ?? '';
-    final String certNo =
-        'BC-${invId.substring(0, invId.length >= 12 ? 12 : invId.length).toUpperCase()}';
-    final String status = inv['status'] as String? ?? 'PENDING';
-    final String catText =
-        categoryLabels[inv['category']] ?? inv['category']?.toString() ?? 'SME';
+    final c = _calc(inv);
+    final String status = inv['status']?.toString() ?? 'PENDING';
+    final String catText = categoryLabels[inv['category']] ??
+        inv['category']?.toString() ??
+        'SME';
 
-    final double amt = inv['amountBdt'] as double? ?? 0.0;
-    final double expRet = inv['expectedReturnBdt'] as double? ?? 0.0;
-    final double totalVal = amt + expRet;
-    final double returnPct =
-        (inv['expectedReturnPct'] as double? ?? 0.16) * 100;
-    final double progress = inv['progress'] as double? ?? 0.02;
-    final int fundedPct = (progress * 100).toInt();
-
-    final String createdAt =
-        inv['createdAt']?.toString().substring(0, 10) ?? 'Oct 8, 2026';
+    final double principal = c['principal'] as double;
+    final double expMin = c['expectedMin'] as double;
+    final double expMax = c['expectedMax'] as double;
+    final double totMin = c['totalMin'] as double;
+    final double totMax = c['totalMax'] as double;
+    final double progress = c['progress'] as double;
+    final double received = c['received'] as double;
+    final int durationDays = c['durationDays'] as int;
+    final int daysLeft = c['daysLeft'] as int;
+    final DateTime? start = c['start'] as DateTime?;
+    final DateTime? maturity = c['maturity'] as DateTime?;
 
     final latestSub = inv['latestSubmission'] as Map<String, dynamic>?;
     final String? subStatus = latestSub?['status']?.toString();
     final String? subRef = latestSub?['transactionRef']?.toString();
-    final String? rejectionReason = latestSub?['rejectionReason']?.toString();
+    final String? rejectionReason =
+    latestSub?['rejectionReason']?.toString();
 
-    final bool isAwaiting = status == 'PAYMENT_PENDING' || status == 'PENDING';
-
-    String getStatusText(String st) {
-      if (st == 'ACTIVE') return 'Active';
-      if (st == 'PAYMENT_PENDING') return 'Awaiting Payment';
-      if (st == 'COMPLETED' || st == 'MATURED') return 'Completed';
-      if (st == 'CANCELLED') return 'Cancelled';
-      return 'Draft';
-    }
-
-    Color getStatusColor(String st) {
-      if (st == 'ACTIVE') return primaryTeal;
-      if (st == 'PAYMENT_PENDING') return Colors.orange;
-      if (st == 'COMPLETED' || st == 'MATURED') return Colors.green;
-      if (st == 'CANCELLED') return Colors.red;
-      return Colors.amber;
-    }
-
-    final Color stColor = getStatusColor(status);
+    final bool isAwaiting =
+        status == 'PAYMENT_PENDING' || status == 'PENDING';
+    final bool isActiveLike = _countsAsInvested(status);
+    final bool rejected = subStatus == 'REJECTED';
 
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(20),
         border: Border.all(
-          color: subStatus == 'REJECTED'
-              ? Colors.red.shade300
-              : Colors.grey.shade200,
-          width: subStatus == 'REJECTED' ? 1.5 : 1.0,
+          color: rejected ? danger.withAlpha(120) : line,
+          width: rejected ? 1.4 : 1,
         ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withAlpha(6),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
       ),
+      clipBehavior: Clip.antiAlias,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 1. Top Header Row
+          // Header
           Padding(
-            padding: const EdgeInsets.all(16.0),
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
             child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Expanded(
@@ -1135,247 +1345,306 @@ class _InvestmentsPageState extends State<InvestmentsPage> {
                       Text(
                         inv['title'] as String? ?? 'Project',
                         style: const TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.black87,
+                          fontSize: 15.5,
+                          fontWeight: FontWeight.w700,
+                          color: ink,
                         ),
                       ),
-                      const SizedBox(height: 2),
+                      const SizedBox(height: 3),
                       Text(
-                        '$catText · ${inv['location']} · ${inv['durationDays']}d term',
+                        '$catText · ${inv['location'] ?? 'Bangladesh'}',
                         style:
-                            TextStyle(fontSize: 11, color: Colors.grey[600]),
+                        const TextStyle(fontSize: 11.5, color: muted),
                       ),
                     ],
                   ),
                 ),
                 const SizedBox(width: 8),
-
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 3),
-                      decoration: BoxDecoration(
-                        color: stColor.withAlpha(25),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Text(
-                        getStatusText(status),
-                        style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
-                          color: stColor,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 2),
+                    _statusPill(status),
+                    const SizedBox(height: 4),
                     Text(
-                      certNo,
-                      style: TextStyle(
-                          fontSize: 9,
-                          color: Colors.grey[500],
-                          fontWeight: FontWeight.bold),
+                      _certNo(inv),
+                      style: const TextStyle(
+                          fontSize: 9.5,
+                          color: muted,
+                          fontWeight: FontWeight.w600),
                     ),
                   ],
                 ),
               ],
             ),
           ),
-          const Divider(height: 1),
 
-          // 2. 8 Bento KPI Grid Boxes (Matching Website Screenshot 1:1!)
+          // Return breakdown
           Container(
-            padding: const EdgeInsets.all(14),
-            color: const Color(0xFFF8FAFC),
+            margin: const EdgeInsets.symmetric(horizontal: 12),
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [emerald, emeraldDeep],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: BorderRadius.circular(16),
+            ),
             child: Column(
               children: [
-                // Row 1: Principal, Expected Return, Total Value, Invested On
-                Row(
-                  children: [
-                    Expanded(
-                        child: _buildBentoKpiBox('PRINCIPAL', _fmtBdt(amt), 'Principal')),
-                    Expanded(
-                        child: _buildBentoKpiBox('EXPECTED RETURN', _fmtBdt(expRet), '${returnPct.toStringAsFixed(1)}% · Hybrid')),
-                  ],
+                _breakdownRow(
+                  LanguageService.tr('Principal', 'মূলধন'),
+                  _fmtBdt(principal),
                 ),
                 const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                        child: _buildBentoKpiBox('TOTAL VALUE', _fmtBdt(totalVal), 'Principal + return')),
-                    Expanded(
-                        child: _buildBentoKpiBox('INVESTED ON', createdAt, 'Active $createdAt')),
-                  ],
+                _breakdownRow(
+                  LanguageService.tr('Expected return ($_rangeLabel)',
+                      'প্রত্যাশিত লাভ ($_rangeLabel)'),
+                  '+ ${_fmtRange(expMin, expMax)}',
+                  valueColor: goldLight,
                 ),
-                const SizedBox(height: 10),
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  child: Container(
+                      height: 0.8, color: Colors.white.withAlpha(40)),
+                ),
+                _breakdownRow(
+                  LanguageService.tr('Total value', 'মোট মূল্য'),
+                  _fmtRange(totMin, totMax),
+                  bold: true,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
 
-                // Row 2: Maturity Date, Duration, Distributions, Project Funded
+          // Details grid
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Column(
+              children: [
                 Row(
                   children: [
                     Expanded(
-                        child: _buildBentoKpiBox('MATURITY DATE', 'Nov 7, 2026', '30 days left')),
+                      child: _detailBox(
+                        LanguageService.tr(
+                            'INVESTED ON', 'বিনিয়োগের তারিখ'),
+                        _fmtDate(_parseDate(inv['createdAt'])),
+                        isActiveLike && start != null
+                            ? '${LanguageService.tr('Active', 'একটিভ')} ${_fmtDate(start)}'
+                            : LanguageService.tr(
+                            'Not active yet', 'এখনো একটিভ নয়'),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
                     Expanded(
-                        child: _buildBentoKpiBox('DURATION', '${inv['durationDays']} days', '$createdAt → Nov 7')),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                        child: _buildBentoKpiBox('DISTRIBUTIONS', '—', 'None yet')),
-                    Expanded(
-                      child: Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: Colors.grey.shade200),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text('PROJECT FUNDED',
-                                style: TextStyle(
-                                    fontSize: 8.5,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.grey[600])),
-                            const SizedBox(height: 2),
-                            Text('$fundedPct%',
-                                style: const TextStyle(
-                                    fontSize: 12.5,
-                                    fontWeight: FontWeight.bold,
-                                    color: primaryTeal)),
-                            const SizedBox(height: 4),
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(4),
-                              child: LinearProgressIndicator(
-                                value: progress,
-                                minHeight: 4,
-                                backgroundColor: Colors.grey.shade200,
-                                valueColor:
-                                    const AlwaysStoppedAnimation<Color>(
-                                        primaryTeal),
-                              ),
-                            ),
-                          ],
-                        ),
+                      child: _detailBox(
+                        LanguageService.tr('MATURITY DATE', 'মেয়াদ শেষ'),
+                        isActiveLike ? _fmtDate(maturity) : '—',
+                        isActiveLike
+                            ? LanguageService.tr('$daysLeft days left',
+                            '$daysLeft দিন বাকি')
+                            : LanguageService.tr('Starts after payment',
+                            'পেমেন্টের পর শুরু'),
+                        accent: goldDeep,
                       ),
                     ),
                   ],
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _detailBox(
+                        LanguageService.tr('DURATION', 'মেয়াদ'),
+                        LanguageService.tr(
+                            '$durationDays days', '$durationDays দিন'),
+                        LanguageService.tr(
+                            'Investment term', 'বিনিয়োগের মেয়াদ'),
+                        accent: lapis,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: _detailBox(
+                        LanguageService.tr('DISTRIBUTIONS', 'বিতরণ'),
+                        received > 0 ? _fmtBdt(received) : '—',
+                        received > 0
+                            ? LanguageService.tr(
+                            'Received so far', 'এ পর্যন্ত প্রাপ্ত')
+                            : LanguageService.tr('None yet', 'এখনো নেই'),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: ivory,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Column(
+                    children: [
+                      Row(
+                        children: [
+                          Text(
+                            LanguageService.tr(
+                                'PROJECT FUNDED', 'প্রজেক্ট ফান্ডেড'),
+                            style: const TextStyle(
+                                fontSize: 9,
+                                fontWeight: FontWeight.w700,
+                                color: muted,
+                                letterSpacing: 0.4),
+                          ),
+                          const Spacer(),
+                          Text(
+                            '${(progress * 100).toStringAsFixed(0)}%',
+                            style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                color: emerald),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 7),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(4),
+                        child: LinearProgressIndicator(
+                          value: progress,
+                          minHeight: 5,
+                          backgroundColor: const Color(0xFFEDE8DE),
+                          valueColor:
+                          const AlwaysStoppedAnimation<Color>(emerald),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),
           ),
 
-          // Manual Payment Submission Alert Box (if rejected or under review)
-          if (subStatus != null) ...[
+          // Payment submission status
+          if (subStatus != null)
             Container(
-              margin: const EdgeInsets.all(12),
-              padding: const EdgeInsets.all(10),
+              margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+              padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: subStatus == 'REJECTED'
-                    ? Colors.red.shade50
-                    : Colors.amber.shade50,
-                borderRadius: BorderRadius.circular(10),
+                color: rejected ? danger.withAlpha(18) : goldSoft,
+                borderRadius: BorderRadius.circular(12),
                 border: Border.all(
-                  color: subStatus == 'REJECTED'
-                      ? Colors.red.shade200
-                      : Colors.amber.shade300,
+                  color:
+                  rejected ? danger.withAlpha(80) : gold.withAlpha(90),
                 ),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: (subStatus == 'REJECTED' ? Colors.red : Colors.blue).withAlpha(30),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(
-                          subStatus == 'REJECTED'
-                              ? LanguageService.tr('Proof Rejected', 'প্রুফ বাতিল হয়েছে')
-                              : LanguageService.tr('Under Review', 'পর্যালোচনায় আছে'),
-                          style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
-                            color: subStatus == 'REJECTED' ? Colors.red : Colors.blue,
-                          ),
+                      Icon(
+                        rejected
+                            ? Icons.error_outline_rounded
+                            : Icons.hourglass_top_rounded,
+                        size: 16,
+                        color: rejected ? danger : goldDeep,
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        rejected
+                            ? LanguageService.tr(
+                            'Proof Rejected', 'প্রুফ বাতিল হয়েছে')
+                            : LanguageService.tr(
+                            'Under Review', 'পর্যালোচনায় আছে'),
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w700,
+                          color: rejected ? danger : goldDeep,
                         ),
                       ),
+                      const Spacer(),
                       if (subRef != null && subRef.isNotEmpty)
                         Text('Ref: $subRef',
-                            style: TextStyle(
-                                fontSize: 10.5, color: Colors.grey[700])),
+                            style: const TextStyle(
+                                fontSize: 10.5, color: muted)),
                     ],
                   ),
-                  if (rejectionReason != null && rejectionReason.isNotEmpty) ...[
+                  if (rejectionReason != null &&
+                      rejectionReason.isNotEmpty) ...[
                     const SizedBox(height: 6),
                     Text(
-                      'Rejected: $rejectionReason',
+                      rejectionReason,
                       style: const TextStyle(
                           fontSize: 11.5,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.redAccent),
+                          fontWeight: FontWeight.w600,
+                          color: danger),
                     ),
                   ],
                 ],
               ),
             ),
-          ],
 
-          // 3. Bottom Action Bar (Certificate Button / Resubmit Button)
-          const Divider(height: 1),
+          // Footer actions
+          const SizedBox(height: 12),
+          const Divider(height: 1, color: line),
           Padding(
-            padding: const EdgeInsets.all(12.0),
+            padding: const EdgeInsets.fromLTRB(16, 10, 12, 10),
             child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(
-                  LanguageService.tr(
-                      'Investment certificate available', 'ইনভেস্টমেন্ট সার্টিফিকেট প্রস্তুত'),
-                  style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                Expanded(
+                  child: Text(
+                    isAwaiting || rejected
+                        ? LanguageService.tr(
+                        'Submit payment proof to activate',
+                        'একটিভ করতে পেমেন্ট প্রুফ দিন')
+                        : LanguageService.tr(
+                        'Investment certificate available',
+                        'ইনভেস্টমেন্ট সার্টিফিকেট প্রস্তুত'),
+                    style: const TextStyle(fontSize: 11, color: muted),
+                  ),
                 ),
-                if (isAwaiting || subStatus == 'REJECTED')
-                  OutlinedButton.icon(
+                if ((isAwaiting && subStatus == null) || rejected)
+                  FilledButton.icon(
                     onPressed: () => _showSubmitProofModal(inv),
-                    icon: const Icon(Icons.upload_file_rounded, size: 14),
+                    icon: const Icon(Icons.upload_file_rounded, size: 15),
                     label: Text(
-                      subStatus == 'REJECTED'
-                          ? LanguageService.tr('Resubmit', 'পুনরায় পাঠান')
+                      rejected
+                          ? LanguageService.tr('Resubmit', 'পুনরায় পাঠান')
                           : LanguageService.tr('Submit Proof', 'প্রুফ দিন'),
                       style: const TextStyle(
-                          fontSize: 11, fontWeight: FontWeight.bold),
+                          fontSize: 12, fontWeight: FontWeight.w700),
                     ),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: primaryTeal,
-                      side: const BorderSide(color: primaryTeal),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: emerald,
+                      foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 4),
+                          horizontal: 14, vertical: 8),
                       visualDensity: VisualDensity.compact,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
                     ),
                   )
-                else
+                else if (!isAwaiting)
                   OutlinedButton.icon(
                     onPressed: () => _openCertificateViewer(inv),
-                    icon: const Icon(Icons.workspace_premium_outlined, size: 14),
+                    icon: const Icon(Icons.workspace_premium_outlined,
+                        size: 15),
                     label: Text(
                       LanguageService.tr('Certificate', 'সার্টিফিকেট'),
                       style: const TextStyle(
-                          fontSize: 11, fontWeight: FontWeight.bold),
+                          fontSize: 12, fontWeight: FontWeight.w700),
                     ),
                     style: OutlinedButton.styleFrom(
-                      foregroundColor: Colors.grey[800],
-                      side: BorderSide(color: Colors.grey.shade300),
+                      foregroundColor: goldDeep,
+                      side: BorderSide(color: gold.withAlpha(150)),
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 4),
+                          horizontal: 14, vertical: 8),
                       visualDensity: VisualDensity.compact,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
                     ),
                   ),
               ],
@@ -1386,60 +1655,123 @@ class _InvestmentsPageState extends State<InvestmentsPage> {
     );
   }
 
-  Widget _buildBentoKpiBox(String label, String value, String sub) {
+  Widget _breakdownRow(String label, String value,
+      {Color? valueColor, bool bold = false}) {
+    return Row(
+      children: [
+        Expanded(
+          flex: 5,
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: bold ? 12.5 : 11.5,
+              color: Colors.white.withAlpha(bold ? 230 : 170),
+              fontWeight: bold ? FontWeight.w600 : FontWeight.w400,
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          flex: 6,
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerRight,
+            child: Text(
+              value,
+              style: TextStyle(
+                fontSize: bold ? 16 : 14,
+                fontWeight: FontWeight.w700,
+                color: valueColor ?? Colors.white,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _detailBox(String label, String value, String sub,
+      {Color accent = emerald}) {
     return Container(
-      padding: const EdgeInsets.all(8),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.grey.shade200),
+        color: ivory,
+        borderRadius: BorderRadius.circular(12),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label,
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontSize: 9,
+              fontWeight: FontWeight.w700,
+              color: muted,
+              letterSpacing: 0.4,
+            ),
+          ),
+          const SizedBox(height: 4),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              value,
               style: TextStyle(
-                  fontSize: 8.5,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.grey[600])),
-          const SizedBox(height: 2),
-          Text(value,
-              style: const TextStyle(
-                  fontSize: 12.5,
-                  fontWeight: FontWeight.bold,
-                  color: primaryTeal)),
-          Text(sub,
-              style: TextStyle(fontSize: 8.5, color: Colors.grey[500])),
+                  fontSize: 13.5,
+                  fontWeight: FontWeight.w700,
+                  color: accent),
+            ),
+          ),
+          const SizedBox(height: 1),
+          Text(
+            sub,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 9.5, color: muted),
+          ),
         ],
       ),
     );
   }
 
-  // Empty State Card
+  // ─── Empty ────────────────────────────────────────────────
   Widget _buildEmptyInvestmentsCard() {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(32),
+      padding: const EdgeInsets.symmetric(vertical: 36, horizontal: 24),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: Colors.grey.shade200),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: line),
       ),
       child: Column(
         children: [
-          Icon(Icons.inventory_2_outlined, size: 48, color: Colors.grey[400]),
-          const SizedBox(height: 12),
+          Container(
+            width: 60,
+            height: 60,
+            decoration: const BoxDecoration(
+              color: goldSoft,
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.inventory_2_outlined,
+                size: 28, color: goldDeep),
+          ),
+          const SizedBox(height: 14),
           Text(
-            LanguageService.tr('No investments found', 'কোনো বিনিয়োগ পাওয়া যায়নি'),
+            LanguageService.tr(
+                'No investments found', 'কোনো বিনিয়োগ পাওয়া যায়নি'),
             style: const TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-                color: Colors.black87),
+                fontSize: 16, fontWeight: FontWeight.w700, color: ink),
           ),
           const SizedBox(height: 4),
           Text(
-            LanguageService.tr('Browse open projects to make your first investment.', 'আপনার প্রথম বিনিয়োগের জন্য প্রজেক্টসমূহ দেখুন।'),
-            style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+            LanguageService.tr(
+                'Browse open projects to make your first investment.',
+                'আপনার প্রথম বিনিয়োগের জন্য প্রজেক্টসমূহ দেখুন।'),
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 12, color: muted),
           ),
         ],
       ),

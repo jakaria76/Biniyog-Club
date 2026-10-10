@@ -28,6 +28,10 @@ class _ReportsPageState extends State<ReportsPage>
 
   static const Color primaryTeal = Color(0xFF047857);
 
+  // Expected return range (16% - 22%)
+  static const double minReturnRate = 0.16;
+  static const double maxReturnRate = 0.22;
+
   static const Map<String, String> categoryLabels = {
     'REAL_ESTATE': 'Real Estate',
     'TRADE_FINANCE': 'Trade Finance',
@@ -62,7 +66,7 @@ class _ReportsPageState extends State<ReportsPage>
 
     // Fetch Portfolio & Transaction Data from Neon DB
     final pData =
-        await DatabaseService.getPortfolioData(userId, email: userEmail);
+    await DatabaseService.getPortfolioData(userId, email: userEmail);
     final trxData = await DatabaseService.getTransactionsData(userId);
 
     if (mounted) {
@@ -72,7 +76,7 @@ class _ReportsPageState extends State<ReportsPage>
           _totalReturns = (pData['totalActual'] as double? ?? 0.0);
 
           _investmentHistory =
-              (pData['investments'] as List<Map<String, dynamic>>? ?? []);
+          (pData['investments'] as List<Map<String, dynamic>>? ?? []);
 
           final Map<String, double> catMap = {};
           final Map<String, int> stMap = {};
@@ -113,6 +117,13 @@ class _ReportsPageState extends State<ReportsPage>
       return '৳${(amount / 1000).toStringAsFixed(0)}K';
     }
     return '৳${amount.toStringAsFixed(0)}';
+  }
+
+  // Expected return range text (16% - 22% of amount)
+  String _fmtExpectedReturnRange(double amount) {
+    final double minR = amount * minReturnRate;
+    final double maxR = amount * maxReturnRate;
+    return '${_fmtBdt(minR)} - ${_fmtBdt(maxR)}';
   }
 
   // Export Action Dropdown Menu
@@ -225,20 +236,20 @@ class _ReportsPageState extends State<ReportsPage>
           body: _isLoading
               ? const Center(child: CircularProgressIndicator(color: primaryTeal))
               : TabBarView(
-                  controller: _tabController,
-                  children: [
-                    _buildPortfolioTab(),
-                    _buildInvestmentHistoryTab(),
-                    _buildTransactionsTab(),
-                    _buildDistributionsTab(),
-                  ],
-                ),
+            controller: _tabController,
+            children: [
+              _buildPortfolioTab(),
+              _buildInvestmentHistoryTab(),
+              _buildTransactionsTab(),
+              _buildDistributionsTab(),
+            ],
+          ),
         );
       },
     );
   }
 
-  // 1. Portfolio Tab (Matching Screenshot 1:1)
+  // 1. Portfolio Tab
   Widget _buildPortfolioTab() {
     final double roi = _totalInvested > 0
         ? ((_totalReturns / _totalInvested) * 100)
@@ -258,10 +269,10 @@ class _ReportsPageState extends State<ReportsPage>
             physics: const NeverScrollableScrollPhysics(),
             childAspectRatio: 1.6,
             children: [
-              _buildKpiCard(LanguageService.tr('Total Invested', 'মোট বিনিয়োগ'), _fmtBdt(_totalInvested), LanguageService.tr('all time', 'সর্বমোট')),
+              _buildKpiCard(LanguageService.tr('Total Invested', 'মোট বিনিয়োগ'), _fmtBdt(_totalInvested), LanguageService.tr('all time', 'সর্বমোট')),
               _buildKpiCard(LanguageService.tr('Active Capital', 'এক্টিভ ক্যাপিটাল'), _fmtBdt(_activeCapital), LanguageService.tr('currently deployed', 'চলতি প্রজেক্টে')),
               _buildKpiCard(LanguageService.tr('Total Returns', 'মোট রিটার্ন'), _fmtBdt(_totalReturns), LanguageService.tr('distributed', 'বণ্টনকৃত')),
-              _buildKpiCard(LanguageService.tr('ROI', 'আর.ও.আই'), '${roi.toStringAsFixed(2)}%', LanguageService.tr('return on investment', 'বিনিয়োগের লাভ')),
+              _buildKpiCard(LanguageService.tr('ROI', 'আর.ও.আই'), '${roi.toStringAsFixed(2)}%', LanguageService.tr('return on investment', 'বিনিয়োগের লাভ')),
             ],
           ),
           const SizedBox(height: 18),
@@ -295,46 +306,46 @@ class _ReportsPageState extends State<ReportsPage>
           const SizedBox(height: 14),
           _byCategory.isEmpty
               ? const Text('No investments yet.',
-                  style: TextStyle(fontSize: 12, color: Colors.grey))
+              style: TextStyle(fontSize: 12, color: Colors.grey))
               : Column(
-                  children: _byCategory.entries.map((e) {
-                    final double pct = _totalInvested > 0
-                        ? ((e.value / _totalInvested) * 100).clamp(0.0, 100.0)
-                        : 0.0;
+            children: _byCategory.entries.map((e) {
+              final double pct = _totalInvested > 0
+                  ? ((e.value / _totalInvested) * 100).clamp(0.0, 100.0)
+                  : 0.0;
 
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 10.0),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Text(e.key,
-                                  style: const TextStyle(
-                                      fontSize: 12.5,
-                                      fontWeight: FontWeight.w600)),
-                              Text('${_fmtBdt(e.value)} (${pct.toStringAsFixed(1)}%)',
-                                  style: TextStyle(
-                                      fontSize: 12, color: Colors.grey[700])),
-                            ],
-                          ),
-                          const SizedBox(height: 4),
-                          ClipRRect(
-                            borderRadius: BorderRadius.circular(4),
-                            child: LinearProgressIndicator(
-                              value: pct / 100,
-                              minHeight: 6,
-                              backgroundColor: Colors.grey.shade100,
-                              valueColor:
-                                  const AlwaysStoppedAnimation<Color>(primaryTeal),
-                            ),
-                          ),
-                        ],
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 10.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(e.key,
+                            style: const TextStyle(
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w600)),
+                        Text('${_fmtBdt(e.value)} (${pct.toStringAsFixed(1)}%)',
+                            style: TextStyle(
+                                fontSize: 12, color: Colors.grey[700])),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(4),
+                      child: LinearProgressIndicator(
+                        value: pct / 100,
+                        minHeight: 6,
+                        backgroundColor: Colors.grey.shade100,
+                        valueColor:
+                        const AlwaysStoppedAnimation<Color>(primaryTeal),
                       ),
-                    );
-                  }).toList(),
+                    ),
+                  ],
                 ),
+              );
+            }).toList(),
+          ),
         ],
       ),
     );
@@ -359,43 +370,43 @@ class _ReportsPageState extends State<ReportsPage>
           const SizedBox(height: 14),
           _byStatus.isEmpty
               ? const Text('No investments yet.',
-                  style: TextStyle(fontSize: 12, color: Colors.grey))
+              style: TextStyle(fontSize: 12, color: Colors.grey))
               : Column(
-                  children: _byStatus.entries.map((e) {
-                    return Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 4.0),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(e.key,
-                              style: TextStyle(
-                                  fontSize: 12.5, color: Colors.grey[800])),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 10, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: Colors.teal.shade50,
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: Text(
-                              '${e.value}',
-                              style: const TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.bold,
-                                  color: primaryTeal),
-                            ),
-                          ),
-                        ],
+            children: _byStatus.entries.map((e) {
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4.0),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(e.key,
+                        style: TextStyle(
+                            fontSize: 12.5, color: Colors.grey[800])),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: Colors.teal.shade50,
+                        borderRadius: BorderRadius.circular(6),
                       ),
-                    );
-                  }).toList(),
+                      child: Text(
+                        '${e.value}',
+                        style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: primaryTeal),
+                      ),
+                    ),
+                  ],
                 ),
+              );
+            }).toList(),
+          ),
         ],
       ),
     );
   }
 
-  // 2. Investment History Tab (Matching Screenshot 2 1:1)
+  // 2. Investment History Tab
   Widget _buildInvestmentHistoryTab() {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16.0),
@@ -423,111 +434,108 @@ class _ReportsPageState extends State<ReportsPage>
             ),
             child: _investmentHistory.isEmpty
                 ? const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 24),
-                    child: Center(
-                      child: Text('No investments found.',
-                          style: TextStyle(fontSize: 12, color: Colors.grey)),
-                    ),
-                  )
+              padding: EdgeInsets.symmetric(vertical: 24),
+              child: Center(
+                child: Text('No investments found.',
+                    style: TextStyle(fontSize: 12, color: Colors.grey)),
+              ),
+            )
                 : ListView.separated(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    itemCount: _investmentHistory.length,
-                    separatorBuilder: (context, index) =>
-                        const Divider(height: 20),
-                    itemBuilder: (context, index) {
-                      final item = _investmentHistory[index];
-                      final cat = categoryLabels[item['category']] ??
-                          item['category']?.toString() ??
-                          'SME';
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: _investmentHistory.length,
+              separatorBuilder: (context, index) =>
+              const Divider(height: 20),
+              itemBuilder: (context, index) {
+                final item = _investmentHistory[index];
+                final cat = categoryLabels[item['category']] ??
+                    item['category']?.toString() ??
+                    'SME';
+                final double amount =
+                    item['amountBdt'] as double? ?? 0.0;
 
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  item['title'] as String? ?? 'Project',
-                                  style: const TextStyle(
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.bold),
-                                ),
-                              ),
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 6, vertical: 2),
-                                decoration: BoxDecoration(
-                                  color: Colors.teal.shade50,
-                                  borderRadius: BorderRadius.circular(4),
-                                ),
-                                child: Text(
-                                  item['status'] as String? ?? 'ACTIVE',
-                                  style: TextStyle(
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.teal.shade800),
-                                ),
-                              ),
-                            ],
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Expanded(
+                          child: Text(
+                            item['title'] as String? ?? 'Project',
+                            style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold),
                           ),
-                          const SizedBox(height: 2),
-                          Text(cat,
-                              style: TextStyle(
-                                  fontSize: 11, color: Colors.grey[600])),
-                          const SizedBox(height: 8),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text('AMOUNT',
-                                      style: TextStyle(
-                                          fontSize: 9,
-                                          fontWeight: FontWeight.bold,
-                                          color: Colors.grey[600])),
-                                  Text(
-                                      _fmtBdt(
-                                          item['amountBdt'] as double? ?? 0.0),
-                                      style: const TextStyle(
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.bold,
-                                          color: primaryTeal)),
-                                ],
-                              ),
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.end,
-                                children: [
-                                  Text('EXPECTED RETURN',
-                                      style: TextStyle(
-                                          fontSize: 9,
-                                          fontWeight: FontWeight.bold,
-                                          color: Colors.grey[600])),
-                                  Text(
-                                      _fmtBdt(item['expectedReturnBdt']
-                                              as double? ??
-                                          0.0),
-                                      style: const TextStyle(
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.bold,
-                                          color: Colors.green)),
-                                ],
-                              ),
-                            ],
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Colors.teal.shade50,
+                            borderRadius: BorderRadius.circular(4),
                           ),
-                        ],
-                      );
-                    },
-                  ),
+                          child: Text(
+                            item['status'] as String? ?? 'ACTIVE',
+                            style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.teal.shade800),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text(cat,
+                        style: TextStyle(
+                            fontSize: 11, color: Colors.grey[600])),
+                    const SizedBox(height: 8),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('AMOUNT',
+                                style: TextStyle(
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.grey[600])),
+                            Text(_fmtBdt(amount),
+                                style: const TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.bold,
+                                    color: primaryTeal)),
+                          ],
+                        ),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            Text('EXPECTED RETURN',
+                                style: TextStyle(
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.grey[600])),
+                            Text(_fmtExpectedReturnRange(amount),
+                                style: const TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.green)),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ],
+                );
+              },
+            ),
           ),
         ],
       ),
     );
   }
 
-  // 3. Transactions Tab (Matching Screenshot 3 1:1)
+  // 3. Transactions Tab
   Widget _buildTransactionsTab() {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16.0),
@@ -559,51 +567,51 @@ class _ReportsPageState extends State<ReportsPage>
             ),
             child: _transactions.isEmpty
                 ? const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 24),
-                    child: Center(
-                      child: Text('No transactions found.',
-                          style: TextStyle(fontSize: 12, color: Colors.grey)),
-                    ),
-                  )
+              padding: EdgeInsets.symmetric(vertical: 24),
+              child: Center(
+                child: Text('No transactions found.',
+                    style: TextStyle(fontSize: 12, color: Colors.grey)),
+              ),
+            )
                 : ListView.separated(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    itemCount: _transactions.length,
-                    separatorBuilder: (context, index) =>
-                        const Divider(height: 16),
-                    itemBuilder: (context, index) {
-                      final t = _transactions[index];
-                      return Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(t['description'] as String? ?? 'Transaction',
-                                  style: const TextStyle(
-                                      fontSize: 12.5,
-                                      fontWeight: FontWeight.bold)),
-                              Text(t['createdAt'] as String? ?? '',
-                                  style: TextStyle(
-                                      fontSize: 10.5, color: Colors.grey[600])),
-                            ],
-                          ),
-                          Text(_fmtBdt(t['amountBdt'] as double? ?? 0.0),
-                              style: const TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.bold,
-                                  color: primaryTeal)),
-                        ],
-                      );
-                    },
-                  ),
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: _transactions.length,
+              separatorBuilder: (context, index) =>
+              const Divider(height: 16),
+              itemBuilder: (context, index) {
+                final t = _transactions[index];
+                return Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(t['description'] as String? ?? 'Transaction',
+                            style: const TextStyle(
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.bold)),
+                        Text(t['createdAt'] as String? ?? '',
+                            style: TextStyle(
+                                fontSize: 10.5, color: Colors.grey[600])),
+                      ],
+                    ),
+                    Text(_fmtBdt(t['amountBdt'] as double? ?? 0.0),
+                        style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.bold,
+                            color: primaryTeal)),
+                  ],
+                );
+              },
+            ),
           ),
         ],
       ),
     );
   }
 
-  // 4. Distributions Tab (Matching Screenshot 4 & 5 1:1)
+  // 4. Distributions Tab
   Widget _buildDistributionsTab() {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16.0),
@@ -635,44 +643,44 @@ class _ReportsPageState extends State<ReportsPage>
             ),
             child: _distributions.isEmpty
                 ? const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 24),
-                    child: Center(
-                      child: Text('No distributions yet.',
-                          style: TextStyle(fontSize: 12, color: Colors.grey)),
-                    ),
-                  )
+              padding: EdgeInsets.symmetric(vertical: 24),
+              child: Center(
+                child: Text('No distributions yet.',
+                    style: TextStyle(fontSize: 12, color: Colors.grey)),
+              ),
+            )
                 : ListView.separated(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    itemCount: _distributions.length,
-                    separatorBuilder: (context, index) =>
-                        const Divider(height: 16),
-                    itemBuilder: (context, index) {
-                      final d = _distributions[index];
-                      return Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(d['project'] as String? ?? 'Project',
-                                  style: const TextStyle(
-                                      fontSize: 12.5,
-                                      fontWeight: FontWeight.bold)),
-                              Text(d['date'] as String? ?? '',
-                                  style: TextStyle(
-                                      fontSize: 10.5, color: Colors.grey[600])),
-                            ],
-                          ),
-                          Text(_fmtBdt(d['net'] as double? ?? 0.0),
-                              style: const TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.green)),
-                        ],
-                      );
-                    },
-                  ),
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: _distributions.length,
+              separatorBuilder: (context, index) =>
+              const Divider(height: 16),
+              itemBuilder: (context, index) {
+                final d = _distributions[index];
+                return Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(d['project'] as String? ?? 'Project',
+                            style: const TextStyle(
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.bold)),
+                        Text(d['date'] as String? ?? '',
+                            style: TextStyle(
+                                fontSize: 10.5, color: Colors.grey[600])),
+                      ],
+                    ),
+                    Text(_fmtBdt(d['net'] as double? ?? 0.0),
+                        style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.green)),
+                  ],
+                );
+              },
+            ),
           ),
         ],
       ),

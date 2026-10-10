@@ -100,12 +100,18 @@ class AuthService {
     required String email,
     required String phone,
     required String password,
+    required String nidNumber,
+    required String nomineeNidNumber,
+    required String nomineeRelation,
   }) async {
     final result = await DatabaseService.registerUser(
       name: fullName,
       email: email,
       phone: phone,
       password: password,
+      nidNumber: nidNumber,
+      nomineeNidNumber: nomineeNidNumber,
+      nomineeRelation: nomineeRelation,
     );
 
     if (result['success'] == true && result['data'] != null) {
