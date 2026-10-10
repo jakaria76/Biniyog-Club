@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import '../page/authentication/login_page.dart';
 import '../services/auth_service.dart';
 import 'home_screen.dart';
+import '../page/public/landing_page.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -18,41 +18,27 @@ class _SplashScreenState extends State<SplashScreen> {
     _checkAuthAndNavigate();
   }
 
-  void _checkAuthAndNavigate() async {
+  void _go(Widget page) {
+    if (!mounted) return;
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (context) => page),
+    );
+  }
+
+  Future<void> _checkAuthAndNavigate() async {
+    await Future.delayed(const Duration(seconds: 2));
+    if (!mounted) return;
+
+    bool isLoggedIn = false;
     try {
-      await Future.delayed(const Duration(seconds: 2));
-      if (!mounted) return;
-
-      bool isLoggedIn = false;
-      try {
-        isLoggedIn = await AuthService.isLoggedIn();
-      } catch (e) {
-        debugPrint('Auth check error: $e');
-        isLoggedIn = false;
-      }
-
-      if (!mounted) return;
-
-      if (isLoggedIn) {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (context) => const HomeScreen()),
-        );
-      } else {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (context) => const LoginPage()),
-        );
-      }
+      isLoggedIn = await AuthService.isLoggedIn();
     } catch (e) {
-      debugPrint('SplashScreen navigation error: $e');
-      if (mounted) {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (context) => const LoginPage()),
-        );
-      }
+      debugPrint('Auth check error: $e');
     }
+
+    // Logged in -> Dashboard, na hole -> Landing page
+    _go(isLoggedIn ? const HomeScreen() : const LandingPage());
   }
 
   @override

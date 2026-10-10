@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import '../../page/authentication/login_page.dart';
+import '../../screens/home_screen.dart';
+import '../../services/auth_service.dart';
 
 class LandingPage extends StatefulWidget {
   const LandingPage({super.key});
@@ -131,11 +133,31 @@ class _LandingPageState extends State<LandingPage> {
   Future<void> _navigateToAppLogin() async {
     if (_isRedirecting || !mounted) return;
     _isRedirecting = true;
+
     await Navigator.push(
       context,
       MaterialPageRoute(builder: (context) => const LoginPage()),
     );
+
     _isRedirecting = false;
+    if (!mounted) return;
+
+    // Safety: login page theke login hoye fire ashle dashboard e pathao
+    bool isLoggedIn = false;
+    try {
+      isLoggedIn = await AuthService.isLoggedIn();
+    } catch (e) {
+      debugPrint('Auth check error: $e');
+    }
+    if (!mounted) return;
+
+    if (isLoggedIn) {
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(builder: (context) => const HomeScreen()),
+            (route) => false,
+      );
+    }
   }
 
   @override
