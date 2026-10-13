@@ -352,6 +352,10 @@ class _ProfilePageState extends State<ProfilePage> {
 
                         // 4. Colorful Bento Grid for Investor Details
                         _buildColorfulInvestorBentoGrid(),
+                        const SizedBox(height: 18),
+
+                        // 5. KYC Verified Information Card
+                        _buildKycDetailsCard(),
                         const SizedBox(height: 24),
                       ],
                     ),
@@ -992,6 +996,89 @@ class _ProfilePageState extends State<ProfilePage> {
                   ],
                 ),
               ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildKycDetailsCard() {
+    final fullName = _investorProfile['fullName'] ?? '';
+    final docType = _investorProfile['documentType'] ?? 'NATIONAL_ID';
+    final docNo = _investorProfile['nationalId'] ?? 'N/A';
+    final division = _investorProfile['division'] ?? '';
+    final district = _investorProfile['district'] ?? '';
+    final thana = _investorProfile['thana'] ?? '';
+    final bankName = _investorProfile['bankName'] ?? '';
+    final bankAcc = _investorProfile['bankAccountNumber'] ?? '';
+    final nomineeNid = _investorProfile['nomineeNationalId'] ?? 'N/A';
+    final nomineeRel = _investorProfile['nomineeRelation'] ?? 'N/A';
+
+    if (fullName.isEmpty && docNo == 'N/A') return const SizedBox.shrink();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          LanguageService.tr('KYC Verified Information', 'কেওয়াইসি ভেরিফাইড তথ্য'),
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 12),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: const Color(0xFFE2E8F0)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withAlpha(5),
+                blurRadius: 10,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (fullName.isNotEmpty) ...[
+                _buildKycRow(Icons.person_outline_rounded, LanguageService.tr('Full Name', 'পূর্ণ নাম'), fullName),
+                const Divider(height: 16, color: Color(0xFFF1F5F9)),
+              ],
+              _buildKycRow(Icons.badge_outlined, docType, docNo),
+              if (district.isNotEmpty || division.isNotEmpty) ...[
+                const Divider(height: 16, color: Color(0xFFF1F5F9)),
+                _buildKycRow(Icons.location_on_outlined, LanguageService.tr('Location', 'এলাকা'), '$thana, $district, $division'.replaceAll(RegExp(r'^,\s*|,\s*,\s*|,\s*$'), '')),
+              ],
+              if (bankName.isNotEmpty) ...[
+                const Divider(height: 16, color: Color(0xFFF1F5F9)),
+                _buildKycRow(Icons.account_balance_outlined, LanguageService.tr('Bank Account', 'ব্যাংক অ্যাকাউন্ট'), '$bankName ($bankAcc)'),
+              ],
+              if (nomineeNid != 'N/A' && nomineeNid.isNotEmpty) ...[
+                const Divider(height: 16, color: Color(0xFFF1F5F9)),
+                _buildKycRow(Icons.supervisor_account_outlined, LanguageService.tr('Nominee', 'নমিনি'), 'NID: $nomineeNid (${LanguageService.tr("Relation", "সম্পর্ক")}: $nomineeRel)'),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildKycRow(IconData icon, String label, String value) {
+    return Row(
+      children: [
+        Icon(icon, size: 18, color: const Color(0xFF0D9488)),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label, style: const TextStyle(fontSize: 11, color: Color(0xFF64748B), fontWeight: FontWeight.w600)),
+              const SizedBox(height: 2),
+              Text(value, style: const TextStyle(fontSize: 13, color: Color(0xFF1E293B), fontWeight: FontWeight.bold)),
             ],
           ),
         ),

@@ -97,8 +97,8 @@ class PrivacyPolicyPage extends StatelessWidget {
                   _buildSection(
                     '6. Contact Privacy Team',
                     '৬. প্রাইভেসী টিমের সাথে যোগাযোগ',
-                    'For privacy inquiries, please contact our Data Protection Officer at privacy@biniyog.club or write to: Biniyog Club Ltd., Gulshan-2, Dhaka 1212, Bangladesh.',
-                    'প্রাইভেসী নীতি সংক্রান্ত যেসকল তথ্যের জন্য যোগাযোগ করুন: privacy@biniyog.club',
+                    'For privacy inquiries, please contact us at:\n• Address: MG SAM Center, 12 Mohakhali C/A, Dhaka-1212, Bangladesh\n• Hotline: +880 1335-149033\n• Email: info@biniyogclub.com\n• Office Hours: Saturday – Thursday, 9:00 AM – 6:00 PM',
+                    'প্রাইভেসী নীতি সংক্রান্ত যেকোনো প্রয়োজনে আমাদের সাথে যোগাযোগ করুন:\n• ঠিকানা: এমজি স্যাম সেন্টার, ১২ মহাখালী বা/এ, ঢাকা-১২১২, বাংলাদেশ\n• হটলাইন: +880 1335-149033\n• ইমেইল: info@biniyogclub.com\n• অফিস সময়: শনিবার – বৃহস্পতিবার, সকাল ৯:০০ টা – সন্ধ্যা ৬:০০ টা',
                   ),
                 ],
               ),

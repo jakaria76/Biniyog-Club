@@ -3,7 +3,7 @@ import 'package:flutter/services.dart';
 import '../../../services/auth_service.dart';
 import '../../../services/database_service.dart';
 import '../../../services/language_service.dart';
-import '../portfolio/portfolio_page.dart';
+import '../portfolio/investments_page.dart';
 
 class ProjectDetailPage extends StatefulWidget {
   final String projectIdOrSlug;
@@ -172,15 +172,15 @@ class _ProjectDetailPageState extends State<ProjectDetailPage> {
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
                         content: Text(LanguageService.tr(
-                            'Investment created! Pending Admin approval.',
-                            'বিনিয়োগ আবেদন তৈরি হয়েছে! এডমিন অনুমোদনের অপেক্ষায়।')),
+                            'Investment created! Please submit your payment proof below.',
+                            'বিনিয়োগ আবেদন তৈরি হয়েছে! অনুগ্রহ করে নিচে পেমেন্ট প্রুফ জমা দিন।')),
                         backgroundColor: primaryTeal,
                       ),
                     );
                     Navigator.pushReplacement(
                       context,
                       MaterialPageRoute(
-                          builder: (context) => const PortfolioPage()),
+                          builder: (context) => const InvestmentsPage()),
                     );
                   } else {
                     ScaffoldMessenger.of(context).showSnackBar(
@@ -288,6 +288,10 @@ class _ProjectDetailPageState extends State<ProjectDetailPage> {
                   style: TextStyle(
                       fontSize: 13, color: Colors.grey[800], height: 1.4),
                 ),
+                const SizedBox(height: 20),
+
+                // 3.1 Project Meta Info (Category, Location, Group)
+                _buildProjectMetaCard(),
                 const SizedBox(height: 20),
 
                 // 4. Primary Invest Widget Box
@@ -730,6 +734,44 @@ class _ProjectDetailPageState extends State<ProjectDetailPage> {
 
 
 
+  Widget _buildProjectMetaCard() {
+    final category = _project['category'] as String? ?? 'SME';
+    final location = _project['location'] as String? ?? 'Bangladesh';
+    final groupName = _project['groupName'] as String? ?? '';
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceAround,
+        children: [
+          _buildMetaItem(Icons.category_outlined, 'Category', category),
+          if (groupName.isNotEmpty)
+            _buildMetaItem(Icons.business_rounded, 'Group', groupName),
+          _buildMetaItem(Icons.location_on_outlined, 'Location', location),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMetaItem(IconData icon, String label, String val) {
+    return Column(
+      children: [
+        Icon(icon, size: 20, color: primaryTeal),
+        const SizedBox(height: 4),
+        Text(label, style: TextStyle(fontSize: 10, color: Colors.grey[600])),
+        const SizedBox(height: 2),
+        Text(val, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+      ],
+    );
+  }
+
+
+
   // Payment Bank Details
   Widget _buildPaymentBankDetails(List<Map<String, dynamic>> bankAccounts) {
     if (bankAccounts.isEmpty) return const SizedBox.shrink();
@@ -737,33 +779,72 @@ class _ProjectDetailPageState extends State<ProjectDetailPage> {
     final bank = bankAccounts[_selectedBankIndex % bankAccounts.length];
 
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(20),
         border: Border.all(color: Colors.grey.shade200),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withAlpha(5),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const Icon(Icons.account_balance_rounded,
-                  color: primaryTeal, size: 18),
-              const SizedBox(width: 8),
-              Text(
-                LanguageService.tr('Payment Bank Details', 'টাকা পাঠনোর ব্যাংক তথ্য'),
-                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: primaryTeal.withAlpha(20),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.account_balance_rounded,
+                    color: primaryTeal, size: 20),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      LanguageService.tr('Payment Bank Details', 'টাকা পাঠানোর ব্যাংক তথ্য'),
+                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.black87),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      LanguageService.tr('Transfer funds using your preferred bank account', 'আপনার পছন্দের ব্যাংক অ্যাকাউন্ট থেকে টাকা স্থানান্তর করুন'),
+                      style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                    ),
+                  ],
+                ),
               ),
             ],
           ),
+          const SizedBox(height: 16),
+          const Divider(height: 1, color: Color(0xFFF1F5F9)),
           const SizedBox(height: 12),
 
           // Details List
           _buildCopyDetailRow('Bank Name', bank['bankName'] as String),
           _buildCopyDetailRow('Account Name', bank['accountName'] as String),
-          _buildCopyDetailRow(
-              'Account Number', bank['accountNumber'] as String),
+          _buildCopyDetailRow('Account Number', bank['accountNumber'] as String),
+          if ((bank['branchName'] as String?)?.isNotEmpty == true)
+            _buildCopyDetailRow('Branch Name', bank['branchName'] as String),
+          if ((bank['routingNumber'] as String?)?.isNotEmpty == true)
+            _buildCopyDetailRow('Routing Number', bank['routingNumber'] as String),
+          if ((bank['swiftCode'] as String?)?.isNotEmpty == true)
+            _buildCopyDetailRow('SWIFT Code', bank['swiftCode'] as String),
+          if ((bank['mobileNumber'] as String?)?.isNotEmpty == true)
+            _buildCopyDetailRow('Mobile Number', bank['mobileNumber'] as String),
+          if ((bank['email'] as String?)?.isNotEmpty == true)
+            _buildCopyDetailRow('Email', bank['email'] as String),
+          if ((bank['branchAddress'] as String?)?.isNotEmpty == true)
+            _buildCopyDetailRow('Branch Address', bank['branchAddress'] as String),
         ],
       ),
     );
@@ -771,31 +852,32 @@ class _ProjectDetailPageState extends State<ProjectDetailPage> {
 
   Widget _buildCopyDetailRow(String label, String value) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4.0),
+      padding: const EdgeInsets.symmetric(vertical: 6.0),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         decoration: BoxDecoration(
-          color: Colors.grey.shade50,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: Colors.grey.shade200),
+          color: const Color(0xFFF8FAFC),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: const Color(0xFFE2E8F0)),
         ),
         child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(label,
-                    style: TextStyle(fontSize: 9.5, color: Colors.grey[600])),
-                Text(value,
-                    style: const TextStyle(
-                        fontSize: 12.5, fontWeight: FontWeight.bold)),
-              ],
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(label,
+                      style: const TextStyle(fontSize: 10, color: Color(0xFF64748B), fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 2),
+                  Text(value,
+                      style: const TextStyle(
+                          fontSize: 13, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
+                ],
+              ),
             ),
-            IconButton(
-              icon: const Icon(Icons.copy_rounded,
-                  size: 16, color: primaryTeal),
-              onPressed: () {
+            const SizedBox(width: 8),
+            InkWell(
+              onTap: () {
                 Clipboard.setData(ClipboardData(text: value));
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
@@ -805,6 +887,16 @@ class _ProjectDetailPageState extends State<ProjectDetailPage> {
                   ),
                 );
               },
+              borderRadius: BorderRadius.circular(8),
+              child: Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: primaryTeal.withAlpha(15),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(Icons.copy_rounded,
+                    size: 16, color: primaryTeal),
+              ),
             ),
           ],
         ),

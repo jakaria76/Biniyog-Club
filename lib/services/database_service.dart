@@ -366,10 +366,10 @@ class DatabaseService {
         }
 
         final now = DateTime.now().toUtc();
-        if (suspendedAt != null && now.difference(suspendedAt).inDays > 7) {
+        if (suspendedAt != null && now.difference(suspendedAt).inDays > 30) {
           return {
             'success': false,
-            'message': 'This account has been permanently deleted after 7 days. Please register a new account.',
+            'message': 'This account has been permanently deleted after 30 days. Please register a new account.',
           };
         }
 
@@ -485,7 +485,7 @@ class DatabaseService {
 
       return {
         'success': true,
-        'message': 'Account deletion requested! Scheduled for deletion in 7 days.',
+        'message': 'Account deletion requested! Scheduled for deletion in 30 days.',
       };
     } catch (e) {
       return {
@@ -841,6 +841,12 @@ class DatabaseService {
           "updatedAt" = EXCLUDED."updatedAt";
       ''', [profileId, activeUserId, nomineeNid, nomineeRelation, address, district, nowStr]);
 
+      // Save KYC Documents
+      await _saveKycDocument(kycId, 'NATIONAL_ID_FRONT', frontPhotoBase64);
+      await _saveKycDocument(kycId, 'NATIONAL_ID_BACK', backPhotoBase64);
+      await _saveKycDocument(kycId, 'NOMINEE_NID_FRONT', nomineeFrontBase64);
+      await _saveKycDocument(kycId, 'NOMINEE_NID_BACK', nomineeBackBase64);
+
       return {
         'success': true,
         'message': 'KYC submitted successfully!',
@@ -873,7 +879,8 @@ class DatabaseService {
       final kycRes = await queryNeonHttp(
           'SELECT "status"::text FROM kyc WHERE "userId" = \$1',
           [activeUserId]);
-      if (kycRes.isEmpty || kycRes.first['status']?.toString() != 'VERIFIED') {
+      final kycStatus = kycRes.isNotEmpty ? kycRes.first['status']?.toString() ?? '' : '';
+      if (kycRes.isEmpty || (kycStatus != 'VERIFIED' && kycStatus != 'APPROVED')) {
         return {
           'success': false,
           'message':
@@ -1131,9 +1138,41 @@ class DatabaseService {
 
       final uRow = userRes.first;
 
+      final kycRes = await queryNeonHttp('''
+        SELECT "status"::text, "fullName", "documentType"::text, "documentNumber",
+               "presentAddress", "presentDivision", "presentDistrict", "presentUpazila",
+               "bankName", "bankAccountNumber", "mobileProvider", "mobileNumber"
+        FROM kyc
+        WHERE "userId" = \$1
+      ''', [activeUserId]);
+
+      Map<String, dynamic> kycData = {};
+      String kycStatus = 'NOT_STARTED';
+      if (kycRes.isNotEmpty) {
+        final k = kycRes.first;
+        kycStatus = k['status']?.toString() ?? 'NOT_STARTED';
+        if (kycStatus == 'APPROVED') {
+          kycStatus = 'VERIFIED';
+        }
+        kycData = {
+          'fullName': k['fullName']?.toString() ?? '',
+          'documentType': k['documentType']?.toString() ?? '',
+          'documentNumber': k['documentNumber']?.toString() ?? '',
+          'presentAddress': k['presentAddress']?.toString() ?? '',
+          'presentDivision': k['presentDivision']?.toString() ?? '',
+          'presentDistrict': k['presentDistrict']?.toString() ?? '',
+          'presentUpazila': k['presentUpazila']?.toString() ?? '',
+          'bankName': k['bankName']?.toString() ?? '',
+          'bankAccountNumber': k['bankAccountNumber']?.toString() ?? '',
+          'mobileProvider': k['mobileProvider']?.toString() ?? '',
+          'mobileNumber': k['mobileNumber']?.toString() ?? '',
+        };
+      }
+
       final profRes = await queryNeonHttp('''
         SELECT "nationalId", "address", "city", "country", "occupation",
-               "annualIncomeRange", "investmentExperience", "riskTolerance"
+               "annualIncomeRange", "investmentExperience", "riskTolerance",
+               "nomineeNationalId", "nomineeRelation"
         FROM investor_profiles
         WHERE "userId" = \$1
       ''', [activeUserId]);
@@ -1142,23 +1181,54 @@ class DatabaseService {
       if (profRes.isNotEmpty) {
         final p = profRes.first;
         profMap = {
-          'nationalId': p['nationalId']?.toString() ?? 'N/A',
-          'address': p['address']?.toString() ?? 'Bangladesh',
-          'city': p['city']?.toString() ?? 'Dhaka',
+          'nationalId': kycData['documentNumber']?.isNotEmpty == true 
+              ? kycData['documentNumber'] 
+              : (p['nationalId']?.toString() ?? 'N/A'),
+          'documentType': kycData['documentType']?.toString() ?? 'NATIONAL_ID',
+          'fullName': kycData['fullName']?.toString() ?? '',
+          'address': kycData['presentAddress']?.isNotEmpty == true 
+              ? kycData['presentAddress'] 
+              : (p['address']?.toString() ?? 'Bangladesh'),
+          'city': kycData['presentDistrict']?.isNotEmpty == true 
+              ? kycData['presentDistrict'] 
+              : (p['city']?.toString() ?? 'Dhaka'),
+          'division': kycData['presentDivision']?.toString() ?? '',
+          'district': kycData['presentDistrict']?.toString() ?? '',
+          'thana': kycData['presentUpazila']?.toString() ?? '',
+          'bankName': kycData['bankName']?.toString() ?? '',
+          'bankAccountNumber': kycData['bankAccountNumber']?.toString() ?? '',
+          'mobileProvider': kycData['mobileProvider']?.toString() ?? '',
+          'mobileNumber': kycData['mobileNumber']?.toString() ?? '',
+          'nomineeNationalId': p['nomineeNationalId']?.toString() ?? 'N/A',
+          'nomineeRelation': p['nomineeRelation']?.toString() ?? 'N/A',
           'country': p['country']?.toString() ?? 'BD',
           'occupation': p['occupation']?.toString() ?? 'Investor',
           'annualIncomeRange': p['annualIncomeRange']?.toString() ?? 'Standard',
           'investmentExperience': p['investmentExperience']?.toString() ?? 'Intermediate',
           'riskTolerance': p['riskTolerance']?.toString() ?? 'Moderate',
         };
-      }
-
-      String kycStatus = 'NOT_STARTED';
-      final kycRes = await queryNeonHttp(
-          'SELECT "status"::text FROM kyc WHERE "userId" = \$1',
-          [activeUserId]);
-      if (kycRes.isNotEmpty) {
-        kycStatus = kycRes.first['status']?.toString() ?? 'NOT_STARTED';
+      } else {
+        profMap = {
+          'nationalId': kycData['documentNumber']?.toString() ?? 'N/A',
+          'documentType': kycData['documentType']?.toString() ?? 'NATIONAL_ID',
+          'fullName': kycData['fullName']?.toString() ?? '',
+          'address': kycData['presentAddress']?.toString() ?? 'Bangladesh',
+          'city': kycData['presentDistrict']?.toString() ?? 'Dhaka',
+          'division': kycData['presentDivision']?.toString() ?? '',
+          'district': kycData['presentDistrict']?.toString() ?? '',
+          'thana': kycData['presentUpazila']?.toString() ?? '',
+          'bankName': kycData['bankName']?.toString() ?? '',
+          'bankAccountNumber': kycData['bankAccountNumber']?.toString() ?? '',
+          'mobileProvider': kycData['mobileProvider']?.toString() ?? '',
+          'mobileNumber': kycData['mobileNumber']?.toString() ?? '',
+          'nomineeNationalId': 'N/A',
+          'nomineeRelation': 'N/A',
+          'country': 'BD',
+          'occupation': 'Investor',
+          'annualIncomeRange': 'Standard',
+          'investmentExperience': 'Intermediate',
+          'riskTolerance': 'Moderate',
+        };
       }
 
       final rawAvatar = uRow['avatarUrl']?.toString();
@@ -1669,9 +1739,12 @@ class DatabaseService {
         };
       }).toList();
 
+      final rawStatus = row['status']?.toString() ?? 'NOT_STARTED';
+      final status = rawStatus == 'APPROVED' ? 'VERIFIED' : rawStatus;
+
       return {
         'id': kycId,
-        'status': row['status']?.toString() ?? 'NOT_STARTED',
+        'status': status,
         'fullName': row['fullName']?.toString() ?? '',
         'documentType': row['documentType']?.toString() ?? '',
         'documentNumber': row['documentNumber']?.toString() ?? '',
@@ -1820,6 +1893,29 @@ class DatabaseService {
           }
         }
 
+        final projBankRes = await queryNeonHttp('''
+          SELECT "id", "bankName", "accountName", "accountNumber", "branchName",
+                 "routingNumber", "swiftCode", "mobileNumber", "email", "branchAddress"
+          FROM project_bank_accounts
+          WHERE "projectId" = \$1 AND "isActive" = true
+          ORDER BY "createdAt" ASC
+        ''', [projectId]);
+
+        final List<Map<String, dynamic>> projectBankAccounts = projBankRes.map((b) {
+          return {
+            'id': b['id'].toString(),
+            'bankName': b['bankName']?.toString() ?? 'Dutch-Bangla Bank Limited',
+            'accountName': b['accountName']?.toString() ?? 'Marinozz PLC',
+            'accountNumber': b['accountNumber']?.toString() ?? '',
+            'branchName': b['branchName']?.toString() ?? '',
+            'routingNumber': b['routingNumber']?.toString() ?? '',
+            'swiftCode': b['swiftCode']?.toString() ?? '',
+            'mobileNumber': b['mobileNumber']?.toString() ?? '',
+            'email': b['email']?.toString() ?? '',
+            'branchAddress': b['branchAddress']?.toString() ?? '',
+          };
+        }).toList();
+
         investmentsList.add({
           'id': invId,
           'projectId': projectId,
@@ -1838,6 +1934,7 @@ class DatabaseService {
           'fundingGoalBdt': goal,
           'expectedReturnPct': returnPct,
           'latestSubmission': latestSubmission,
+          'bankAccounts': projectBankAccounts,
         });
       }
 
@@ -2064,17 +2161,21 @@ class DatabaseService {
   }
 
   static Future<void> _saveKycDocument(
-      Connection conn, String kycId, String docType, String? fileData) async {
+      String kycId, String docType, String? fileData) async {
     if (fileData == null || fileData.isEmpty) return;
     try {
       final docId = _generateUuid();
       final nowStr = DateTime.now().toUtc().toIso8601String();
 
+      await executeNeonHttp(
+          'DELETE FROM kyc_documents WHERE "kycId" = \$1 AND "documentType" = \$2::"KycDocumentType"',
+          [kycId, docType]);
+
       await executeNeonHttp('''
         INSERT INTO kyc_documents (
           "id", "kycId", "documentType", "storageKey", "mimeType", "sizeBytes", "createdAt"
         ) VALUES (
-          \$1, \$2, \$3, \$4, 'image/png', \$5, \$6
+          \$1, \$2, \$3::"KycDocumentType", \$4, 'image/png', \$5, \$6
         )
       ''', [docId, kycId, docType, fileData, fileData.length, nowStr]);
     } catch (e) {

@@ -1,3 +1,6 @@
+import 'dart:io';
+import 'dart:convert';
+import 'package:image_picker/image_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import '../../../services/auth_service.dart';
@@ -733,9 +736,17 @@ class _InvestmentsPageState extends State<InvestmentsPage> {
   void _showSubmitProofModal(Map<String, dynamic> inv) {
     final trxRefController = TextEditingController();
     final notesController = TextEditingController();
+    final List<Map<String, dynamic>> projectBankAccounts =
+        (inv['bankAccounts'] as List<Map<String, dynamic>>? ?? []).isNotEmpty
+            ? (inv['bankAccounts'] as List<Map<String, dynamic>>)
+            : _bankAccounts;
+
     String selectedBankId =
-    _bankAccounts.isNotEmpty ? _bankAccounts.first['id'].toString() : '';
+        projectBankAccounts.isNotEmpty ? projectBankAccounts.first['id'].toString() : '';
     bool submitting = false;
+    File? selectedProofFile;
+    String? proofBase64;
+    final ImagePicker picker = ImagePicker();
     final c = _calc(inv);
 
     InputDecoration deco(String label, String hint) => InputDecoration(
@@ -831,7 +842,7 @@ class _InvestmentsPageState extends State<InvestmentsPage> {
                           hint: Text(LanguageService.tr(
                               'Choose Bank Account',
                               'ব্যাংক অ্যাকাউন্ট বেছে নিন')),
-                          items: _bankAccounts.map((b) {
+                          items: projectBankAccounts.map((b) {
                             return DropdownMenuItem<String>(
                               value: b['id'].toString(),
                               child: Text(
@@ -868,6 +879,72 @@ class _InvestmentsPageState extends State<InvestmentsPage> {
                         'e.g. Transferred from City Bank',
                       ),
                     ),
+                    const SizedBox(height: 14),
+                    Text(
+                      LanguageService.tr('Upload Payment Receipt / Deposit Slip',
+                          'পেমেন্ট রসিদ / ডিপোজিট স্লিপ আপলোড করুন'),
+                      style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: ink),
+                    ),
+                    const SizedBox(height: 6),
+                    GestureDetector(
+                      onTap: () async {
+                        try {
+                          final XFile? picked = await picker.pickImage(
+                            source: ImageSource.gallery,
+                            maxWidth: 1600,
+                            maxHeight: 1600,
+                            imageQuality: 85,
+                          );
+                          if (picked != null) {
+                            final file = File(picked.path);
+                            final bytes = await file.readAsBytes();
+                            final b64 = 'data:image/png;base64,${base64Encode(bytes)}';
+                            setModalState(() {
+                              selectedProofFile = file;
+                              proofBase64 = b64;
+                            });
+                          }
+                        } catch (e) {
+                          debugPrint('Error picking proof image: $e');
+                        }
+                      },
+                      child: Container(
+                        height: 120,
+                        width: double.infinity,
+                        decoration: BoxDecoration(
+                          color: ivory,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: line),
+                        ),
+                        child: selectedProofFile != null
+                            ? ClipRRect(
+                                borderRadius: BorderRadius.circular(12),
+                                child: Image.file(
+                                  selectedProofFile!,
+                                  fit: BoxFit.cover,
+                                  width: double.infinity,
+                                ),
+                              )
+                            : Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  const Icon(Icons.cloud_upload_outlined,
+                                      size: 32, color: emerald),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    LanguageService.tr(
+                                        'Tap to upload receipt image',
+                                        'রসিদের ছবি আপলোড করতে ট্যাপ করুন'),
+                                    style: const TextStyle(
+                                        fontSize: 12, color: muted),
+                                  ),
+                                ],
+                              ),
+                      ),
+                    ),
                     const SizedBox(height: 20),
                     FilledButton(
                       onPressed: submitting
@@ -880,6 +957,17 @@ class _InvestmentsPageState extends State<InvestmentsPage> {
                               content: Text(LanguageService.tr(
                                   'Please enter transaction reference / deposit slip no.',
                                   'ট্রানজেকশন রেফারেন্স বা জমা স্লিপ নম্বর লিখুন।')),
+                              backgroundColor: danger,
+                            ),
+                          );
+                          return;
+                        }
+                        if (proofBase64 == null || proofBase64!.isEmpty) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(LanguageService.tr(
+                                  'Please upload payment receipt / deposit slip image.',
+                                  'অনুগ্রহ করে পেমেন্ট রসিদ বা ডিপোজিট স্লিপের ছবি আপলোড করুন।')),
                               backgroundColor: danger,
                             ),
                           );
@@ -899,7 +987,7 @@ class _InvestmentsPageState extends State<InvestmentsPage> {
                           amountBdt: c['principal'] as double,
                           transactionRef: ref,
                           bankAccountId: selectedBankId,
-                          proofFileUrl: 'deposit_receipt.png',
+                          proofFileUrl: proofBase64!,
                           notes: notesController.text.trim(),
                         );
 
@@ -907,7 +995,7 @@ class _InvestmentsPageState extends State<InvestmentsPage> {
                         Navigator.pop(context);
 
                         if (res['success'] == true) {
-                          ScaffoldMessenger.of(this.context)
+                          ScaffoldMessenger.of(context)
                               .showSnackBar(
                             SnackBar(
                               content: Text(LanguageService.tr(
@@ -918,7 +1006,7 @@ class _InvestmentsPageState extends State<InvestmentsPage> {
                           );
                           _loadInvestmentsData();
                         } else {
-                          ScaffoldMessenger.of(this.context)
+                          ScaffoldMessenger.of(context)
                               .showSnackBar(
                             SnackBar(
                               content: Text(res['message'] ??

@@ -103,8 +103,8 @@ class _SettingsPageState extends State<SettingsPage> {
                   children: [
                     Text(
                       LanguageService.tr(
-                          'Are you sure you want to request account deletion? Your account will be scheduled for deletion in 7 days.',
-                          'আপনি কি নিশ্চিত যে আপনি আপনার অ্যাকাউন্ট ডিলিট করতে চান? আগামী ৭ দিনের জন্য ডিলেশন শিডিউল করা হবে।'),
+                          'Are you sure you want to request account deletion? Your account will be scheduled for deletion in 30 days.',
+                          'আপনি কি নিশ্চিত যে আপনি আপনার অ্যাকাউন্ট ডিলিট করতে চান? আগামী ৩০ দিনের জন্য ডিলেশন শিডিউল করা হবে।'),
                       style: TextStyle(
                           fontSize: 12.5,
                           color: Colors.grey[800],
@@ -121,8 +121,8 @@ class _SettingsPageState extends State<SettingsPage> {
                       ),
                       child: Text(
                         LanguageService.tr(
-                            'Note: Logging into your account within 7 days will automatically cancel deletion and restore your account.',
-                            'নোট: আগামী ৭ দিনের মধ্যে লগইন করলে আপনার অ্যাকাউন্ট রিস্টোর বা পুনরুদ্ধার হয়ে যাবে।'),
+                            'Note: Logging into your account within 30 days will automatically cancel deletion and restore your account.',
+                            'নোট: আগামী ৩০ দিনের মধ্যে লগইন করলে আপনার অ্যাকাউন্ট রিস্টোর বা পুনরুদ্ধার হয়ে যাবে।'),
                         style: TextStyle(
                             fontSize: 11,
                             color: Colors.amber.shade900,
@@ -193,8 +193,8 @@ class _SettingsPageState extends State<SettingsPage> {
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(
                           content: Text(LanguageService.tr(
-                              'Account deletion requested! Log in within 7 days to restore.',
-                              'অ্যাকাউন্ট ডিলিট রিকোয়েস্ট গৃহীত হয়েছে! ৭ দিনের মধ্যে লগইন করলে অ্যাকাউন্ট রিস্টোর হবে।')),
+                              'Account deletion requested! Log in within 30 days to restore.',
+                              'অ্যাকাউন্ট ডিলিট রিকোয়েস্ট গৃহীত হয়েছে! ৩০ দিনের মধ্যে লগইন করলে অ্যাকাউন্ট রিস্টোর হবে।')),
                           backgroundColor: primaryTeal,
                           duration: const Duration(seconds: 4),
                         ),
@@ -851,8 +851,8 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
             subtitle: Text(
               LanguageService.tr(
-                  'Schedule account deletion (7-day recovery buffer)',
-                  'অ্যাকাউন্ট ডিলিট করুন (৭ দিনের রিকভারি সময় পাবেন)'),
+                  'Schedule account deletion (30-day recovery buffer)',
+                  'অ্যাকাউন্ট ডিলিট করুন (৩০ দিনের রিকভারি সময় পাবেন)'),
               style: TextStyle(fontSize: 11, color: Colors.red.shade900),
             ),
             trailing:

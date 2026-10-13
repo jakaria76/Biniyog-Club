@@ -115,8 +115,8 @@ class TermsAndConditionsPage extends StatelessWidget {
                   _buildSection(
                     '9. Contact Information',
                     '৯. যোগাযোগ',
-                    'For questions regarding these Terms, please contact our legal team at legal@biniyog.club or write to Biniyog Club Ltd., Gulshan-2, Dhaka 1212, Bangladesh.',
-                    'শর্তাবলী সংক্রান্ত যেকোনো প্রশ্নের জন্য আমাদের লিগ্যাল টিমের ইমেইলে যোগাযোগ করুন: legal@biniyog.club',
+                    'For questions regarding these Terms, please contact us at:\n• Address: MG SAM Center, 12 Mohakhali C/A, Dhaka-1212, Bangladesh\n• Hotline: +880 1335-149033\n• Email: info@biniyogclub.com\n• Office Hours: Saturday – Thursday, 9:00 AM – 6:00 PM',
+                    'শর্তাবলী সংক্রান্ত যেকোনো প্রশ্নের জন্য আমাদের সাথে যোগাযোগ করুন:\n• ঠিকানা: এমজি স্যাম সেন্টার, ১২ মহাখালী বা/এ, ঢাকা-১২১২, বাংলাদেশ\n• হটলাইন: +880 1335-149033\n• ইমেইল: info@biniyogclub.com\n• অফিস সময়: শনিবার – বৃহস্পতিবার, সকাল ৯:০০ টা – সন্ধ্যা ৬:০০ টা',
                   ),
                 ],
               ),
