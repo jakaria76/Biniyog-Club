@@ -1,5 +1,9 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+
+import '../../authentication/login_page.dart';
 import '../kyc/kyc_page.dart';
 import '../../../services/auth_service.dart';
 import '../../../services/cloudinary_service.dart';
@@ -14,35 +18,50 @@ class ProfilePage extends StatefulWidget {
 }
 
 class _ProfilePageState extends State<ProfilePage> {
+  // ─── Palette (dashboard er moto) ───
+  static const Color emerald = Color(0xFF0E4A37);
+  static const Color emeraldDeep = Color(0xFF0A3327);
+  static const Color emeraldSoft = Color(0xFFE3F0E9);
+  static const Color gold = Color(0xFFB8935A);
+  static const Color goldDeep = Color(0xFF8A6A3A);
+  static const Color goldLight = Color(0xFFD9BE8C);
+  static const Color goldSoft = Color(0xFFF6EEDF);
+  static const Color turquoise = Color(0xFF167A80);
+  static const Color turquoiseSoft = Color(0xFFE0F1F1);
+  static const Color lapis = Color(0xFF26437A);
+  static const Color lapisSoft = Color(0xFFE5EAF4);
+  static const Color terracotta = Color(0xFFA5523A);
+  static const Color terracottaSoft = Color(0xFFF7E6DF);
+  static const Color ivory = Color(0xFFF7F4EE);
+  static const Color ink = Color(0xFF1C2421);
+  static const Color muted = Color(0xFF6E736F);
+  static const Color line = Color(0xFFE8E2D7);
+  static const Color danger = Color(0xFFB4413A);
+  static const Color dangerSoft = Color(0xFFFBEAE8);
+
+  static const List<String> _months = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+  ];
+
   bool _isLoading = true;
+  bool _needsLogin = false;
+  bool _loadFailed = false;
   bool _isUploadingPhoto = false;
   bool _isDeletingPhoto = false;
 
   String _userId = '';
-  String _name = 'Investor';
+  String _name = '';
   String _email = '';
-  String _phone = 'N/A';
+  String _phone = '';
   String? _avatarUrl;
-  bool _isEmailVerified = false;
-  bool _isPhoneVerified = false;
-  String _memberSince = 'Recent';
+  DateTime? _memberSince;
   String _kycStatus = 'NOT_STARTED';
 
-  Map<String, String> _investorProfile = {
-    'City': 'Dhaka',
-    'District': 'Dhaka',
-    'Country': 'Bangladesh',
-    'Occupation': 'Investor',
-    'Annual Income Range': 'Standard',
-    'Investment Experience': 'Intermediate',
-    'Risk Tolerance': 'Moderate',
-    'Address': 'Bangladesh',
-  };
+  /// DB te ja ache tai — khali hole ''
+  Map<String, String> _p = {};
 
   final ImagePicker _picker = ImagePicker();
-
-  static const Color primaryTeal = Color(0xFF047857);
-  static const Color primaryDarkTeal = Color(0xFF064E3B);
 
   @override
   void initState() {
@@ -50,100 +69,194 @@ class _ProfilePageState extends State<ProfilePage> {
     _loadProfileData();
   }
 
+  // ═════════════════════════════════════════════════════════
+  // DATA
+  // ═════════════════════════════════════════════════════════
   Future<void> _loadProfileData() async {
-    setState(() => _isLoading = true);
+    if (mounted) setState(() => _isLoading = true);
 
     final userData = await AuthService.getUserData();
     final userId = userData?['id']?.toString() ?? '';
     final userEmail = userData?['email']?.toString() ?? '';
 
-    final profileData =
-        await DatabaseService.getUserProfileFull(userId, email: userEmail);
+    if (userId.isEmpty) {
+      if (mounted) {
+        setState(() {
+          _needsLogin = true;
+          _isLoading = false;
+        });
+      }
+      return;
+    }
 
-    if (mounted) {
-      setState(() {
-        if (profileData.isNotEmpty) {
-          _userId = profileData['id']?.toString() ?? userId;
-          _name = profileData['name']?.toString() ?? 'Investor';
-          _email = profileData['email']?.toString() ?? '';
-          _phone = profileData['phone']?.toString() ?? 'N/A';
-          _avatarUrl = profileData['avatarUrl']?.toString();
-          _isEmailVerified = (profileData['emailVerified'] as bool? ?? false);
-          _isPhoneVerified = (profileData['phoneVerified'] as bool? ?? false);
-          _kycStatus =
-              (profileData['kycStatus']?.toString() ?? 'NOT_STARTED')
-                  .toUpperCase();
+    Map<String, dynamic> profile = {};
+    try {
+      profile = await DatabaseService.getUserProfileFull(userId, email: userEmail);
+    } catch (e) {
+      debugPrint('Profile load error: $e');
+    }
 
-          final rawCreated = profileData['createdAt']?.toString() ?? '';
-          if (rawCreated.length >= 10) {
-            _memberSince = rawCreated.substring(0, 10);
-          }
+    if (!mounted) return;
+    setState(() {
+      if (profile.isEmpty) {
+        _loadFailed = true;
+      } else {
+        _loadFailed = false;
+        _userId = profile['id']?.toString() ?? userId;
+        _name = profile['name']?.toString() ?? '';
+        _email = profile['email']?.toString() ?? '';
+        _phone = profile['phone']?.toString() ?? '';
+        _avatarUrl = profile['avatarUrl']?.toString();
+        _kycStatus = (profile['kycStatus']?.toString() ?? 'NOT_STARTED').toUpperCase();
+        _memberSince = DateTime.tryParse(profile['createdAt']?.toString() ?? '')?.toLocal();
 
-          final profMap =
-              profileData['investorProfile'] as Map<String, dynamic>? ?? {};
-          if (profMap.isNotEmpty) {
-            _investorProfile = {
-              'City': profMap['city']?.toString() ?? 'Dhaka',
-              'District': profMap['city']?.toString() ?? 'Dhaka',
-              'Country': profMap['country']?.toString() ?? 'BD',
-              'Occupation': profMap['occupation']?.toString() ?? 'Investor',
-              'Annual Income Range':
-                  profMap['annualIncomeRange']?.toString() ?? 'Standard',
-              'Investment Experience':
-                  profMap['investmentExperience']?.toString() ??
-                      'Intermediate',
-              'Risk Tolerance':
-                  profMap['riskTolerance']?.toString() ?? 'Moderate',
-              'Address': profMap['address']?.toString() ?? 'Bangladesh',
-            };
-          }
-        }
-        _isLoading = false;
-      });
+        final raw = (profile['investorProfile'] as Map?) ?? {};
+        _p = raw.map((k, v) => MapEntry(k.toString(), v?.toString().trim() ?? ''));
+      }
+      _needsLogin = false;
+      _isLoading = false;
+    });
+  }
+
+  // ═════════════════════════════════════════════════════════
+  // HELPERS
+  // ═════════════════════════════════════════════════════════
+  String _v(String key) => _p[key] ?? '';
+
+  String get _notProvided => LanguageService.tr('Not provided', 'দেওয়া হয়নি');
+
+  /// Shudhu shesh 4 digit
+  String _mask(String value) {
+    final v = value.replaceAll(' ', '');
+    if (v.isEmpty) return '';
+    if (v.length <= 4) return v;
+    return '•••• ${v.substring(v.length - 4)}';
+  }
+
+  String _fmtDate(DateTime? d) {
+    if (d == null) return '';
+    return '${_months[d.month - 1]} ${d.day}, ${d.year}';
+  }
+
+  bool get _isKycVerified => _kycStatus == 'VERIFIED' || _kycStatus == 'APPROVED';
+
+  bool get _hasKycData =>
+      _v('fullName').isNotEmpty ||
+          _v('nationalId').isNotEmpty ||
+          _v('bankName').isNotEmpty ||
+          _v('mobileNumber').isNotEmpty;
+
+  String _docTypeLabel(String type) {
+    switch (type) {
+      case 'PASSPORT':
+        return LanguageService.tr('Passport', 'পাসপোর্ট');
+      case 'DRIVING_LICENSE':
+        return LanguageService.tr('Driving License', 'ড্রাইভিং লাইসেন্স');
+      case 'NATIONAL_ID':
+        return LanguageService.tr('National ID', 'জাতীয় পরিচয়পত্র');
+      default:
+        return LanguageService.tr('ID Document', 'পরিচয়পত্র');
     }
   }
 
-  // Pick Image & Upload to Cloudinary API and save in Neon DB
-  Future<void> _pickAndUploadImage() async {
+  /// DB te enum ba code thakle sundor kore dekhai: "BD" → Bangladesh, "SOME_VALUE" → Some Value
+  String _pretty(String value) {
+    if (value.isEmpty) return '';
+    if (value.toUpperCase() == 'BD') return LanguageService.tr('Bangladesh', 'বাংলাদেশ');
+    if (!value.contains('_') && value != value.toUpperCase()) return value;
+    return value
+        .toLowerCase()
+        .split('_')
+        .where((w) => w.isNotEmpty)
+        .map((w) => '${w[0].toUpperCase()}${w.substring(1)}')
+        .join(' ');
+  }
+
+  String get _fullAddress {
+    final parts = [_v('address'), _v('thana'), _v('district'), _v('division')]
+        .where((s) => s.isNotEmpty)
+        .toList();
+    // Address er bhitore district age theke thakle dui bar dekhabo na
+    final unique = <String>[];
+    for (final p in parts) {
+      if (!unique.any((u) => u.toLowerCase().contains(p.toLowerCase()))) unique.add(p);
+    }
+    return unique.join(', ');
+  }
+
+  void _snack(String msg, {bool error = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg), backgroundColor: error ? danger : emerald),
+    );
+  }
+
+  Future<void> _openKyc() async {
+    await Navigator.push(context, MaterialPageRoute(builder: (_) => const KycPage()));
+    // KYC theke fire ashle notun status dekhai
+    _loadProfileData();
+  }
+
+  // ═════════════════════════════════════════════════════════
+  // PHOTO
+  // ═════════════════════════════════════════════════════════
+  void _showPhotoSourceSheet() {
     showModalBottomSheet(
       context: context,
+      backgroundColor: Colors.white,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      builder: (context) {
-        return Padding(
-          padding: const EdgeInsets.all(20.0),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                LanguageService.tr(
-                    'Choose Profile Photo Source', 'ছবি তোলার মাধ্যম বেছে নিন'),
-                style:
-                    const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+      builder: (sheetContext) {
+        Widget option(IconData icon, Color color, Color soft, String label, ImageSource source) {
+          return InkWell(
+            borderRadius: BorderRadius.circular(14),
+            onTap: () {
+              Navigator.pop(sheetContext);
+              _processImagePick(source);
+            },
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 6),
+              child: Row(
+                children: [
+                  Container(
+                    width: 42,
+                    height: 42,
+                    decoration: BoxDecoration(
+                      color: soft,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Icon(icon, color: color, size: 21),
+                  ),
+                  const SizedBox(width: 14),
+                  Text(
+                    label,
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: ink),
+                  ),
+                ],
               ),
-              const SizedBox(height: 16),
-              ListTile(
-                leading: const Icon(Icons.camera_alt_outlined,
-                    color: primaryTeal),
-                title: Text(LanguageService.tr(
-                    'Take Photo with Camera', 'ক্যামেরা দিয়ে ছবি তুলুন')),
-                onTap: () {
-                  Navigator.pop(context);
-                  _processImagePick(ImageSource.camera);
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.photo_library_outlined,
-                    color: primaryTeal),
-                title: Text(LanguageService.tr(
-                    'Choose from Gallery', 'গ্যালারি থেকে ছবি সিলেক্ট করুন')),
-                onTap: () {
-                  Navigator.pop(context);
-                  _processImagePick(ImageSource.gallery);
-                },
-              ),
-            ],
+            ),
+          );
+        }
+
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  LanguageService.tr('Profile Photo', 'প্রোফাইল ছবি'),
+                  style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: ink),
+                ),
+                const SizedBox(height: 8),
+                option(Icons.camera_alt_outlined, emerald, emeraldSoft,
+                    LanguageService.tr('Take a photo', 'ক্যামেরা দিয়ে ছবি তুলুন'), ImageSource.camera),
+                option(Icons.photo_library_outlined, lapis, lapisSoft,
+                    LanguageService.tr('Choose from gallery', 'গ্যালারি থেকে বেছে নিন'), ImageSource.gallery),
+              ],
+            ),
           ),
         );
       },
@@ -158,931 +271,756 @@ class _ProfilePageState extends State<ProfilePage> {
         maxHeight: 800,
         imageQuality: 85,
       );
-
       if (image == null) return;
 
       setState(() => _isUploadingPhoto = true);
-
       final bytes = await image.readAsBytes();
+      final url = await CloudinaryService.uploadImage(bytes, folder: 'avatars');
 
-      // Upload to Cloudinary
-      final cloudinaryUrl =
-          await CloudinaryService.uploadImage(bytes, folder: 'avatars');
-
-      if (cloudinaryUrl == null || cloudinaryUrl.isEmpty) {
-        if (mounted) {
-          setState(() => _isUploadingPhoto = false);
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Cloudinary Upload Failed. Check internet.'),
-              backgroundColor: Colors.redAccent,
-            ),
-          );
-        }
+      if (url == null || url.isEmpty) {
+        if (mounted) setState(() => _isUploadingPhoto = false);
+        _snack(
+          LanguageService.tr('Photo upload failed. Please check your internet and try again.',
+              'ছবি আপলোড হয়নি। ইন্টারনেট চেক করে আবার চেষ্টা করুন।'),
+          error: true,
+        );
         return;
       }
 
-      // Save in Neon PostgreSQL DB
-      final res = await DatabaseService.updateUserAvatar(
-        userId: _userId,
-        avatarUrl: cloudinaryUrl,
-      );
-
+      final res = await DatabaseService.updateUserAvatar(userId: _userId, avatarUrl: url);
       if (!mounted) return;
       setState(() => _isUploadingPhoto = false);
 
       if (res['success'] == true) {
-        setState(() {
-          _avatarUrl = res['avatarUrl']?.toString() ?? cloudinaryUrl;
-        });
-
+        setState(() => _avatarUrl = res['avatarUrl']?.toString() ?? url);
         final userData = await AuthService.getUserData();
         if (userData != null) {
           userData['avatarUrl'] = _avatarUrl;
           await AuthService.saveUserData(userData);
         }
-
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(LanguageService.tr(
-                  'Profile photo updated!', 'প্রোফাইল ছবি সফলভাবে সেভ হয়েছে!')),
-              backgroundColor: primaryTeal,
-            ),
-          );
-        }
+        _snack(LanguageService.tr('Profile photo updated.', 'প্রোফাইল ছবি আপডেট হয়েছে।'));
       } else {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content:
-                  Text(res['message'] ?? 'Failed to update photo in Neon DB.'),
-              backgroundColor: Colors.redAccent,
-            ),
-          );
-        }
+        _snack(res['message']?.toString() ??
+            LanguageService.tr('Could not save photo.', 'ছবি সেভ করা যায়নি।'),
+            error: true);
       }
     } catch (e) {
-      if (mounted) {
-        setState(() => _isUploadingPhoto = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error picking image: ${e.toString()}'),
-            backgroundColor: Colors.redAccent,
-          ),
-        );
-      }
+      debugPrint('Photo pick error: $e');
+      if (mounted) setState(() => _isUploadingPhoto = false);
+      _snack(
+        source == ImageSource.camera
+            ? LanguageService.tr('Could not open the camera.', 'ক্যামেরা খোলা যায়নি।')
+            : LanguageService.tr('Could not open the gallery.', 'গ্যালারি খোলা যায়নি।'),
+        error: true,
+      );
     }
   }
 
-  // Delete Profile Avatar
-  Future<void> _handleDeletePhoto() async {
+  void _confirmDeletePhoto() {
     showDialog(
       context: context,
-      builder: (context) {
-        return AlertDialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(18),
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(
+          LanguageService.tr('Remove photo', 'ছবি সরান'),
+          style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: ink),
+        ),
+        content: Text(
+          LanguageService.tr('Are you sure you want to remove your profile photo?',
+              'আপনি কি প্রোফাইল ছবি সরাতে চান?'),
+          style: const TextStyle(fontSize: 13.5, color: muted, height: 1.45),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: Text(LanguageService.tr('Cancel', 'বাতিল'),
+                style: const TextStyle(color: muted, fontWeight: FontWeight.w600)),
           ),
-          title: Text(LanguageService.tr('Remove Photo', 'ছবি রিমুভ করুন')),
-          content: Text(LanguageService.tr(
-              'Are you sure you want to remove your profile photo?',
-              'আপনি কি নিশ্চিত যে আপনার প্রোফাইল পিকচার রিমুভ করতে চান?')),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: Text(LanguageService.tr('Cancel', 'বাতিল'),
-                  style: const TextStyle(color: Colors.grey)),
+          FilledButton(
+            onPressed: () {
+              Navigator.pop(dialogContext);
+              _deletePhoto();
+            },
+            style: FilledButton.styleFrom(
+              backgroundColor: danger,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             ),
-            ElevatedButton(
-              onPressed: () async {
-                final messenger = ScaffoldMessenger.of(context);
-                Navigator.pop(context);
-                setState(() => _isDeletingPhoto = true);
-
-                final res = await DatabaseService.deleteUserAvatar(_userId);
-
-                if (!mounted) return;
-                setState(() => _isDeletingPhoto = false);
-
-                if (res['success'] == true) {
-                  setState(() {
-                    _avatarUrl = null;
-                  });
-
-                  final userData = await AuthService.getUserData();
-                  if (userData != null) {
-                    userData['avatarUrl'] = null;
-                    await AuthService.saveUserData(userData);
-                  }
-
-                  messenger.showSnackBar(
-                    SnackBar(
-                      content: Text(LanguageService.tr(
-                          'Profile photo removed.', 'প্রোফাইল ছবি রিমুভ হয়েছে।')),
-                      backgroundColor: primaryTeal,
-                    ),
-                  );
-                } else {
-                  messenger.showSnackBar(
-                    SnackBar(
-                      content: Text(res['message'] ?? 'Failed to remove.'),
-                      backgroundColor: Colors.redAccent,
-                    ),
-                  );
-                }
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.redAccent,
-                foregroundColor: Colors.white,
-              ),
-              child: Text(LanguageService.tr('Remove', 'রিমুভ করুন')),
-            ),
-          ],
-        );
-      },
+            child: Text(LanguageService.tr('Remove', 'সরান')),
+          ),
+        ],
+      ),
     );
   }
 
+  Future<void> _deletePhoto() async {
+    setState(() => _isDeletingPhoto = true);
+    final res = await DatabaseService.deleteUserAvatar(_userId);
+    if (!mounted) return;
+    setState(() => _isDeletingPhoto = false);
+
+    if (res['success'] == true) {
+      setState(() => _avatarUrl = null);
+      final userData = await AuthService.getUserData();
+      if (userData != null) {
+        userData['avatarUrl'] = null;
+        await AuthService.saveUserData(userData);
+      }
+      _snack(LanguageService.tr('Profile photo removed.', 'প্রোফাইল ছবি সরানো হয়েছে।'));
+    } else {
+      _snack(res['message']?.toString() ??
+          LanguageService.tr('Could not remove photo.', 'ছবি সরানো যায়নি।'),
+          error: true);
+    }
+  }
+
+  // ═════════════════════════════════════════════════════════
+  // BUILD
+  // ═════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
-    final String initial = _name.isNotEmpty ? _name[0].toUpperCase() : 'I';
-
     return ValueListenableBuilder<String>(
       valueListenable: LanguageService.currentLanguage,
       builder: (context, lang, child) {
         return Scaffold(
-          backgroundColor: const Color(0xFFF4F7F6),
+          backgroundColor: ivory,
           appBar: AppBar(
-            backgroundColor: Colors.white,
-            elevation: 0.5,
-            iconTheme: const IconThemeData(color: primaryTeal),
+            backgroundColor: ivory,
+            surfaceTintColor: Colors.transparent,
+            elevation: 0,
+            iconTheme: const IconThemeData(color: ink),
             title: Text(
               LanguageService.tr('Profile', 'প্রোফাইল'),
-              style: const TextStyle(
-                color: Colors.black87,
-                fontWeight: FontWeight.bold,
-                fontSize: 18,
-              ),
+              style: const TextStyle(color: ink, fontWeight: FontWeight.w700, fontSize: 18),
             ),
           ),
           body: _isLoading
               ? const Center(
-                  child: CircularProgressIndicator(color: primaryTeal))
+            child: SizedBox(
+              width: 28,
+              height: 28,
+              child: CircularProgressIndicator(color: emerald, strokeWidth: 2.4),
+            ),
+          )
+              : _needsLogin
+              ? _buildMessage(
+            Icons.lock_outline_rounded,
+            LanguageService.tr('Please log in to see your profile',
+                'প্রোফাইল দেখতে লগইন করুন'),
+            LanguageService.tr('Log in', 'লগইন'),
+                () async {
+              await AuthService.logout();
+              if (!mounted) return;
+              Navigator.of(context).pushAndRemoveUntil(
+                MaterialPageRoute(builder: (_) => const LoginPage()),
+                    (route) => false,
+              );
+            },
+          )
+              : _loadFailed
+              ? _buildMessage(
+            Icons.wifi_off_rounded,
+            LanguageService.tr('Could not load your profile',
+                'প্রোফাইল লোড করা যায়নি'),
+            LanguageService.tr('Try again', 'আবার চেষ্টা করুন'),
+            _loadProfileData,
+          )
               : RefreshIndicator(
-                  onRefresh: _loadProfileData,
-                  color: primaryTeal,
-                  child: SingleChildScrollView(
-                    physics: const AlwaysScrollableScrollPhysics(),
-                    padding: const EdgeInsets.all(16.0),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // 1. Colorful Gradient Hero Avatar Banner Card
-                        _buildColorfulHeroCard(initial),
-                        const SizedBox(height: 18),
-
-                        // 2. Email & Phone Colorful Contact Row
-                        _buildColorfulContactRow(),
-                        const SizedBox(height: 18),
-
-                        // 3. Colorful KYC Status Banner
-                        _buildColorfulKycBanner(),
-                        const SizedBox(height: 18),
-
-                        // 4. Colorful Bento Grid for Investor Details
-                        _buildColorfulInvestorBentoGrid(),
-                        const SizedBox(height: 18),
-
-                        // 5. KYC Verified Information Card
-                        _buildKycDetailsCard(),
-                        const SizedBox(height: 24),
-                      ],
-                    ),
-                  ),
-                ),
+            onRefresh: _loadProfileData,
+            color: emerald,
+            child: ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.fromLTRB(18, 6, 18, 40),
+              children: [
+                _buildHeroCard(),
+                const SizedBox(height: 24),
+                _sectionHeader(LanguageService.tr('Contact', 'যোগাযোগ')),
+                const SizedBox(height: 12),
+                _buildContactCard(),
+                const SizedBox(height: 24),
+                _sectionHeader(LanguageService.tr('KYC Verification', 'KYC যাচাই')),
+                const SizedBox(height: 12),
+                _buildKycStatusCard(),
+                if (_hasKycData) ...[
+                  const SizedBox(height: 12),
+                  _buildKycInfoCard(),
+                ],
+                const SizedBox(height: 24),
+                _sectionHeader(
+                    LanguageService.tr('Investor Profile', 'বিনিয়োগকারী প্রোফাইল')),
+                const SizedBox(height: 12),
+                _buildInvestorCard(),
+              ],
+            ),
+          ),
         );
       },
     );
   }
 
-  // 1. Vibrant Gradient Hero Card
-  Widget _buildColorfulHeroCard(String initial) {
-    final bool isKycVerified =
-        _kycStatus == 'VERIFIED' || _kycStatus == 'APPROVED';
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [
-            Color(0xFF064E3B),
-            Color(0xFF047857),
-            Color(0xFF0D9488),
-          ],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(24),
-        boxShadow: [
-          BoxShadow(
-            color: primaryDarkTeal.withAlpha(80),
-            blurRadius: 18,
-            offset: const Offset(0, 8),
-          ),
-        ],
-      ),
-      child: Column(
-        children: [
-          Stack(
-            children: [
-              // Glowing Outer Avatar Ring
-              Container(
-                padding: const EdgeInsets.all(4),
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: LinearGradient(
-                    colors: isKycVerified
-                        ? const [Color(0xFFF59E0B), Color(0xFF10B981)]
-                        : [Colors.teal.shade300, Colors.teal.shade700],
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: (isKycVerified ? Colors.amber : Colors.teal)
-                          .withAlpha(100),
-                      blurRadius: 12,
-                      spreadRadius: 2,
-                    ),
-                  ],
-                ),
-                child: Container(
-                  width: 90,
-                  height: 90,
-                  decoration: const BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: Colors.white,
-                  ),
-                  child: ClipOval(
-                    child: _avatarUrl != null && _avatarUrl!.isNotEmpty
-                        ? Image.network(
-                            _avatarUrl!,
-                            width: 90,
-                            height: 90,
-                            fit: BoxFit.cover,
-                            errorBuilder: (context, error, stackTrace) =>
-                                _buildInitialAvatar(initial),
-                          )
-                        : _buildInitialAvatar(initial),
-                  ),
-                ),
-              ),
-
-              // Camera Action Badge
-              Positioned(
-                bottom: 2,
-                right: 2,
-                child: GestureDetector(
-                  onTap: _isUploadingPhoto ? null : _pickAndUploadImage,
-                  child: Container(
-                    padding: const EdgeInsets.all(7),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFD97706),
-                      shape: BoxShape.circle,
-                      border: Border.all(color: Colors.white, width: 2),
-                      boxShadow: const [
-                        BoxShadow(
-                          color: Colors.black26,
-                          blurRadius: 4,
-                        ),
-                      ],
-                    ),
-                    child: const Icon(Icons.camera_alt_rounded,
-                        color: Colors.white, size: 15),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-
-          // User Name & Verified Icon Badge (ONLY if KYC is Verified!)
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text(
-                _name,
-                style: const TextStyle(
-                  fontSize: 22,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.white,
-                  letterSpacing: 0.5,
-                ),
-              ),
-              if (isKycVerified) ...[
-                const SizedBox(width: 6),
-                const Icon(Icons.verified_rounded,
-                    color: Colors.amberAccent, size: 20),
-              ],
-            ],
-          ),
-          const SizedBox(height: 4),
-
-          // Member Since Translucent Pill
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-            decoration: BoxDecoration(
-              color: Colors.white.withAlpha(35),
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  isKycVerified ? Icons.star_rounded : Icons.person_outline_rounded,
-                  color: isKycVerified ? Colors.amberAccent : Colors.white70,
-                  size: 14,
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  isKycVerified
-                      ? '${LanguageService.tr("Verified Investor", "ভেরিফাইড ইনভেস্টর")} · $_memberSince'
-                      : '${LanguageService.tr("Investor", "ইনভেস্টর")} · $_memberSince',
-                  style: const TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.white,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 16),
-
-          // Translucent Photo Action Buttons
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              ElevatedButton.icon(
-                onPressed: _isUploadingPhoto ? null : _pickAndUploadImage,
-                icon: _isUploadingPhoto
-                    ? const SizedBox(
-                        width: 14,
-                        height: 14,
-                        child: CircularProgressIndicator(
-                            strokeWidth: 2, color: Colors.white),
-                      )
-                    : const Icon(Icons.add_a_photo_outlined, size: 14),
-                label: Text(
-                  _isUploadingPhoto
-                      ? 'Uploading...'
-                      : LanguageService.tr('Change Photo', 'ছবি পরিবর্তন'),
-                  style: const TextStyle(
-                      fontSize: 11.5, fontWeight: FontWeight.bold),
-                ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.white.withAlpha(45),
-                  foregroundColor: Colors.white,
-                  elevation: 0,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                  visualDensity: VisualDensity.compact,
-                ),
-              ),
-              if (_avatarUrl != null && _avatarUrl!.isNotEmpty) ...[
-                const SizedBox(width: 10),
-                ElevatedButton.icon(
-                  onPressed: _isDeletingPhoto ? null : _handleDeletePhoto,
-                  icon: _isDeletingPhoto
-                      ? const SizedBox(
-                          width: 14,
-                          height: 14,
-                          child: CircularProgressIndicator(
-                              strokeWidth: 2, color: Colors.white),
-                        )
-                      : const Icon(Icons.delete_outline_rounded,
-                          size: 14, color: Colors.redAccent),
-                  label: Text(
-                    _isDeletingPhoto
-                        ? 'Removing...'
-                        : LanguageService.tr('Remove', 'রিমুভ'),
-                    style: const TextStyle(
-                        fontSize: 11.5,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.redAccent),
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.white,
-                    foregroundColor: Colors.redAccent,
-                    elevation: 0,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 8),
-                    visualDensity: VisualDensity.compact,
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildInitialAvatar(String initial) {
-    return Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          colors: [Color(0xFF047857), Color(0xFF0D9488)],
-        ),
-      ),
-      child: Center(
-        child: Text(
-          initial,
-          style: const TextStyle(
-            fontSize: 36,
-            fontWeight: FontWeight.bold,
-            color: Colors.white,
-          ),
-        ),
-      ),
-    );
-  }
-
-  // 2. Colorful Contact Row (Email & Phone)
-  Widget _buildColorfulContactRow() {
+  // ─── Shared pieces ────────────────────────────────────────
+  Widget _sectionHeader(String title) {
     return Row(
       children: [
-        // Email Card (Soft Purple/Indigo)
-        Expanded(
+        Transform.rotate(
+          angle: math.pi / 4,
           child: Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: const Color(0xFFF3E8FF),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: const Color(0xFFDDD6FE)),
-            ),
-            child: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: const BoxDecoration(
-                    color: Color(0xFF7C3AED),
-                    shape: BoxShape.circle,
-                  ),
-                  child:
-                      const Icon(Icons.email_rounded, color: Colors.white, size: 16),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(LanguageService.tr('Email', 'ইমেইল'),
-                          style: const TextStyle(
-                              fontSize: 10,
-                              color: Color(0xFF6B21A8),
-                              fontWeight: FontWeight.bold)),
-                      Text(
-                        _email,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                            fontSize: 11.5,
-                            fontWeight: FontWeight.bold,
-                            color: Color(0xFF4C1D95)),
-                      ),
-                    ],
-                  ),
-                ),
-                Icon(
-                  _isEmailVerified
-                      ? Icons.check_circle_rounded
-                      : Icons.check_circle_outline_rounded,
-                  color: const Color(0xFF7C3AED),
-                  size: 16,
-                ),
-              ],
+            width: 8,
+            height: 8,
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(colors: [goldLight, gold]),
             ),
           ),
         ),
         const SizedBox(width: 10),
-
-        // Phone Card (Soft Blue/Cyan)
-        Expanded(
-          child: Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: const Color(0xFFE0F2FE),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: const Color(0xFFBAE6FD)),
-            ),
-            child: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: const BoxDecoration(
-                    color: Color(0xFF0284C7),
-                    shape: BoxShape.circle,
-                  ),
-                  child:
-                      const Icon(Icons.phone_rounded, color: Colors.white, size: 16),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(LanguageService.tr('Phone', 'ফোন'),
-                          style: const TextStyle(
-                              fontSize: 10,
-                              color: Color(0xFF0369A1),
-                              fontWeight: FontWeight.bold)),
-                      Text(
-                        _phone,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                            fontSize: 11.5,
-                            fontWeight: FontWeight.bold,
-                            color: Color(0xFF0C4A6E)),
-                      ),
-                    ],
-                  ),
-                ),
-                Icon(
-                  _isPhoneVerified
-                      ? Icons.check_circle_rounded
-                      : Icons.check_circle_outline_rounded,
-                  color: const Color(0xFF0284C7),
-                  size: 16,
-                ),
-              ],
-            ),
+        Text(
+          title,
+          style: const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w700,
+            color: ink,
+            letterSpacing: -0.2,
           ),
         ),
       ],
     );
   }
 
-  // 3. Colorful KYC Banner Card
-  Widget _buildColorfulKycBanner() {
-    final bool isVerified =
-        _kycStatus == 'VERIFIED' || _kycStatus == 'APPROVED';
+  Widget _card(List<Widget> rows) {
+    final children = <Widget>[];
+    for (int i = 0; i < rows.length; i++) {
+      children.add(rows[i]);
+      if (i != rows.length - 1) {
+        children.add(const Divider(height: 1, thickness: 1, color: line, indent: 66));
+      }
+    }
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: line),
+      ),
+      child: Column(children: children),
+    );
+  }
+
+  Widget _infoRow(IconData icon, Color color, Color soft, String label, String value) {
+    final empty = value.isEmpty;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: soft,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(icon, color: color, size: 19),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label.toUpperCase(),
+                  style: const TextStyle(
+                    fontSize: 9.5,
+                    fontWeight: FontWeight.w700,
+                    color: muted,
+                    letterSpacing: 0.6,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  empty ? _notProvided : value,
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: empty ? FontWeight.w500 : FontWeight.w600,
+                    color: empty ? muted : ink,
+                    fontStyle: empty ? FontStyle.italic : FontStyle.normal,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ─── Hero ─────────────────────────────────────────────────
+  (String, Color, Color) _kycBadge() {
+    switch (_kycStatus) {
+      case 'VERIFIED':
+      case 'APPROVED':
+        return (LanguageService.tr('KYC Verified', 'KYC যাচাইকৃত'), emerald, emeraldSoft);
+      case 'SUBMITTED':
+      case 'PENDING':
+      case 'UNDER_REVIEW':
+        return (LanguageService.tr('KYC Under Review', 'KYC যাচাই চলছে'), goldDeep, goldSoft);
+      case 'REJECTED':
+        return (LanguageService.tr('KYC Rejected', 'KYC বাতিল'), danger, dangerSoft);
+      default:
+        return (LanguageService.tr('KYC Not Done', 'KYC করা হয়নি'), terracotta, terracottaSoft);
+    }
+  }
+
+  Widget _buildHeroCard() {
+    final displayName = _name.isEmpty ? LanguageService.tr('Investor', 'বিনিয়োগকারী') : _name;
+    final initial = displayName[0].toUpperCase();
+    final badge = _kycBadge();
+    final hasPhoto = _avatarUrl != null && _avatarUrl!.isNotEmpty;
+    final busy = _isUploadingPhoto || _isDeletingPhoto;
+
+    Widget initialAvatar() => Container(
+      color: emerald,
+      alignment: Alignment.center,
+      child: Text(
+        initial,
+        style: const TextStyle(color: Colors.white, fontSize: 34, fontWeight: FontWeight.w600),
+      ),
+    );
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(24),
+      child: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            colors: [Color(0xFF125A43), emeraldDeep, Color(0xFF0B2A3A)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+        ),
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: CustomPaint(
+                painter: _IslamicPatternPainter(color: Colors.white.withAlpha(16), cell: 44),
+              ),
+            ),
+            Positioned.fill(
+              child: Container(
+                margin: const EdgeInsets.all(7),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(color: gold.withAlpha(80), width: 0.8),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 24, 20, 20),
+              child: Column(
+                children: [
+                  // Avatar + camera badge
+                  Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(3),
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          border: Border.all(color: gold, width: 1.6),
+                        ),
+                        child: ClipOval(
+                          child: SizedBox(
+                            width: 88,
+                            height: 88,
+                            child: busy
+                                ? Container(
+                              color: emerald,
+                              alignment: Alignment.center,
+                              child: const SizedBox(
+                                width: 26,
+                                height: 26,
+                                child: CircularProgressIndicator(
+                                    color: goldLight, strokeWidth: 2.4),
+                              ),
+                            )
+                                : hasPhoto
+                                ? Image.network(
+                              _avatarUrl!,
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, __, ___) => initialAvatar(),
+                            )
+                                : initialAvatar(),
+                          ),
+                        ),
+                      ),
+                      Positioned(
+                        right: -2,
+                        bottom: -2,
+                        child: GestureDetector(
+                          onTap: busy ? null : _showPhotoSourceSheet,
+                          child: Container(
+                            width: 32,
+                            height: 32,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              gradient: const LinearGradient(colors: [goldLight, gold]),
+                              border: Border.all(color: emeraldDeep, width: 2),
+                            ),
+                            child: const Icon(Icons.camera_alt_rounded, size: 15, color: emeraldDeep),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Flexible(
+                        child: Text(
+                          displayName,
+                          textAlign: TextAlign.center,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 20,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: -0.2,
+                          ),
+                        ),
+                      ),
+                      if (_isKycVerified) ...[
+                        const SizedBox(width: 6),
+                        const Icon(Icons.verified_rounded, color: goldLight, size: 20),
+                      ],
+                    ],
+                  ),
+                  if (_memberSince != null) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      LanguageService.tr('Member since ${_fmtDate(_memberSince)}',
+                          'সদস্য হয়েছেন ${_fmtDate(_memberSince)}'),
+                      style: TextStyle(color: Colors.white.withAlpha(170), fontSize: 12),
+                    ),
+                  ],
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: badge.$3,
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.verified_user_outlined, size: 13, color: badge.$2),
+                        const SizedBox(width: 5),
+                        Text(
+                          badge.$1,
+                          style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: badge.$2),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      _heroButton(
+                        icon: Icons.add_a_photo_outlined,
+                        label: hasPhoto
+                            ? LanguageService.tr('Change Photo', 'ছবি বদলান')
+                            : LanguageService.tr('Add Photo', 'ছবি যোগ করুন'),
+                        onTap: busy ? null : _showPhotoSourceSheet,
+                      ),
+                      if (hasPhoto) ...[
+                        const SizedBox(width: 10),
+                        _heroButton(
+                          icon: Icons.delete_outline_rounded,
+                          label: LanguageService.tr('Remove', 'সরান'),
+                          onTap: busy ? null : _confirmDeletePhoto,
+                        ),
+                      ],
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _heroButton({required IconData icon, required String label, VoidCallback? onTap}) {
+    return Material(
+      color: Colors.white.withAlpha(22),
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.white.withAlpha(40)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 15, color: Colors.white),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ─── Contact ──────────────────────────────────────────────
+  Widget _buildContactCard() {
+    return _card([
+      _infoRow(Icons.mail_outline_rounded, lapis, lapisSoft,
+          LanguageService.tr('Email', 'ইমেইল'), _email),
+      _infoRow(Icons.phone_outlined, emerald, emeraldSoft,
+          LanguageService.tr('Phone', 'ফোন'), _phone),
+    ]);
+  }
+
+  // ─── KYC status ───────────────────────────────────────────
+  Widget _buildKycStatusCard() {
+    final badge = _kycBadge();
+
+    final String message;
+    final String action;
+    switch (_kycStatus) {
+      case 'VERIFIED':
+      case 'APPROVED':
+        message = LanguageService.tr('Your identity is verified. You can invest in projects.',
+            'আপনার পরিচয় যাচাই হয়েছে। আপনি প্রজেক্টে বিনিয়োগ করতে পারবেন।');
+        action = LanguageService.tr('View KYC', 'KYC দেখুন');
+        break;
+      case 'SUBMITTED':
+      case 'PENDING':
+      case 'UNDER_REVIEW':
+        message = LanguageService.tr('Your documents are being reviewed by our team.',
+            'আমাদের টিম আপনার কাগজপত্র যাচাই করছে।');
+        action = LanguageService.tr('View KYC', 'KYC দেখুন');
+        break;
+      case 'REJECTED':
+        message = LanguageService.tr('Your KYC was not approved. Please check the reason and submit again.',
+            'আপনার KYC অনুমোদন হয়নি। কারণ দেখে আবার জমা দিন।');
+        action = LanguageService.tr('Resubmit', 'আবার জমা দিন');
+        break;
+      default:
+        message = LanguageService.tr('Complete KYC to start investing.',
+            'বিনিয়োগ শুরু করতে KYC সম্পন্ন করুন।');
+        action = LanguageService.tr('Complete KYC', 'KYC করুন');
+    }
 
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: isVerified ? const Color(0xFFECFDF5) : const Color(0xFFFFFBEB),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color:
-              isVerified ? const Color(0xFFA7F3D0) : const Color(0xFFFDE68A),
-        ),
+        color: badge.$3,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: badge.$2.withAlpha(50)),
       ),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: isVerified
-                      ? const Color(0xFF059669)
-                      : const Color(0xFFD97706),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(Icons.shield_rounded,
-                    color: Colors.white, size: 20),
-              ),
-              const SizedBox(width: 12),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    LanguageService.tr('KYC Verification Status',
-                        'কেওয়াইসি ভেরিফিকেশন স্ট্যাটাস'),
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold,
-                      color: isVerified
-                          ? const Color(0xFF065F46)
-                          : const Color(0xFF92400E),
-                    ),
-                  ),
-                  Text(
-                    _kycStatus,
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w900,
-                      color: isVerified
-                          ? const Color(0xFF047857)
-                          : const Color(0xFFB45309),
-                    ),
-                  ),
-                ],
-              ),
-            ],
+          Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              color: badge.$2,
+              borderRadius: BorderRadius.circular(13),
+            ),
+            child: const Icon(Icons.shield_outlined, color: Colors.white, size: 21),
           ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const KycPage()),
-              );
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: isVerified
-                  ? const Color(0xFF047857)
-                  : const Color(0xFFD97706),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  badge.$1,
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: badge.$2),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  message,
+                  style: TextStyle(fontSize: 11.5, color: badge.$2.withAlpha(210), height: 1.35),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          FilledButton(
+            onPressed: _openKyc,
+            style: FilledButton.styleFrom(
+              backgroundColor: badge.$2,
               foregroundColor: Colors.white,
-              elevation: 0,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(10),
-              ),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               visualDensity: VisualDensity.compact,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
             ),
-            child: Text(
-              LanguageService.tr('Manage KYC →', 'কেওয়াইসি ম্যানেজ করুন →'),
-              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
-            ),
+            child: Text(action, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
           ),
         ],
       ),
     );
   }
 
-  // 4. Colorful Bento Grid for Investor Details
-  Widget _buildColorfulInvestorBentoGrid() {
-    final bentoCards = [
-      {
-        'title': LanguageService.tr('Occupation', 'পেশা'),
-        'val': _investorProfile['Occupation'] ?? 'Investor',
-        'icon': Icons.work_outline_rounded,
-        'bg': const Color(0xFFFFF7ED),
-        'border': const Color(0xFFFFEDD5),
-        'iconBg': const Color(0xFFEA580C),
-        'textCol': const Color(0xFF9A3412),
-      },
-      {
-        'title': LanguageService.tr('District / City', 'জেলা / শহর'),
-        'val': _investorProfile['City'] ?? 'Dhaka',
-        'icon': Icons.location_city_rounded,
-        'bg': const Color(0xFFECFDF5),
-        'border': const Color(0xFFA7F3D0),
-        'iconBg': const Color(0xFF059669),
-        'textCol': const Color(0xFF065F46),
-      },
-      {
-        'title': LanguageService.tr('Country', 'দেশ'),
-        'val': _investorProfile['Country'] ?? 'BD',
-        'icon': Icons.public_rounded,
-        'bg': const Color(0xFFFFF1F2),
-        'border': const Color(0xFFFECDD3),
-        'iconBg': const Color(0xFFE11D48),
-        'textCol': const Color(0xFF9F1239),
-      },
-      {
-        'title': LanguageService.tr('Annual Income', 'বার্ষিক আয়'),
-        'val': _investorProfile['Annual Income Range'] ?? 'Standard',
-        'icon': Icons.account_balance_wallet_outlined,
-        'bg': const Color(0xFFEEF2FF),
-        'border': const Color(0xFFC7D2FE),
-        'iconBg': const Color(0xFF4F46E5),
-        'textCol': const Color(0xFF3730A3),
-      },
-      {
-        'title': LanguageService.tr('Experience', 'অভিজ্ঞতা'),
-        'val': _investorProfile['Investment Experience'] ?? 'Intermediate',
-        'icon': Icons.trending_up_rounded,
-        'bg': const Color(0xFFF0F9FF),
-        'border': const Color(0xFFBAE6FD),
-        'iconBg': const Color(0xFF0284C7),
-        'textCol': const Color(0xFF075985),
-      },
-      {
-        'title': LanguageService.tr('Risk Tolerance', 'ঝুঁকি সহনশীলতা'),
-        'val': _investorProfile['Risk Tolerance'] ?? 'Moderate',
-        'icon': Icons.speed_rounded,
-        'bg': const Color(0xFFF0FDF4),
-        'border': const Color(0xFFBBF7D0),
-        'iconBg': const Color(0xFF16A34A),
-        'textCol': const Color(0xFF166534),
-      },
+  // ─── KYC info (user nije KYC te ja diyeche) ───────────────
+  Widget _buildKycInfoCard() {
+    final docType = _v('documentType');
+    final docNo = _v('nationalId');
+    final bank = _v('bankName').isEmpty
+        ? ''
+        : '${_v('bankName')}${_v('bankAccountNumber').isNotEmpty ? ' · ${_mask(_v('bankAccountNumber'))}' : ''}';
+    final wallet = _v('mobileProvider').isEmpty
+        ? ''
+        : '${_v('mobileProvider')}${_v('mobileNumber').isNotEmpty ? ' · ${_mask(_v('mobileNumber'))}' : ''}';
+    final nominee = _v('nomineeNationalId').isEmpty
+        ? ''
+        : '${_pretty(_v('nomineeRelation')).isEmpty ? '' : '${_pretty(_v('nomineeRelation'))} · '}'
+        'NID ${_mask(_v('nomineeNationalId'))}';
+
+    return _card([
+      _infoRow(Icons.person_outline_rounded, emerald, emeraldSoft,
+          LanguageService.tr('Full Name (as on ID)', 'পূর্ণ নাম (পরিচয়পত্র অনুযায়ী)'), _v('fullName')),
+      _infoRow(Icons.badge_outlined, lapis, lapisSoft, _docTypeLabel(docType), _mask(docNo)),
+      _infoRow(Icons.location_on_outlined, terracotta, terracottaSoft,
+          LanguageService.tr('Present Address', 'বর্তমান ঠিকানা'), _fullAddress),
+      _infoRow(Icons.account_balance_outlined, emerald, emeraldSoft,
+          LanguageService.tr('Payout Bank', 'পেআউট ব্যাংক'), bank),
+      _infoRow(Icons.phone_android_rounded, turquoise, turquoiseSoft,
+          LanguageService.tr('Mobile Wallet', 'মোবাইল ওয়ালেট'), wallet),
+      _infoRow(Icons.supervisor_account_outlined, goldDeep, goldSoft,
+          LanguageService.tr('Nominee', 'নমিনি'), nominee),
+    ]);
+  }
+
+  // ─── Investor profile (DB te ja ache) ─────────────────────
+  Widget _buildInvestorCard() {
+    final rows = [
+      (Icons.work_outline_rounded, terracotta, terracottaSoft,
+      LanguageService.tr('Occupation', 'পেশা'), _pretty(_v('occupation'))),
+      (Icons.location_city_rounded, emerald, emeraldSoft,
+      LanguageService.tr('City / District', 'শহর / জেলা'), _v('city')),
+      (Icons.public_rounded, lapis, lapisSoft,
+      LanguageService.tr('Country', 'দেশ'), _pretty(_v('country'))),
+      (Icons.account_balance_wallet_outlined, goldDeep, goldSoft,
+      LanguageService.tr('Annual Income Range', 'বার্ষিক আয়ের সীমা'), _pretty(_v('annualIncomeRange'))),
+      (Icons.trending_up_rounded, turquoise, turquoiseSoft,
+      LanguageService.tr('Investment Experience', 'বিনিয়োগের অভিজ্ঞতা'), _pretty(_v('investmentExperience'))),
+      (Icons.speed_rounded, terracotta, terracottaSoft,
+      LanguageService.tr('Risk Tolerance', 'ঝুঁকি সহনশীলতা'), _pretty(_v('riskTolerance'))),
     ];
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          LanguageService.tr('Investor Profile Details', 'বিনিয়োগকারী প্রোফাইল বিবরণ'),
-          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-        ),
-        const SizedBox(height: 14),
+    final allEmpty = rows.every((r) => r.$5.isEmpty);
 
-        // Bento Grid
-        GridView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          itemCount: bentoCards.length,
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: 2,
-            crossAxisSpacing: 10,
-            mainAxisSpacing: 10,
-            childAspectRatio: 2.1,
-          ),
-          itemBuilder: (context, index) {
-            final card = bentoCards[index];
-            final Color bg = card['bg'] as Color;
-            final Color border = card['border'] as Color;
-            final Color iconBg = card['iconBg'] as Color;
-            final Color textCol = card['textCol'] as Color;
-
-            return Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: bg,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: border),
-              ),
-              child: Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: iconBg,
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(card['icon'] as IconData,
-                        color: Colors.white, size: 16),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text(
-                          card['title'] as String,
-                          style: TextStyle(
-                              fontSize: 9.5,
-                              color: textCol.withAlpha(200),
-                              fontWeight: FontWeight.bold),
-                        ),
-                        const SizedBox(height: 1),
-                        Text(
-                          card['val'] as String,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.bold,
-                              color: textCol),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            );
-          },
+    if (allEmpty) {
+      return Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: line),
         ),
-        const SizedBox(height: 12),
-
-        // Full Address Card (Soft Teal Gradient)
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: const Color(0xFFF0FDFA),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: const Color(0xFF99F6E4)),
-          ),
-          child: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: const BoxDecoration(
-                  color: Color(0xFF0D9488),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(Icons.map_rounded,
-                    color: Colors.white, size: 18),
+        child: Row(
+          children: [
+            const Icon(Icons.info_outline_rounded, color: muted, size: 20),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                LanguageService.tr('No investor profile details have been added yet.',
+                    'এখনো কোনো বিনিয়োগকারী প্রোফাইল তথ্য যোগ করা হয়নি।'),
+                style: const TextStyle(fontSize: 12.5, color: muted, height: 1.4),
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      LanguageService.tr('Permanent Address', 'স্থায়ী ঠিকানা'),
-                      style: const TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
-                          color: Color(0xFF0F766E)),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      _investorProfile['Address'] ?? 'Bangladesh',
-                      style: const TextStyle(
-                          fontSize: 12.5,
-                          fontWeight: FontWeight.bold,
-                          color: Color(0xFF115E59)),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
+            ),
+          ],
         ),
-      ],
-    );
+      );
+    }
+
+    // Khali value hole _infoRow nijei "Not provided" dekhay
+    return _card(rows.map((r) => _infoRow(r.$1, r.$2, r.$3, r.$4, r.$5)).toList());
   }
 
-  Widget _buildKycDetailsCard() {
-    final fullName = _investorProfile['fullName'] ?? '';
-    final docType = _investorProfile['documentType'] ?? 'NATIONAL_ID';
-    final docNo = _investorProfile['nationalId'] ?? 'N/A';
-    final division = _investorProfile['division'] ?? '';
-    final district = _investorProfile['district'] ?? '';
-    final thana = _investorProfile['thana'] ?? '';
-    final bankName = _investorProfile['bankName'] ?? '';
-    final bankAcc = _investorProfile['bankAccountNumber'] ?? '';
-    final nomineeNid = _investorProfile['nomineeNationalId'] ?? 'N/A';
-    final nomineeRel = _investorProfile['nomineeRelation'] ?? 'N/A';
-
-    if (fullName.isEmpty && docNo == 'N/A') return const SizedBox.shrink();
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          LanguageService.tr('KYC Verified Information', 'কেওয়াইসি ভেরিফাইড তথ্য'),
-          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-        ),
-        const SizedBox(height: 12),
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: const Color(0xFFE2E8F0)),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withAlpha(5),
-                blurRadius: 10,
-                offset: const Offset(0, 4),
+  Widget _buildMessage(IconData icon, String text, String buttonLabel, VoidCallback onTap) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 40, color: goldDeep),
+            const SizedBox(height: 12),
+            Text(
+              text,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: ink),
+            ),
+            const SizedBox(height: 16),
+            FilledButton(
+              onPressed: onTap,
+              style: FilledButton.styleFrom(
+                backgroundColor: emerald,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               ),
-            ],
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (fullName.isNotEmpty) ...[
-                _buildKycRow(Icons.person_outline_rounded, LanguageService.tr('Full Name', 'পূর্ণ নাম'), fullName),
-                const Divider(height: 16, color: Color(0xFFF1F5F9)),
-              ],
-              _buildKycRow(Icons.badge_outlined, docType, docNo),
-              if (district.isNotEmpty || division.isNotEmpty) ...[
-                const Divider(height: 16, color: Color(0xFFF1F5F9)),
-                _buildKycRow(Icons.location_on_outlined, LanguageService.tr('Location', 'এলাকা'), '$thana, $district, $division'.replaceAll(RegExp(r'^,\s*|,\s*,\s*|,\s*$'), '')),
-              ],
-              if (bankName.isNotEmpty) ...[
-                const Divider(height: 16, color: Color(0xFFF1F5F9)),
-                _buildKycRow(Icons.account_balance_outlined, LanguageService.tr('Bank Account', 'ব্যাংক অ্যাকাউন্ট'), '$bankName ($bankAcc)'),
-              ],
-              if (nomineeNid != 'N/A' && nomineeNid.isNotEmpty) ...[
-                const Divider(height: 16, color: Color(0xFFF1F5F9)),
-                _buildKycRow(Icons.supervisor_account_outlined, LanguageService.tr('Nominee', 'নমিনি'), 'NID: $nomineeNid (${LanguageService.tr("Relation", "সম্পর্ক")}: $nomineeRel)'),
-              ],
-            ],
-          ),
+              child: Text(buttonLabel),
+            ),
+          ],
         ),
-      ],
+      ),
     );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Islamic geometric pattern (dashboard er moto 8-point star)
+// ═══════════════════════════════════════════════════════════
+class _IslamicPatternPainter extends CustomPainter {
+  final Color color;
+  final double cell;
+
+  _IslamicPatternPainter({required this.color, required this.cell});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.9;
+
+    final r = cell * 0.34;
+
+    for (double y = 0; y <= size.height + cell; y += cell) {
+      final offsetRow = ((y / cell).round() % 2) * cell / 2;
+      for (double x = -cell; x <= size.width + cell; x += cell) {
+        final c = Offset(x + offsetRow, y);
+        for (final start in [0.0, math.pi / 4]) {
+          final path = Path();
+          for (int i = 0; i < 4; i++) {
+            final a = start + i * math.pi / 2;
+            final p = Offset(c.dx + r * math.cos(a), c.dy + r * math.sin(a));
+            i == 0 ? path.moveTo(p.dx, p.dy) : path.lineTo(p.dx, p.dy);
+          }
+          path.close();
+          canvas.drawPath(path, paint);
+        }
+        canvas.drawCircle(c, r * 0.32, paint);
+      }
+    }
   }
 
-  Widget _buildKycRow(IconData icon, String label, String value) {
-    return Row(
-      children: [
-        Icon(icon, size: 18, color: const Color(0xFF0D9488)),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(label, style: const TextStyle(fontSize: 11, color: Color(0xFF64748B), fontWeight: FontWeight.w600)),
-              const SizedBox(height: 2),
-              Text(value, style: const TextStyle(fontSize: 13, color: Color(0xFF1E293B), fontWeight: FontWeight.bold)),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
+  @override
+  bool shouldRepaint(covariant _IslamicPatternPainter old) =>
+      old.color != color || old.cell != cell;
 }

@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../../authentication/login_page.dart';
 import '../documents/documents_page.dart';
+import '../groups/browse_groups_page.dart';
 import '../groups/group_investments_page.dart';
 import '../kyc/kyc_page.dart';
 import '../notifications/notifications_page.dart';
@@ -19,6 +20,10 @@ import '../../../services/language_service.dart';
 
 class InvestorDashboardPage extends StatefulWidget {
   const InvestorDashboardPage({super.key});
+
+  /// Sign out / account delete er por dakte hobe — na hole porer user
+  /// kichukkhon ager user er dashboard dekhte pay
+  static void clearCache() => _InvestorDashboardPageState.clearCache();
 
   @override
   State<InvestorDashboardPage> createState() => _InvestorDashboardPageState();
@@ -70,22 +75,60 @@ class _InvestorDashboardPageState extends State<InvestorDashboardPage> {
   String? _avatarUrl;
   int _unreadNotificationCount = 0;
   double _totalInvested = 0.0;
+  double _projectInvested = 0.0;
+  double _groupInvested = 0.0;
   double _returnsEarned = 0.0;
   double _portfolioValue = 0.0;
   int _activeCount = 0;
-  final int _completedCount = 0;
   int _pendingTransactions = 0;
   double _pendingAmount = 0.0;
 
   List<Map<String, dynamic>> _openProjects = [];
   List<Map<String, dynamic>> _recentInvestments = [];
 
+  /// User er shesh notification — "Latest update" banner e dekhay
+  Map<String, dynamic>? _latestNotif;
+
   final ScrollController _recentScrollController = ScrollController();
+
+  // ─── Cache ───
+  static Map<String, dynamic>? _cachedSummary;
+  static Map<String, dynamic>? _cachedUser;
+  static Map<String, dynamic>? _cachedLatestNotif;
+
+  static void clearCache() {
+    _cachedSummary = null;
+    _cachedUser = null;
+    _cachedLatestNotif = null;
+  }
 
   @override
   void initState() {
     super.initState();
-    _loadDashboardData();
+    if (_cachedSummary != null && _cachedSummary!.isNotEmpty && _cachedUser != null) {
+      _applySummary(_cachedSummary!, _cachedUser);
+      _latestNotif = _cachedLatestNotif;
+      _isLoading = false;
+      _loadDashboardData(background: true);
+    } else {
+      _loadDashboardData();
+    }
+  }
+
+  void _applySummary(Map<String, dynamic> summary, Map<String, dynamic>? userData) {
+    _user = userData ?? _user;
+    _avatarUrl = summary['avatarUrl']?.toString();
+    _unreadNotificationCount = (summary['unreadNotificationCount'] as int? ?? 0);
+    _totalInvested = (summary['totalInvested'] as double? ?? 0.0);
+    _projectInvested = (summary['projectInvested'] as double? ?? 0.0);
+    _groupInvested = (summary['groupInvested'] as double? ?? 0.0);
+    _returnsEarned = (summary['totalReturns'] as double? ?? 0.0);
+    _portfolioValue = _totalInvested + _returnsEarned;
+    _activeCount = (summary['activeInvestmentsCount'] as int? ?? 0);
+    _pendingTransactions = (summary['pendingTransactionsCount'] as int? ?? 0);
+    _pendingAmount = (summary['pendingInvestmentsAmount'] as double? ?? 0.0);
+    _openProjects = (summary['openProjects'] as List<Map<String, dynamic>>? ?? []);
+    _recentInvestments = (summary['recentInvestments'] as List<Map<String, dynamic>>? ?? []);
   }
 
   @override
@@ -94,58 +137,51 @@ class _InvestorDashboardPageState extends State<InvestorDashboardPage> {
     super.dispose();
   }
 
-  Future<void> _loadDashboardData() async {
-    setState(() => _isLoading = true);
-
-    var userData = await AuthService.getUserData();
-
-    if (userData == null ||
-        (userData['id'] == null && userData['email'] == null)) {
-      final conn = await DatabaseService.getConnection();
-      if (conn != null) {
-        final res = await conn.execute(
-            'SELECT "id", "name", "email", "phone" FROM users ORDER BY "createdAt" DESC LIMIT 1');
-        if (res.isNotEmpty) {
-          userData = {
-            'id': res.first[0].toString(),
-            'name': res.first[1].toString(),
-            'email': res.first[2].toString(),
-            'phone': res.first[3]?.toString() ?? '',
-          };
-          await AuthService.saveUserData(userData);
-        }
-      }
+  Future<void> _loadDashboardData({bool background = false}) async {
+    if (!background) {
+      setState(() => _isLoading = true);
     }
 
+    final userData = await AuthService.getUserData();
     final userId = userData?['id']?.toString() ?? '';
     final userEmail = userData?['email']?.toString() ?? '';
 
-    final summary =
-    await DatabaseService.getDashboardSummary(userId, email: userEmail);
+    // Login chara onner data kokhono dekhabo na — login page e pathai
+    if (userId.isEmpty) {
+      clearCache();
+      if (!mounted) return;
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const LoginPage()),
+            (route) => false,
+      );
+      return;
+    }
+
+    final results = await Future.wait<dynamic>([
+      DatabaseService.getDashboardSummary(userId, email: userEmail),
+      DatabaseService.getNotificationsData(userId, limit: 1),
+    ]);
+    final summary = results[0] as Map<String, dynamic>;
+    final notifs = results[1] as List<Map<String, dynamic>>;
+    final latest = notifs.isNotEmpty ? notifs.first : null;
 
     if (mounted) {
-      setState(() {
-        _user = userData;
-        if (summary.isNotEmpty) {
-          _avatarUrl = summary['avatarUrl']?.toString();
-          _unreadNotificationCount =
-          (summary['unreadNotificationCount'] as int? ?? 0);
-          _totalInvested = (summary['totalInvested'] as double? ?? 0.0);
-          _returnsEarned = (summary['totalReturns'] as double? ?? 0.0);
-          _portfolioValue = _totalInvested + _returnsEarned;
-          _activeCount = (summary['activeInvestmentsCount'] as int? ?? 0);
-          _pendingTransactions =
-          (summary['pendingTransactionsCount'] as int? ?? 0);
-          _pendingAmount =
-          (summary['pendingInvestmentsAmount'] as double? ?? 0.0);
-          _openProjects =
-          (summary['openProjects'] as List<Map<String, dynamic>>? ?? []);
-          _recentInvestments = (summary['recentInvestments']
-          as List<Map<String, dynamic>>? ??
-              []);
-        }
-        _isLoading = false;
-      });
+      if (summary.isNotEmpty) {
+        _cachedSummary = summary;
+        _cachedUser = userData;
+        _cachedLatestNotif = latest;
+        setState(() {
+          _applySummary(summary, userData);
+          _latestNotif = latest;
+          _isLoading = false;
+        });
+      } else if (!background) {
+        setState(() {
+          _user = userData;
+          _latestNotif = latest;
+          _isLoading = false;
+        });
+      }
     }
   }
 
@@ -208,6 +244,37 @@ class _InvestorDashboardPageState extends State<InvestorDashboardPage> {
                 _buildGreeting(name),
                 const SizedBox(height: 18),
                 _buildHeroCard(),
+                const SizedBox(height: 14),
+                Row(
+                  children: [
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: () => _open(const InvestmentsPage()),
+                        icon: const Icon(Icons.add_circle_outline_rounded, size: 16),
+                        label: Text(LanguageService.tr('Invest in a project', 'প্রজেক্টে ইনভেস্ট করুন')),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: emerald,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () => _open(const BrowseGroupsPage()),
+                        icon: const Icon(Icons.apartment_rounded, size: 16, color: emerald),
+                        label: Text(LanguageService.tr('Invest in Groups', 'গ্রুপে ইনভেস্ট করুন'), style: const TextStyle(color: emerald)),
+                        style: OutlinedButton.styleFrom(
+                          side: const BorderSide(color: emerald),
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
                 const SizedBox(height: 16),
                 _buildStatsGrid(),
                 const SizedBox(height: 28),
@@ -631,24 +698,23 @@ class _InvestorDashboardPageState extends State<InvestorDashboardPage> {
           children: [
             Expanded(
               child: _statCard(
-                icon: Icons.account_balance_wallet_outlined,
-                value: _fmt(_portfolioValue),
-                label: LanguageService.tr(
-                    'Portfolio Value', 'পোর্টফোলিও ভ্যালু'),
+                icon: Icons.trending_up_rounded,
+                value: _fmt(_projectInvested),
+                label: LanguageService.tr('Project Invested', 'প্রজেক্ট ইনভেস্টেড'),
                 color: emerald,
                 soft: emeraldSoft,
-                onTap: () => _open(const PortfolioPage()),
+                onTap: () => _open(const InvestmentsPage()),
               ),
             ),
             const SizedBox(width: 12),
             Expanded(
               child: _statCard(
-                icon: Icons.show_chart_rounded,
-                value: '${_roi.toStringAsFixed(1)}%',
-                label: LanguageService.tr('Return (ROI)', 'রিটার্ন (ROI)'),
-                color: goldDeep,
-                soft: goldSoft,
-                onTap: () => _open(const PortfolioPage()),
+                icon: Icons.apartment_rounded,
+                value: _fmt(_groupInvested),
+                label: LanguageService.tr('Group Invested', 'গ্রুপ ইনভেস্টেড'),
+                color: turquoise,
+                soft: turquoiseSoft,
+                onTap: () => _open(const GroupInvestmentsPage()),
               ),
             ),
           ],
@@ -658,12 +724,12 @@ class _InvestorDashboardPageState extends State<InvestorDashboardPage> {
           children: [
             Expanded(
               child: _statCard(
-                icon: Icons.task_alt_rounded,
-                value: '$_completedCount',
-                label: LanguageService.tr('Completed', 'সম্পন্ন'),
-                color: lapis,
-                soft: lapisSoft,
-                onTap: () => _open(const InvestmentsPage()),
+                icon: Icons.show_chart_rounded,
+                value: '${_roi.toStringAsFixed(1)}%',
+                label: LanguageService.tr('Return (ROI)', 'রিটার্ন (ROI)'),
+                color: goldDeep,
+                soft: goldSoft,
+                onTap: () => _open(const PortfolioPage()),
               ),
             ),
             const SizedBox(width: 12),
@@ -940,12 +1006,14 @@ class _InvestorDashboardPageState extends State<InvestorDashboardPage> {
     (p['progress'] as double? ?? 0.0).clamp(0.0, 1.0);
     final pctInt = (progress * 100).toInt();
     final coverUrl = p['coverImageUrl']?.toString() ?? '';
-    final location = p['location']?.toString() ?? 'Narayanganj';
-    final daysLeft = p['daysLeft'] as int? ?? 116;
-    final investorsCount = p['investorsCount'] as int? ?? 1;
+    final location = p['location']?.toString() ?? '';
+    final daysLeft = p['daysLeft'] as int? ?? 0;
+    final investorsCount = p['investorsCount'] as int? ?? 0;
     final goal = (p['fundingGoalBdt'] as double? ?? 0.0);
     final minInv = (p['minInvestmentBdt'] as double? ?? 0.0);
-    final ret = _asPercent(p['expectedReturnPct'] as double? ?? 0.0);
+    // Project er nijer range (returnPctMin–Max), ek hole ekta-i
+    final rLo = _asPercent((p['returnMin'] as num?)?.toDouble() ?? 0.0);
+    final rHi = _asPercent((p['returnMax'] as num?)?.toDouble() ?? 0.0);
     final accent = _accents[index % _accents.length];
 
     return GestureDetector(
@@ -1129,7 +1197,9 @@ class _InvestorDashboardPageState extends State<InvestorDashboardPage> {
                       children: [
                         _projectMetric(
                           LanguageService.tr('Return', 'রিটার্ন'),
-                          '${ret.toStringAsFixed(0)}%',
+                          rLo == rHi
+                              ? '${rHi.toStringAsFixed(0)}%'
+                              : '${rLo.toStringAsFixed(0)}–${rHi.toStringAsFixed(0)}%',
                           emerald,
                           emeraldSoft,
                         ),
@@ -1447,8 +1517,31 @@ class _InvestorDashboardPageState extends State<InvestorDashboardPage> {
     );
   }
 
-  // ─── Project Updates ──────────────────────────────────────
+  // ─── Latest update (user er shesh notification) ───────────
+  // Kono notification na thakle banner dekhay-i na — banano lekha nei
+  String _updateWhen(String raw) {
+    final d = DateTime.tryParse(raw)?.toLocal();
+    if (d == null) return '';
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    final now = DateTime.now();
+    final diff = DateTime(now.year, now.month, now.day)
+        .difference(DateTime(d.year, d.month, d.day))
+        .inDays;
+    if (diff == 0) return LanguageService.tr('Today', 'আজ');
+    if (diff == 1) return LanguageService.tr('Yesterday', 'গতকাল');
+    return '${months[d.month - 1]} ${d.day}';
+  }
+
   Widget _buildProjectUpdatesSection() {
+    final n = _latestNotif;
+    if (n == null) return const SizedBox.shrink();
+
+    final title = n['title']?.toString() ?? '';
+    final body = n['body']?.toString() ?? '';
+    final when = _updateWhen(n['createdAt']?.toString() ?? '');
+    final isNew = n['isRead'] == false;
+
     return GestureDetector(
       onTap: () => _open(const NotificationsPage()),
       child: ClipRRect(
@@ -1491,21 +1584,35 @@ class _InvestorDashboardPageState extends State<InvestorDashboardPage> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
-                            LanguageService.tr(
-                                'PROJECT UPDATE', 'প্রজেক্ট আপডেট'),
-                            style: const TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w700,
-                              color: goldLight,
-                              letterSpacing: 1.2,
-                            ),
+                          Row(
+                            children: [
+                              Text(
+                                isNew
+                                    ? LanguageService.tr('NEW UPDATE', 'নতুন আপডেট')
+                                    : LanguageService.tr('LATEST UPDATE', 'সর্বশেষ আপডেট'),
+                                style: const TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w700,
+                                  color: goldLight,
+                                  letterSpacing: 1.2,
+                                ),
+                              ),
+                              if (when.isNotEmpty) ...[
+                                Text(
+                                  '  ·  $when',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    color: Colors.white.withAlpha(150),
+                                  ),
+                                ),
+                              ],
+                            ],
                           ),
                           const SizedBox(height: 3),
                           Text(
-                            LanguageService.tr(
-                                'Quarterly profit distribution credited',
-                                'ত্রৈমাসিক মুনাফা ক্রেডিট করা হয়েছে'),
+                            title.isNotEmpty ? title : body,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
                               fontSize: 13.5,
                               fontWeight: FontWeight.w600,
@@ -1865,6 +1972,7 @@ class _InvestorDashboardPageState extends State<InvestorDashboardPage> {
                 final nav = Navigator.of(context);
                 nav.pop();
                 await AuthService.logout();
+                clearCache();
                 nav.pushAndRemoveUntil(
                   MaterialPageRoute(builder: (context) => const LoginPage()),
                       (route) => false,

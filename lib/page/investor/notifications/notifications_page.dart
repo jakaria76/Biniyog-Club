@@ -1,4 +1,9 @@
 import 'package:flutter/material.dart';
+
+import '../../authentication/login_page.dart';
+import '../kyc/kyc_page.dart';
+import '../portfolio/investments_page.dart';
+import '../projects/my_projects_page.dart';
 import '../../../services/auth_service.dart';
 import '../../../services/database_service.dart';
 import '../../../services/language_service.dart';
@@ -11,23 +16,39 @@ class NotificationsPage extends StatefulWidget {
 }
 
 class _NotificationsPageState extends State<NotificationsPage> {
+  // ─── Palette (dashboard er moto) ───
+  static const Color emerald = Color(0xFF0E4A37);
+  static const Color emeraldSoft = Color(0xFFE3F0E9);
+  static const Color gold = Color(0xFFB8935A);
+  static const Color goldDeep = Color(0xFF8A6A3A);
+  static const Color goldSoft = Color(0xFFF6EEDF);
+  static const Color turquoise = Color(0xFF167A80);
+  static const Color turquoiseSoft = Color(0xFFE0F1F1);
+  static const Color lapis = Color(0xFF26437A);
+  static const Color lapisSoft = Color(0xFFE5EAF4);
+  static const Color terracotta = Color(0xFFA5523A);
+  static const Color terracottaSoft = Color(0xFFF7E6DF);
+  static const Color ivory = Color(0xFFF7F4EE);
+  static const Color ink = Color(0xFF1C2421);
+  static const Color muted = Color(0xFF6E736F);
+  static const Color line = Color(0xFFE8E2D7);
+  static const Color danger = Color(0xFFB4413A);
+  static const Color dangerSoft = Color(0xFFFBEAE8);
+
+  static const List<String> _months = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+  ];
+
   bool _isLoading = true;
+  bool _needsLogin = false;
+  bool _loadFailed = false;
+  String _userId = '';
+
   List<Map<String, dynamic>> _notifications = [];
 
-  static const Map<String, String> notifTypeIcons = {
-    'INVESTMENT_CONFIRMED': '✅',
-    'INVESTMENT_MATURED': '🎉',
-    'PAYMENT_RECEIVED': '💰',
-    'PAYMENT_FAILED': '❌',
-    'PROJECT_APPROVED': '✅',
-    'PROJECT_FUNDED': '🌾',
-    'PROJECT_UPDATE': '📋',
-    'KYC_APPROVED': '🛡️',
-    'KYC_REJECTED': '⚠️',
-    'WITHDRAWAL_APPROVED': '✅',
-    'WITHDRAWAL_COMPLETED': '💸',
-    'SYSTEM': '🔔',
-  };
+  /// Ei bar page khular shomoy je gulo notun chhilo — highlight thakbe
+  final Set<String> _newIds = {};
 
   @override
   void initState() {
@@ -35,240 +56,416 @@ class _NotificationsPageState extends State<NotificationsPage> {
     _loadNotifications();
   }
 
+  // ═════════════════════════════════════════════════════════
+  // DATA
+  // ═════════════════════════════════════════════════════════
   Future<void> _loadNotifications() async {
-    setState(() => _isLoading = true);
+    if (mounted) setState(() => _isLoading = true);
 
     final userData = await AuthService.getUserData();
     final userId = userData?['id']?.toString() ?? '';
+
+    if (userId.isEmpty) {
+      if (mounted) {
+        setState(() {
+          _needsLogin = true;
+          _isLoading = false;
+        });
+      }
+      return;
+    }
 
     final list = await DatabaseService.getNotificationsData(userId);
+    final failed = list.isEmpty && DatabaseService.lastRequestFailed;
 
-    // Auto mark all notifications as read in Neon DB when viewing page
-    if (userId.isNotEmpty) {
-      await DatabaseService.markAllNotificationsAsRead(userId);
-    }
-
-    if (mounted) {
-      setState(() {
-        _notifications = list;
-        for (var n in _notifications) {
-          n['isRead'] = true;
-        }
-        _isLoading = false;
-      });
-    }
-  }
-
-  int get _unreadCount =>
-      _notifications.where((n) => n['isRead'] == false).length;
-
-  Future<void> _markAllAsRead() async {
-    final userData = await AuthService.getUserData();
-    final userId = userData?['id']?.toString() ?? '';
-    if (userId.isNotEmpty) {
-      await DatabaseService.markAllNotificationsAsRead(userId);
-    }
-
+    if (!mounted) return;
     setState(() {
-      for (var n in _notifications) {
-        n['isRead'] = true;
+      _userId = userId;
+      _needsLogin = false;
+      _loadFailed = failed;
+      if (!failed) {
+        _notifications = list;
+        // Notun gulo mone rakhi, jeno ei bar highlight dekhay
+        for (final n in list) {
+          if (n['isRead'] == false) _newIds.add(n['id'].toString());
+        }
       }
+      _isLoading = false;
     });
 
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(LanguageService.tr('All notifications marked as read.', 'সকল নোটিফিকেশন পড়া হিসেবে চিহ্নিত হয়েছে।')),
-          backgroundColor: Colors.teal,
-        ),
-      );
+    // Dashboard er badge clear korar jonno server e read kore dei.
+    // Screen e notun gulo tobuo highlight thake, karon _newIds e ache.
+    if (!failed && _newIds.isNotEmpty) {
+      DatabaseService.markAllNotificationsAsRead(userId);
     }
   }
 
+  // ═════════════════════════════════════════════════════════
+  // HELPERS
+  // ═════════════════════════════════════════════════════════
+  bool get _isBn => LanguageService.isBangla;
+
+  String _two(int n) => n.toString().padLeft(2, '0');
+
+  String _time(DateTime d) {
+    final h = d.hour % 12 == 0 ? 12 : d.hour % 12;
+    final ampm = d.hour < 12 ? 'AM' : 'PM';
+    return '$h:${_two(d.minute)} $ampm';
+  }
+
+  /// "Today, 2:30 PM" · "Yesterday, 9:10 AM" · "Oct 13" · "Oct 13, 2025"
+  String _when(String raw) {
+    final d = DateTime.tryParse(raw)?.toLocal();
+    if (d == null) return '';
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final day = DateTime(d.year, d.month, d.day);
+    final diff = today.difference(day).inDays;
+
+    if (diff == 0) return '${_isBn ? 'আজ' : 'Today'}, ${_time(d)}';
+    if (diff == 1) return '${_isBn ? 'গতকাল' : 'Yesterday'}, ${_time(d)}';
+    if (d.year == now.year) return '${_months[d.month - 1]} ${d.day}';
+    return '${_months[d.month - 1]} ${d.day}, ${d.year}';
+  }
+
+  /// Ki dhoroner notification — icon ar color
+  (IconData, Color, Color) _style(String type) {
+    switch (type) {
+      case 'INVESTMENT_CONFIRMED':
+        return (Icons.check_circle_outline_rounded, emerald, emeraldSoft);
+      case 'INVESTMENT_MATURED':
+        return (Icons.celebration_outlined, goldDeep, goldSoft);
+      case 'PAYMENT_RECEIVED':
+        return (Icons.payments_outlined, emerald, emeraldSoft);
+      case 'PAYMENT_FAILED':
+        return (Icons.error_outline_rounded, danger, dangerSoft);
+      case 'PROJECT_APPROVED':
+      case 'PROJECT_FUNDED':
+        return (Icons.agriculture_outlined, turquoise, turquoiseSoft);
+      case 'PROJECT_UPDATE':
+        return (Icons.campaign_outlined, lapis, lapisSoft);
+      case 'KYC_APPROVED':
+        return (Icons.verified_user_outlined, emerald, emeraldSoft);
+      case 'KYC_REJECTED':
+        return (Icons.gpp_bad_outlined, danger, dangerSoft);
+      case 'WITHDRAWAL_APPROVED':
+      case 'WITHDRAWAL_COMPLETED':
+        return (Icons.account_balance_outlined, turquoise, turquoiseSoft);
+      default:
+        return (Icons.notifications_none_rounded, terracotta, terracottaSoft);
+    }
+  }
+
+  /// Notification er dhoron dekhe kon page khulbe (na thakle null)
+  Widget? _targetPage(String type) {
+    if (type.startsWith('INVESTMENT_') || type.startsWith('PAYMENT_')) {
+      return const InvestmentsPage();
+    }
+    if (type.startsWith('PROJECT_')) return const MyProjectsPage();
+    if (type.startsWith('KYC_')) return const KycPage();
+    return null;
+  }
+
+  void _onTap(Map<String, dynamic> n) {
+    // Server e already read; tobuo ei notification ta alada kore nishchit kori
+    if (n['isRead'] == false) {
+      DatabaseService.markNotificationAsRead(n['id'].toString(), userId: _userId);
+      n['isRead'] = true;
+    }
+    final page = _targetPage(n['type']?.toString() ?? '');
+    if (page != null) {
+      Navigator.push(context, MaterialPageRoute(builder: (_) => page));
+    }
+  }
+
+  // ═════════════════════════════════════════════════════════
+  // BUILD
+  // ═════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<String>(
       valueListenable: LanguageService.currentLanguage,
       builder: (context, lang, child) {
+        final newCount = _notifications.where((n) => _newIds.contains(n['id'].toString())).length;
+
         return Scaffold(
-          backgroundColor: const Color(0xFFF4F7F6),
+          backgroundColor: ivory,
           appBar: AppBar(
-            backgroundColor: Colors.white,
-            elevation: 0.5,
-            iconTheme: const IconThemeData(color: Colors.teal),
+            backgroundColor: ivory,
+            surfaceTintColor: Colors.transparent,
+            elevation: 0,
+            iconTheme: const IconThemeData(color: ink),
             title: Text(
-              LanguageService.tr('Notifications', 'নোটিফিকেশনস'),
-              style: const TextStyle(
-                color: Colors.black87,
-                fontWeight: FontWeight.bold,
-                fontSize: 18,
-              ),
+              LanguageService.tr('Notifications', 'নোটিফিকেশন'),
+              style: const TextStyle(color: ink, fontWeight: FontWeight.w700, fontSize: 18),
             ),
-            actions: [
-              if (_unreadCount > 0)
-                TextButton(
-                  onPressed: _markAllAsRead,
-                  child: Text(
-                    LanguageService.tr('Mark as read', 'পড়া হয়েছে চিহ্নিত করুন'),
-                    style: const TextStyle(color: Colors.teal, fontSize: 12),
-                  ),
-                ),
-            ],
           ),
           body: _isLoading
-              ? const Center(child: CircularProgressIndicator(color: Colors.teal))
+              ? const Center(
+            child: SizedBox(
+              width: 28,
+              height: 28,
+              child: CircularProgressIndicator(color: emerald, strokeWidth: 2.4),
+            ),
+          )
+              : _needsLogin
+              ? _buildMessage(
+            icon: Icons.lock_outline_rounded,
+            title: LanguageService.tr('Please log in to see your notifications',
+                'নোটিফিকেশন দেখতে লগইন করুন'),
+            buttonLabel: LanguageService.tr('Log in', 'লগইন'),
+            onTap: () async {
+              await AuthService.logout();
+              if (!mounted) return;
+              Navigator.of(context).pushAndRemoveUntil(
+                MaterialPageRoute(builder: (_) => const LoginPage()),
+                    (route) => false,
+              );
+            },
+          )
+              : _loadFailed
+              ? _buildMessage(
+            icon: Icons.wifi_off_rounded,
+            title: LanguageService.tr('Could not load notifications',
+                'নোটিফিকেশন লোড করা যায়নি'),
+            subtitle: LanguageService.tr(
+                'Please check your internet connection.',
+                'ইন্টারনেট সংযোগ চেক করুন।'),
+            buttonLabel: LanguageService.tr('Try again', 'আবার চেষ্টা করুন'),
+            onTap: _loadNotifications,
+          )
               : RefreshIndicator(
-                  onRefresh: _loadNotifications,
-                  color: Colors.teal,
-                  child: SingleChildScrollView(
-                    physics: const AlwaysScrollableScrollPhysics(),
-                    padding: const EdgeInsets.all(16.0),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(
-                              LanguageService.tr(
-                                  '${_notifications.length} total notifications',
-                                  'মোট ${_notifications.length} টি নোটিফিকেশন'),
-                              style:
-                                  TextStyle(fontSize: 13, color: Colors.grey[600]),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 16),
-
-                        _notifications.isEmpty
-                            ? _buildEmptyState()
-                            : ListView.separated(
-                                shrinkWrap: true,
-                                physics: const NeverScrollableScrollPhysics(),
-                                itemCount: _notifications.length,
-                                separatorBuilder: (context, index) =>
-                                    const SizedBox(height: 10),
-                                itemBuilder: (context, index) {
-                                  final n = _notifications[index];
-                                  final bool isRead = n['isRead'] as bool? ?? true;
-                                  final String icon =
-                                      notifTypeIcons[n['type']] ?? '🔔';
-
-                                  return GestureDetector(
-                                    onTap: () async {
-                                      setState(() {
-                                        n['isRead'] = true;
-                                      });
-                                      await DatabaseService.markNotificationAsRead(
-                                          n['id'].toString());
-                                    },
-                                    child: Container(
-                                      padding: const EdgeInsets.all(14),
-                                      decoration: BoxDecoration(
-                                        color: isRead
-                                            ? Colors.white
-                                            : Colors.teal.shade50,
-                                        borderRadius: BorderRadius.circular(14),
-                                        border: Border.all(
-                                          color: isRead
-                                              ? Colors.grey.shade200
-                                              : Colors.teal.shade200,
-                                        ),
-                                      ),
-                                      child: Row(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Text(icon,
-                                              style: const TextStyle(fontSize: 22)),
-                                          const SizedBox(width: 12),
-                                          Expanded(
-                                            child: Column(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.start,
-                                              children: [
-                                                Row(
-                                                  mainAxisAlignment:
-                                                      MainAxisAlignment
-                                                          .spaceBetween,
-                                                  children: [
-                                                    Expanded(
-                                                      child: Text(
-                                                        n['title'] as String? ??
-                                                            'Notification',
-                                                        style: TextStyle(
-                                                          fontSize: 13.5,
-                                                          fontWeight:
-                                                              FontWeight.bold,
-                                                          color: isRead
-                                                              ? Colors.black87
-                                                              : Colors.teal.shade900,
-                                                        ),
-                                                      ),
-                                                    ),
-                                                    if (!isRead)
-                                                      Container(
-                                                        width: 8,
-                                                        height: 8,
-                                                        decoration:
-                                                            const BoxDecoration(
-                                                          color: Colors.teal,
-                                                          shape: BoxShape.circle,
-                                                        ),
-                                                      ),
-                                                  ],
-                                                ),
-                                                const SizedBox(height: 4),
-                                                Text(
-                                                  n['body'] as String? ?? '',
-                                                  style: TextStyle(
-                                                    fontSize: 12,
-                                                    color: Colors.grey[700],
-                                                    height: 1.3,
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  );
-                                },
-                              ),
-                        const SizedBox(height: 24),
-                      ],
-                    ),
-                  ),
-                ),
+            onRefresh: _loadNotifications,
+            color: emerald,
+            child: _notifications.isEmpty
+                ? ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.fromLTRB(18, 6, 18, 40),
+              children: [_buildEmptyState()],
+            )
+                : ListView.separated(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.fromLTRB(18, 6, 18, 40),
+              itemCount: _notifications.length + 1,
+              separatorBuilder: (_, i) =>
+                  SizedBox(height: i == 0 ? 14 : 10),
+              itemBuilder: (context, i) {
+                if (i == 0) {
+                  return Text(
+                    newCount > 0
+                        ? LanguageService.tr(
+                        '$newCount new · ${_notifications.length} total',
+                        '$newCount টি নতুন · মোট ${_notifications.length} টি')
+                        : LanguageService.tr(
+                        '${_notifications.length} notifications',
+                        'মোট ${_notifications.length} টি নোটিফিকেশন'),
+                    style: const TextStyle(fontSize: 13, color: muted),
+                  );
+                }
+                return _buildTile(_notifications[i - 1]);
+              },
+            ),
+          ),
         );
       },
     );
   }
 
-  Widget _buildEmptyState() {
-    return Center(
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(32),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: Colors.grey.shade200),
+  Widget _buildTile(Map<String, dynamic> n) {
+    final id = n['id'].toString();
+    final type = n['type']?.toString() ?? 'SYSTEM';
+    final isNew = _newIds.contains(id);
+    final style = _style(type);
+    final hasTarget = _targetPage(type) != null;
+    final title = n['title']?.toString() ?? '';
+    final body = n['body']?.toString() ?? '';
+    final when = _when(n['createdAt']?.toString() ?? '');
+
+    return Material(
+      color: isNew ? goldSoft : Colors.white,
+      borderRadius: BorderRadius.circular(18),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: () => _onTap(n),
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: isNew ? gold.withAlpha(110) : line),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: isNew ? Colors.white : style.$3,
+                  borderRadius: BorderRadius.circular(13),
+                ),
+                child: Icon(style.$1, color: style.$2, size: 21),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: Text(
+                            title.isEmpty
+                                ? LanguageService.tr('Notification', 'নোটিফিকেশন')
+                                : title,
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: isNew ? FontWeight.w700 : FontWeight.w600,
+                              color: ink,
+                              height: 1.3,
+                            ),
+                          ),
+                        ),
+                        if (isNew) ...[
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: goldDeep,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              LanguageService.tr('NEW', 'নতুন'),
+                              style: const TextStyle(
+                                fontSize: 9,
+                                fontWeight: FontWeight.w800,
+                                color: Colors.white,
+                                letterSpacing: 0.5,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                    if (body.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        body,
+                        style: const TextStyle(fontSize: 12.5, color: muted, height: 1.4),
+                      ),
+                    ],
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        if (when.isNotEmpty)
+                          Text(
+                            when,
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: muted.withAlpha(200),
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        const Spacer(),
+                        if (hasTarget)
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                LanguageService.tr('View', 'দেখুন'),
+                                style: TextStyle(
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.w700,
+                                  color: style.$2,
+                                ),
+                              ),
+                              Icon(Icons.chevron_right_rounded, size: 16, color: style.$2),
+                            ],
+                          ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildEmptyState() {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(top: 40),
+      padding: const EdgeInsets.symmetric(vertical: 36, horizontal: 24),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: line),
+      ),
+      child: Column(
+        children: [
+          Container(
+            width: 60,
+            height: 60,
+            decoration: const BoxDecoration(color: goldSoft, shape: BoxShape.circle),
+            child: const Icon(Icons.notifications_none_rounded, size: 28, color: goldDeep),
+          ),
+          const SizedBox(height: 14),
+          Text(
+            LanguageService.tr('No notifications yet', 'এখনো কোনো নোটিফিকেশন নেই'),
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: ink),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            LanguageService.tr('Updates about your investments and KYC will appear here.',
+                'আপনার বিনিয়োগ ও KYC সংক্রান্ত আপডেট এখানে দেখাবে।'),
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 12.5, color: muted, height: 1.4),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMessage({
+    required IconData icon,
+    required String title,
+    String? subtitle,
+    required String buttonLabel,
+    required VoidCallback onTap,
+  }) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
         child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.notifications_off_outlined,
-                size: 40, color: Colors.grey),
+            Icon(icon, size: 40, color: goldDeep),
             const SizedBox(height: 12),
             Text(
-              LanguageService.tr('No notifications yet', 'কোনো নোটিফিকেশন নেই'),
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              title,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: ink),
             ),
-            const SizedBox(height: 4),
-            Text(
-              LanguageService.tr("You'll be notified about your investments here.", 'আপনার বিনিয়োগের যাবতীয় আপডেট এখানে দেখতে পাবেন।'),
-              style: TextStyle(fontSize: 12.5, color: Colors.grey[600]),
+            if (subtitle != null) ...[
+              const SizedBox(height: 4),
+              Text(
+                subtitle,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 12.5, color: muted),
+              ),
+            ],
+            const SizedBox(height: 16),
+            FilledButton(
+              onPressed: onTap,
+              style: FilledButton.styleFrom(
+                backgroundColor: emerald,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              child: Text(buttonLabel),
             ),
           ],
         ),

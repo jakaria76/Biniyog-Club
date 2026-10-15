@@ -1,5 +1,6 @@
 package com.example.biniyog_club
 
-import io.flutter.embedding.android.FlutterActivity
+// App lock (fingerprint) er jonno FlutterFragmentActivity lagbe
+import io.flutter.embedding.android.FlutterFragmentActivity
 
-class MainActivity : FlutterActivity()
+class MainActivity : FlutterFragmentActivity()

@@ -11,10 +11,11 @@ import '../../../services/cloudinary_service.dart';
 import '../../../services/database_service.dart';
 import '../../../services/language_service.dart';
 import '../../../services/pdf_service.dart';
+import '../../authentication/login_page.dart';
+import '../kyc/kyc_page.dart';
 
 // ─── Palette ───
 const Color _emerald = Color(0xFF0E4A37);
-const Color _emeraldDeep = Color(0xFF0A3327);
 const Color _emeraldSoft = Color(0xFFE3F0E9);
 const Color _gold = Color(0xFFB8935A);
 const Color _goldDeep = Color(0xFF8A6A3A);
@@ -24,7 +25,6 @@ const Color _turquoiseSoft = Color(0xFFE0F1F1);
 const Color _lapis = Color(0xFF26437A);
 const Color _lapisSoft = Color(0xFFE5EAF4);
 const Color _terracotta = Color(0xFFA5523A);
-const Color _terracottaSoft = Color(0xFFF7E6DF);
 const Color _ivory = Color(0xFFF7F4EE);
 const Color _ink = Color(0xFF1C2421);
 const Color _muted = Color(0xFF6E736F);
@@ -54,10 +54,12 @@ Future<void> _saveAndNotify(
       ),
     );
   } catch (e) {
+    debugPrint('Save file error: $e');
     messenger.showSnackBar(
       SnackBar(
         content: Text(LanguageService.tr(
-            'Could not save file: $e', 'ফাইল সেভ করা যায়নি: $e')),
+            'Could not save the file. Please check storage permission and try again.',
+            'ফাইল সেভ করা যায়নি। স্টোরেজ পারমিশন চেক করে আবার চেষ্টা করুন।')),
         backgroundColor: _danger,
       ),
     );
@@ -85,6 +87,7 @@ class PdfViewerScreen extends StatefulWidget {
 
 class _PdfViewerScreenState extends State<PdfViewerScreen> {
   String? _localPath;
+  bool _failed = false;
 
   @override
   void initState() {
@@ -96,12 +99,12 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
     try {
       final tempDir = await getTemporaryDirectory();
       final tempFile = File('${tempDir.path}/${widget.fileName}');
-      await tempFile.writeAsBytes(widget.bytes);
-      setState(() {
-        _localPath = tempFile.path;
-      });
+      await tempFile.writeAsBytes(widget.bytes, flush: true);
+      if (!mounted) return;
+      setState(() => _localPath = tempFile.path);
     } catch (e) {
       debugPrint("Error saving temp PDF: $e");
+      if (mounted) setState(() => _failed = true);
     }
   }
 
@@ -130,19 +133,35 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
           const SizedBox(width: 4),
         ],
       ),
-      body: _localPath == null
+      body: _failed
+          ? Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(
+            LanguageService.tr('Could not open this PDF. Try downloading it instead.',
+                'পিডিএফ খোলা যায়নি। ডাউনলোড করে দেখুন।'),
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 13, color: _muted),
+          ),
+        ),
+      )
+          : _localPath == null
           ? const Center(child: CircularProgressIndicator(color: _emerald))
           : PDFView(
-              filePath: _localPath,
-              enableSwipe: true,
-              swipeHorizontal: true,
-              autoSpacing: false,
-              pageFling: true,
-              pageSnap: true,
-              defaultPage: 0,
-              fitPolicy: FitPolicy.BOTH,
-              preventLinkNavigation: false,
-            ),
+        filePath: _localPath,
+        enableSwipe: true,
+        swipeHorizontal: true,
+        autoSpacing: false,
+        pageFling: true,
+        pageSnap: true,
+        defaultPage: 0,
+        fitPolicy: FitPolicy.BOTH,
+        preventLinkNavigation: false,
+        onError: (e) {
+          debugPrint('PDFView error: $e');
+          if (mounted) setState(() => _failed = true);
+        },
+      ),
     );
   }
 }
@@ -205,14 +224,16 @@ class DocumentsPage extends StatefulWidget {
 
 class _DocumentsPageState extends State<DocumentsPage> {
   bool _isLoading = true;
+  bool _needsLogin = false;
+  bool _loadFailed = false;
   String _userId = '';
-  Map<String, dynamic>? _user;
 
   Map<String, List<Map<String, dynamic>>> _categorizedDocs = {
     'contracts': [],
     'kycDocs': [],
     'paymentReceipts': [],
     'investmentReceipts': [],
+    'groupInvestmentReceipts': [],
     'distributionStatements': [],
     'harvestReports': [],
     'projectDocs': [],
@@ -230,12 +251,13 @@ class _DocumentsPageState extends State<DocumentsPage> {
   // Kon item er kaj cholche (loader dekhate)
   final Set<String> _busy = {};
 
-  static const Map<String, String> categoryDropdownOptions = {
-    'PAYMENT_RECEIPT': 'Payment Receipt',
-    'KYC': 'KYC Document',
-    'INVESTMENT_AGREEMENT': 'Investment Agreement',
-    'PROJECT_DOCUMENT': 'Project Document',
-    'OTHER': 'Other Document',
+  // Website er DocumentCategory enum er sathe mile — "Other" chilo, kintu DB
+  // te sheta chupchap "Payment Receipt" hoye jeto, tai bad
+  Map<String, String> get categoryDropdownOptions => {
+    'PAYMENT_RECEIPT': LanguageService.tr('Payment Receipt', 'পেমেন্ট রিসিট'),
+    'INVESTMENT_AGREEMENT': LanguageService.tr('Investment Agreement', 'বিনিয়োগ চুক্তি'),
+    'KYC': LanguageService.tr('KYC Supporting Document', 'কেওয়াইসি সহায়ক নথি'),
+    'PROJECT_DOCUMENT': LanguageService.tr('Other Document', 'অন্যান্য নথি'),
   };
 
   @override
@@ -252,20 +274,43 @@ class _DocumentsPageState extends State<DocumentsPage> {
   }
 
   Future<void> _loadDocumentsData() async {
-    setState(() => _isLoading = true);
+    if (mounted) setState(() => _isLoading = true);
 
     final userData = await AuthService.getUserData();
     final userId = userData?['id']?.toString() ?? '';
-    final categorized = await DatabaseService.getDocumentsCategorized(userId);
 
-    if (mounted) {
-      setState(() {
-        _user = userData;
-        _userId = userId;
-        _categorizedDocs = categorized;
-        _isLoading = false;
-      });
+    if (userId.isEmpty) {
+      if (mounted) {
+        setState(() {
+          _needsLogin = true;
+          _isLoading = false;
+        });
+      }
+      return;
     }
+
+    final categorized = await DatabaseService.getDocumentsCategorized(userId);
+    // Khali mane "kichu nei" naki "net nei" — alada kori
+    final empty = categorized.values.every((l) => l.isEmpty);
+    final failed = empty && DatabaseService.lastRequestFailed;
+
+    if (!mounted) return;
+    setState(() {
+      _userId = userId;
+      _categorizedDocs = categorized;
+      _needsLogin = false;
+      _loadFailed = failed;
+      _isLoading = false;
+    });
+  }
+
+  Future<void> _goToLogin() async {
+    await AuthService.logout();
+    if (!mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const LoginPage()),
+          (route) => false,
+    );
   }
 
   // ─── Helpers ──────────────────────────────────────────────
@@ -289,6 +334,11 @@ class _DocumentsPageState extends State<DocumentsPage> {
 
   String _statusLabel(String st) {
     switch (st) {
+      case 'NOT_STARTED':
+        return LanguageService.tr('Not Started', 'শুরু হয়নি');
+      case 'PENDING':
+      case 'UNDER_REVIEW':
+        return LanguageService.tr('Under Review', 'পর্যালোচনায়');
       case 'ACTIVE':
         return LanguageService.tr('Active', 'একটিভ');
       case 'CONFIRMED':
@@ -308,7 +358,10 @@ class _DocumentsPageState extends State<DocumentsPage> {
       case 'REJECTED':
         return LanguageService.tr('Rejected', 'বাতিল');
       default:
-        return LanguageService.tr('Draft', 'ড্রাফট');
+      // Ojana status "Draft" bolbo na — ja ache tai dekhai
+        if (st.isEmpty) return '—';
+        final w = st.replaceAll('_', ' ').toLowerCase();
+        return w[0].toUpperCase() + w.substring(1);
     }
   }
 
@@ -321,7 +374,11 @@ class _DocumentsPageState extends State<DocumentsPage> {
         return _emerald;
       case 'PAYMENT_PENDING':
       case 'SUBMITTED':
+      case 'PENDING':
+      case 'UNDER_REVIEW':
         return _goldDeep;
+      case 'NOT_STARTED':
+        return _muted;
       case 'COMPLETED':
       case 'MATURED':
         return _lapis;
@@ -340,50 +397,22 @@ class _DocumentsPageState extends State<DocumentsPage> {
           status == 'MATURED';
 
   // ─── Certificate ──────────────────────────────────────────
-  Map<String, dynamic>? _receiptFor(String id) {
-    for (final r in _categorizedDocs['investmentReceipts'] ?? []) {
-      if (r['id']?.toString() == id) return r;
-    }
-    return null;
-  }
 
-  CertificateData _certData(Map<String, dynamic> doc) {
-    final id = doc['id']?.toString() ?? '';
-    final certNo = doc['certificateNo']?.toString() ??
-        'BC-${id.substring(0, id.length >= 12 ? 12 : id.length).toUpperCase()}';
-
-    String pick(String key, String fallback) {
-      final v = doc[key]?.toString();
-      return (v == null || v.isEmpty) ? fallback : v;
-    }
-
-    return CertificateData(
-      certNo: certNo,
-      issuedDate:
-      PdfService.formatDate(doc['issuedDate'] ?? doc['createdAt']),
-      status: pick('status', 'CONFIRMED'),
-      principal: (doc['amountInvested'] ?? doc['amountBdt'] as num?)
-          ?.toDouble() ??
-          0.0,
-      investorName: pick('userName', _user?['name']?.toString() ?? 'Investor'),
-      investorEmail: pick('userEmail', _user?['email']?.toString() ?? '-'),
-      investorPhone: pick('userPhone',
-          (_user?['phone']?.toString().isNotEmpty ?? false)
-              ? _user!['phone'].toString()
-              : '-'),
-      projectTitle: pick('projectTitle', pick('title', 'Biniyog Project')),
-      location: pick('location', 'Bangladesh'),
-      returnType: pick('returnType', 'Profit Share'),
-      verifyUrl:
-      pick('verifyUrl', 'https://biniyogclub.com/verify/$certNo'),
-    );
-  }
+  // Certificate er data website er certificate theke (database), QR e website
+  // er link: https://biniyogclub.com/verify/<receiptNumber> — tai scan korle
+  // website er PDF er motoi verify hoy.
+  String _certFileName(Map<String, dynamic> doc) =>
+      'Certificate_${doc['certificateNo'] ?? doc['id']}.pdf';
 
   Future<Uint8List?> _buildCert(Map<String, dynamic> doc) async {
     final key = 'cert-${doc['id']}';
     setState(() => _busy.add(key));
     try {
-      return await PdfService.buildCertificate(_certData(doc));
+      final category = doc['category']?.toString() ?? '';
+      if (category == 'GROUP_INVESTMENT_RECEIPT') {
+        return await PdfService.buildGroupWebsiteCertificate(doc);
+      }
+      return await PdfService.buildWebsiteCertificate(doc);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -417,7 +446,6 @@ class _DocumentsPageState extends State<DocumentsPage> {
     if (!_guardCertificate(doc)) return;
     final bytes = await _buildCert(doc);
     if (bytes == null || !mounted) return;
-    final data = _certData(doc);
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -425,7 +453,7 @@ class _DocumentsPageState extends State<DocumentsPage> {
           title: LanguageService.tr(
               'Investment Certificate', 'ইনভেস্টমেন্ট সার্টিফিকেট'),
           bytes: bytes,
-          fileName: 'Certificate_${data.certNo}.pdf',
+          fileName: _certFileName(doc),
         ),
       ),
     );
@@ -435,8 +463,7 @@ class _DocumentsPageState extends State<DocumentsPage> {
     if (!_guardCertificate(doc)) return;
     final bytes = await _buildCert(doc);
     if (bytes == null || !mounted) return;
-    await _saveAndNotify(
-        context, bytes, 'Certificate_${_certData(doc).certNo}.pdf');
+    await _saveAndNotify(context, bytes, _certFileName(doc));
   }
 
   // ─── Uploaded documents ───────────────────────────────────
@@ -499,6 +526,56 @@ class _DocumentsPageState extends State<DocumentsPage> {
     await _saveAndNotify(context, res.$1, res.$2);
   }
 
+  Future<void> _confirmDelete(Map<String, dynamic> item) async {
+    final name = item['name']?.toString() ?? '';
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: Text(LanguageService.tr('Delete document?', 'ডকুমেন্ট মুছবেন?'),
+            style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: _ink)),
+        content: Text(
+          LanguageService.tr('"$name" will be removed from your documents.',
+              '"$name" আপনার ডকুমেন্ট থেকে সরানো হবে।'),
+          style: const TextStyle(fontSize: 13, color: _muted),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(LanguageService.tr('Cancel', 'বাতিল'), style: const TextStyle(color: _muted)),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(backgroundColor: _danger, foregroundColor: Colors.white),
+            child: Text(LanguageService.tr('Delete', 'মুছুন')),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+
+    final key = 'doc-${item['id']}';
+    setState(() => _busy.add(key));
+    final res = await DatabaseService.deleteUserDocument(
+      userId: _userId,
+      documentId: item['id'].toString(),
+    );
+    if (!mounted) return;
+    setState(() => _busy.remove(key));
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(res['success'] == true
+            ? LanguageService.tr('Document deleted.', 'ডকুমেন্ট মুছে ফেলা হয়েছে।')
+            : (res['message']?.toString() ??
+            LanguageService.tr('Could not delete.', 'মুছা যায়নি।'))),
+        backgroundColor: res['success'] == true ? _emerald : _danger,
+      ),
+    );
+    if (res['success'] == true) _loadDocumentsData();
+  }
+
   // ─── Upload ───────────────────────────────────────────────
   Future<void> _pickUploadFile() async {
     try {
@@ -513,6 +590,14 @@ class _DocumentsPageState extends State<DocumentsPage> {
       }
     } catch (e) {
       debugPrint('Error picking document file: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(LanguageService.tr('Could not open the image. Please try another one.',
+              'ছবিটি খোলা যায়নি। অন্য একটি চেষ্টা করুন।')),
+          backgroundColor: _danger,
+        ),
+      );
     }
   }
 
@@ -600,11 +685,13 @@ class _DocumentsPageState extends State<DocumentsPage> {
         );
       }
     } catch (e) {
+      debugPrint('Upload error: $e');
       if (mounted) {
         setState(() => _isUploadingDoc = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Upload error: $e'),
+            content: Text(LanguageService.tr('Upload failed. Please try again.',
+                'আপলোড হয়নি। আবার চেষ্টা করুন।')),
             backgroundColor: _danger,
           ),
         );
@@ -643,6 +730,25 @@ class _DocumentsPageState extends State<DocumentsPage> {
               ? const Center(
               child: CircularProgressIndicator(
                   color: _emerald, strokeWidth: 2.4))
+              : _needsLogin
+              ? _buildMessage(
+            Icons.lock_outline_rounded,
+            LanguageService.tr('Please log in to see your documents',
+                'ডকুমেন্ট দেখতে লগইন করুন'),
+            null,
+            LanguageService.tr('Log in', 'লগইন'),
+            _goToLogin,
+          )
+              : _loadFailed
+              ? _buildMessage(
+            Icons.wifi_off_rounded,
+            LanguageService.tr('Could not load your documents',
+                'ডকুমেন্ট লোড করা যায়নি'),
+            LanguageService.tr('Please check your internet connection.',
+                'ইন্টারনেট সংযোগ চেক করুন।'),
+            LanguageService.tr('Try again', 'আবার চেষ্টা করুন'),
+            _loadDocumentsData,
+          )
               : RefreshIndicator(
             onRefresh: _loadDocumentsData,
             color: _emerald,
@@ -663,22 +769,27 @@ class _DocumentsPageState extends State<DocumentsPage> {
                   title: LanguageService.tr(
                       'Investment Certificates', 'ইনভেস্টমেন্ট সার্টিফিকেট'),
                   items: _categorizedDocs['investmentReceipts'] ?? [],
-                  emptyMsg: LanguageService.tr('No certificates yet.',
-                      'এখনো কোনো সার্টিফিকেট নেই।'),
+                  emptyMsg: LanguageService.tr(
+                      'No certificates yet. A certificate appears here after admin approves your payment.',
+                      'এখনো কোনো সার্টিফিকেট নেই। পেমেন্ট অনুমোদনের পর এখানে আসবে।'),
                   rowBuilder: _buildCertificateRow,
+                  maxVisible: 2,
+                  rowHeight: 132,
                 ),
                 const SizedBox(height: 14),
                 _buildSectionCard(
-                  icon: Icons.description_outlined,
-                  color: _emerald,
-                  soft: _emeraldSoft,
+                  icon: Icons.apartment_rounded,
+                  color: _turquoise,
+                  soft: _turquoiseSoft,
                   title: LanguageService.tr(
-                      'Investment Contracts', 'ইনভেস্টমেন্ট চুক্তি'),
-                  items: _categorizedDocs['contracts'] ?? [],
+                      'Group Investment Receipts', 'গ্রুপ ইনভেস্টমেন্ট রিসিট'),
+                  items: _categorizedDocs['groupInvestmentReceipts'] ?? [],
                   emptyMsg: LanguageService.tr(
-                      'No investment contracts found.',
-                      'কোনো চুক্তি পাওয়া যায়নি।'),
-                  rowBuilder: _buildContractRow,
+                      'No group investment receipts yet.',
+                      'এখনো কোনো গ্রুপ ইনভেস্টমেন্ট রিসিট নেই।'),
+                  rowBuilder: _buildCertificateRow,
+                  maxVisible: 2,
+                  rowHeight: 132,
                 ),
                 const SizedBox(height: 14),
                 _buildSectionCard(
@@ -703,6 +814,8 @@ class _DocumentsPageState extends State<DocumentsPage> {
                   emptyMsg: LanguageService.tr('No payment receipts.',
                       'কোনো পেমেন্ট রিসিট নেই।'),
                   rowBuilder: _buildFileRow,
+                  maxVisible: 4,
+                  rowHeight: 72,
                 ),
                 const SizedBox(height: 14),
                 _buildSectionCard(
@@ -729,17 +842,22 @@ class _DocumentsPageState extends State<DocumentsPage> {
                   rowBuilder: _buildFileRow,
                 ),
                 const SizedBox(height: 14),
+                // Agreement, KYC sohayok nothi, project document — age upload
+                // korle kothao dekhato na
                 _buildSectionCard(
-                  icon: Icons.folder_open_outlined,
-                  color: _terracotta,
-                  soft: _terracottaSoft,
+                  icon: Icons.folder_open_rounded,
+                  color: _goldDeep,
+                  soft: _goldSoft,
                   title: LanguageService.tr(
-                      'Project Documents', 'প্রজেক্ট ডকুমেন্টস'),
+                      'Agreements & Other Documents', 'চুক্তি ও অন্যান্য নথি'),
                   items: _categorizedDocs['projectDocs'] ?? [],
-                  emptyMsg: LanguageService.tr('No project documents.',
-                      'কোনো প্রজেক্ট ডকুমেন্ট নেই।'),
+                  emptyMsg: LanguageService.tr('No other documents.',
+                      'অন্য কোনো নথি নেই।'),
                   rowBuilder: _buildFileRow,
+                  maxVisible: 4,
+                  rowHeight: 72,
                 ),
+
                 const SizedBox(height: 20),
                 _buildUploadDocumentFormCard(),
               ],
@@ -759,7 +877,12 @@ class _DocumentsPageState extends State<DocumentsPage> {
     required List<Map<String, dynamic>> items,
     required String emptyMsg,
     required Widget Function(Map<String, dynamic>) rowBuilder,
+    int maxVisible = 3,
+    double rowHeight = 72,
   }) {
+    // Beshi item hole card er bhitore scroll hobe (fixed uchchota)
+    final scrollable = items.length > maxVisible;
+
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
@@ -822,11 +945,33 @@ class _DocumentsPageState extends State<DocumentsPage> {
             )
           else ...[
             const Divider(height: 1, color: _line),
-            for (int i = 0; i < items.length; i++) ...[
-              if (i > 0)
-                const Divider(height: 1, color: _line, indent: 14),
-              rowBuilder(items[i]),
-            ],
+            if (scrollable) ...[
+              _ScrollableSection(
+                height: maxVisible * rowHeight + rowHeight * 0.45,
+                itemCount: items.length,
+                itemBuilder: (i) => rowBuilder(items[i]),
+              ),
+              const Divider(height: 1, color: _line),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.swipe_vertical_rounded, size: 14, color: _muted),
+                    const SizedBox(width: 6),
+                    Text(
+                      LanguageService.tr('Scroll to see all ${items.length}',
+                          'সব ${items.length} টি দেখতে স্ক্রল করুন'),
+                      style: const TextStyle(fontSize: 11, color: _muted),
+                    ),
+                  ],
+                ),
+              ),
+            ] else
+              for (int i = 0; i < items.length; i++) ...[
+                if (i > 0) const Divider(height: 1, color: _line, indent: 14),
+                rowBuilder(items[i]),
+              ],
           ],
         ],
       ),
@@ -1009,20 +1154,30 @@ class _DocumentsPageState extends State<DocumentsPage> {
     );
   }
 
-  Widget _buildContractRow(Map<String, dynamic> item) {
-    final status = item['status']?.toString() ?? 'DRAFT';
-    final id = item['id']?.toString() ?? '';
-    final busy = _busy.contains('cert-$id');
+
+
+  Widget _buildKycRow(Map<String, dynamic> item) {
+    final status = item['status']?.toString() ?? '';
+    final sub = item['submittedAt']?.toString() ?? '';
+    final rev = item['reviewedAt']?.toString() ?? '';
+    final parts = <String>[
+      if (sub.isNotEmpty)
+        LanguageService.tr('Submitted ${PdfService.formatDate(sub)}',
+            'জমা ${PdfService.formatDate(sub)}'),
+      if (rev.isNotEmpty)
+        LanguageService.tr('Reviewed ${PdfService.formatDate(rev)}',
+            'যাচাই ${PdfService.formatDate(rev)}'),
+    ];
+    final needsAction = status == 'REJECTED' || status == 'NOT_STARTED';
 
     return InkWell(
-      onTap: busy
-          ? null
-          : () {
-        final receipt = _receiptFor(id);
-        _viewCertificate(receipt ?? item);
+      // KYC page e giye details dekha / abar jama dewa jay
+      onTap: () async {
+        await Navigator.push(context, MaterialPageRoute(builder: (_) => const KycPage()));
+        if (mounted) _loadDocumentsData();
       },
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 12, 10, 12),
+        padding: const EdgeInsets.all(14),
         child: Row(
           children: [
             Expanded(
@@ -1030,68 +1185,33 @@ class _DocumentsPageState extends State<DocumentsPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    item['title']?.toString() ?? 'Contract',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                    LanguageService.tr('KYC Verification', 'কেওয়াইসি ভেরিফিকেশন'),
                     style: const TextStyle(
-                        fontSize: 13.5,
-                        fontWeight: FontWeight.w700,
-                        color: _ink),
+                        fontSize: 13.5, fontWeight: FontWeight.w700, color: _ink),
                   ),
-                  const SizedBox(height: 3),
-                  Text(
-                    '${_fmtBdt((item['amountBdt'] as num?)?.toDouble() ?? 0.0)} · ${PdfService.formatDate(item['createdAt']?.toString())}',
-                    style: const TextStyle(fontSize: 11, color: _muted),
-                  ),
+                  if (parts.isNotEmpty) ...[
+                    const SizedBox(height: 3),
+                    Text(
+                      parts.join(' · '),
+                      style: const TextStyle(fontSize: 11, color: _muted),
+                    ),
+                  ],
+                  if (needsAction) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      LanguageService.tr('Tap to complete your KYC', 'কেওয়াইসি সম্পন্ন করতে চাপ দিন'),
+                      style: const TextStyle(fontSize: 11, color: _danger, fontWeight: FontWeight.w600),
+                    ),
+                  ],
                 ],
               ),
             ),
             const SizedBox(width: 8),
             _statusPill(status),
             const SizedBox(width: 4),
-            busy
-                ? const Padding(
-              padding: EdgeInsets.all(4),
-              child: SizedBox(
-                width: 16,
-                height: 16,
-                child: CircularProgressIndicator(
-                    strokeWidth: 2, color: _emerald),
-              ),
-            )
-                : const Icon(Icons.chevron_right_rounded, color: _muted),
+            const Icon(Icons.chevron_right_rounded, color: _muted, size: 20),
           ],
         ),
-      ),
-    );
-  }
-
-  Widget _buildKycRow(Map<String, dynamic> item) {
-    final status = item['status']?.toString() ?? 'SUBMITTED';
-    return Padding(
-      padding: const EdgeInsets.all(14),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  item['title']?.toString() ?? 'KYC Verification',
-                  style: const TextStyle(
-                      fontSize: 13.5, fontWeight: FontWeight.w700, color: _ink),
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  item['subtitle']?.toString() ?? '',
-                  style: const TextStyle(fontSize: 11, color: _muted),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 8),
-          _statusPill(status),
-        ],
       ),
     );
   }
@@ -1101,7 +1221,9 @@ class _DocumentsPageState extends State<DocumentsPage> {
     final size = _fmtSize(item['sizeBytes']);
     final date = PdfService.formatDate(item['createdAt']?.toString());
     final url = item['fileUrl']?.toString().toLowerCase() ?? '';
-    final isPdf = url.endsWith('.pdf');
+    final isPdf = url.endsWith('.pdf') || url.startsWith('data:application/pdf');
+    final desc = item['description']?.toString() ?? '';
+    final mine = item['mine'] == true;
 
     return InkWell(
       onTap: busy ? null : () => _viewDoc(item),
@@ -1138,6 +1260,15 @@ class _DocumentsPageState extends State<DocumentsPage> {
                         fontWeight: FontWeight.w700,
                         color: _ink),
                   ),
+                  if (desc.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      desc,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 11, color: _ink),
+                    ),
+                  ],
                   const SizedBox(height: 2),
                   Text(
                     [date, if (size.isNotEmpty) size].join(' · '),
@@ -1169,6 +1300,13 @@ class _DocumentsPageState extends State<DocumentsPage> {
                     color: _emerald, size: 21),
                 onPressed: () => _downloadDoc(item),
               ),
+              if (mine)
+                IconButton(
+                  tooltip: LanguageService.tr('Delete', 'মুছুন'),
+                  icon: const Icon(Icons.delete_outline_rounded,
+                      color: _danger, size: 20),
+                  onPressed: () => _confirmDelete(item),
+                ),
             ],
           ],
         ),
@@ -1232,7 +1370,15 @@ class _DocumentsPageState extends State<DocumentsPage> {
                 ),
               ],
             ),
-            const SizedBox(height: 18),
+            const SizedBox(height: 6),
+            Text(
+              LanguageService.tr(
+                'For investment payments, use "Submit Payment Proof" on the investment instead — that is what admin reviews.',
+                'বিনিয়োগের পেমেন্টের জন্য বিনিয়োগের "পেমেন্ট প্রুফ জমা দিন" ব্যবহার করুন — অ্যাডমিন সেটাই যাচাই করে।',
+              ),
+              style: const TextStyle(fontSize: 11.5, color: _muted, height: 1.4),
+            ),
+            const SizedBox(height: 16),
             DropdownButtonFormField<String>(
               initialValue: _selectedCategory,
               decoration: _inputDeco(
@@ -1344,6 +1490,94 @@ class _DocumentsPageState extends State<DocumentsPage> {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMessage(IconData icon, String title, String? subtitle,
+      String buttonLabel, VoidCallback onTap) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 40, color: _goldDeep),
+            const SizedBox(height: 12),
+            Text(title,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                    fontSize: 15, fontWeight: FontWeight.w700, color: _ink)),
+            if (subtitle != null) ...[
+              const SizedBox(height: 4),
+              Text(subtitle,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 12.5, color: _muted)),
+            ],
+            const SizedBox(height: 16),
+            FilledButton(
+              onPressed: onTap,
+              style: FilledButton.styleFrom(
+                backgroundColor: _emerald,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
+              ),
+              child: Text(buttonLabel),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Card er bhitore scroll — page er scroll er sathe jhamela kore na:
+// bhitorer list shesh hole baki touch page ke scroll kore
+// ═══════════════════════════════════════════════════════════
+class _ScrollableSection extends StatefulWidget {
+  final double height;
+  final int itemCount;
+  final Widget Function(int) itemBuilder;
+
+  const _ScrollableSection({
+    required this.height,
+    required this.itemCount,
+    required this.itemBuilder,
+  });
+
+  @override
+  State<_ScrollableSection> createState() => _ScrollableSectionState();
+}
+
+class _ScrollableSectionState extends State<_ScrollableSection> {
+  final ScrollController _controller = ScrollController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: widget.height,
+      child: Scrollbar(
+        controller: _controller,
+        thumbVisibility: true,
+        radius: const Radius.circular(8),
+        child: ListView.separated(
+          controller: _controller,
+          primary: false,
+          physics: const ClampingScrollPhysics(),
+          padding: EdgeInsets.zero,
+          itemCount: widget.itemCount,
+          separatorBuilder: (_, __) =>
+          const Divider(height: 1, color: _line, indent: 14),
+          itemBuilder: (_, i) => widget.itemBuilder(i),
         ),
       ),
     );

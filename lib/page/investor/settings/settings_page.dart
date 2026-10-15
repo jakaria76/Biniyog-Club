@@ -1,12 +1,18 @@
+import 'dart:io' show Platform;
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:package_info_plus/package_info_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
+
 import '../../authentication/login_page.dart';
+import '../../../services/app_lock_service.dart';
 import '../../../services/auth_service.dart';
 import '../../../services/database_service.dart';
 import '../../../services/language_service.dart';
+import '../dashboard/investor_dashboard_page.dart';
 import '../kyc/kyc_page.dart';
-import 'privacy_policy_page.dart';
-import 'terms_and_conditions_page.dart';
+import 'legal_web_page.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -16,20 +22,61 @@ class SettingsPage extends StatefulWidget {
 }
 
 class _SettingsPageState extends State<SettingsPage> {
+  // ═════════════════════════════════════════════════════════
+  // CONTACT + WEBSITE — biniyogclub.com e ja ache, hubohu tai
+  // ═════════════════════════════════════════════════════════
+  static const String _site = 'https://www.biniyogclub.com';
+  static const String _hotlineDisplay = '+880 1335-149033';
+  static const String _hotlineTel = 'tel:+8801335149033';
+  static const String _supportEmail = 'info@biniyogclub.com';
+  static const String _officeAddress = 'MG SAM Center, 12 Mohakhali C/A, Dhaka-1212';
+
+  /// App Play Store e publish hole true koro — tokhon "Update" button dekhabe
+  static const bool _publishedOnPlayStore = false;
+
+  // ─── Palette (dashboard er moto) ───
+  static const Color emerald = Color(0xFF0E4A37);
+  static const Color emeraldDeep = Color(0xFF0A3327);
+  static const Color emeraldSoft = Color(0xFFE3F0E9);
+  static const Color gold = Color(0xFFB8935A);
+  static const Color goldDeep = Color(0xFF8A6A3A);
+  static const Color goldLight = Color(0xFFD9BE8C);
+  static const Color goldSoft = Color(0xFFF6EEDF);
+  static const Color turquoise = Color(0xFF167A80);
+  static const Color turquoiseSoft = Color(0xFFE0F1F1);
+  static const Color lapis = Color(0xFF26437A);
+  static const Color lapisSoft = Color(0xFFE5EAF4);
+  static const Color terracotta = Color(0xFFA5523A);
+  static const Color terracottaSoft = Color(0xFFF7E6DF);
+  static const Color ivory = Color(0xFFF7F4EE);
+  static const Color ink = Color(0xFF1C2421);
+  static const Color muted = Color(0xFF6E736F);
+  static const Color line = Color(0xFFE8E2D7);
+  static const Color danger = Color(0xFFB4413A);
+  static const Color dangerSoft = Color(0xFFFBEAE8);
+
   bool _isLoading = true;
+  bool _needsLogin = false;
+  bool _checkingDelete = false;
+
   String _userId = '';
+  String _name = 'Investor';
+  String _email = '';
+  String? _avatarUrl;
+  String _kycStatus = 'NOT_STARTED';
 
-  bool _pushNotifications = true;
-  bool _emailAlerts = true;
+  // Payout — KYC te user nije ja diyeche
+  String _bankName = '';
+  String _bankAccount = '';
+  String _mobileProvider = '';
+  String _mobileNumber = '';
 
-  final Map<String, dynamic> _payoutAccount = {
-    'bankName': 'One Bank',
-    'bankAccountNumber': '4444555566',
-    'mobileProvider': 'bKash',
-    'mobileNumber': '01754225684',
-  };
+  String _version = '';
+  String _buildNumber = '';
+  String _packageName = '';
 
-  static const Color primaryTeal = Color(0xFF047857);
+  bool _lockSupported = false;
+  bool _lockEnabled = false;
 
   @override
   void initState() {
@@ -37,61 +84,521 @@ class _SettingsPageState extends State<SettingsPage> {
     _loadSettingsData();
   }
 
+  // ═════════════════════════════════════════════════════════
+  // DATA
+  // ═════════════════════════════════════════════════════════
   Future<void> _loadSettingsData() async {
-    setState(() => _isLoading = true);
-
-    final prefs = await SharedPreferences.getInstance();
-    _pushNotifications = prefs.getBool('push_notifications') ?? true;
-    _emailAlerts = prefs.getBool('email_alerts') ?? true;
+    if (mounted) setState(() => _isLoading = true);
 
     final userData = await AuthService.getUserData();
     final userId = userData?['id']?.toString() ?? '';
     final userEmail = userData?['email']?.toString() ?? '';
 
-    final profileData =
-        await DatabaseService.getUserProfileFull(userId, email: userEmail);
+    if (userId.isEmpty) {
+      if (mounted) {
+        setState(() {
+          _needsLogin = true;
+          _isLoading = false;
+        });
+      }
+      return;
+    }
 
-    if (mounted) {
-      setState(() {
-        if (profileData.isNotEmpty) {
-          _userId = profileData['id']?.toString() ?? userId;
-        }
-        _isLoading = false;
-      });
+    // Ekta jinish fail korleo jeno page atke na thake —
+    // protita alada try/catch, fail hole default value
+    Future<T> safe<T>(Future<T> Function() task, T fallback) async {
+      try {
+        return await task();
+      } catch (e) {
+        debugPrint('Settings load warning: $e');
+        return fallback;
+      }
+    }
+
+    final results = await Future.wait<dynamic>([
+      safe<Map<String, dynamic>>(
+              () => DatabaseService.getUserProfileFull(userId, email: userEmail), {}),
+      safe<PackageInfo?>(() => PackageInfo.fromPlatform(), null),
+      safe<bool>(() => AppLockService.isSupported(), false),
+      safe<bool>(() => AppLockService.isEnabled(), false),
+    ]);
+
+    final profile = results[0] as Map<String, dynamic>;
+    final info = results[1] as PackageInfo?;
+    final inv = (profile['investorProfile'] as Map?)?.cast<String, dynamic>() ?? {};
+
+    if (!mounted) return;
+    setState(() {
+      _userId = profile['id']?.toString() ?? userId;
+      _name = profile['name']?.toString() ?? userData?['name']?.toString() ?? 'Investor';
+      _email = profile['email']?.toString() ?? userEmail;
+      _avatarUrl = profile['avatarUrl']?.toString();
+      _kycStatus = profile['kycStatus']?.toString() ?? 'NOT_STARTED';
+
+      _bankName = inv['bankName']?.toString() ?? '';
+      _bankAccount = inv['bankAccountNumber']?.toString() ?? '';
+      _mobileProvider = inv['mobileProvider']?.toString() ?? '';
+      _mobileNumber = inv['mobileNumber']?.toString() ?? '';
+
+      _version = info?.version ?? '';
+      _buildNumber = info?.buildNumber ?? '';
+      _packageName = info?.packageName ?? '';
+
+      _lockSupported = results[2] as bool;
+      _lockEnabled = results[3] as bool;
+
+      _needsLogin = false;
+      _isLoading = false;
+    });
+  }
+
+  // ═════════════════════════════════════════════════════════
+  // HELPERS
+  // ═════════════════════════════════════════════════════════
+  void _snack(String msg, {bool error = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg), backgroundColor: error ? danger : emerald),
+    );
+  }
+
+  /// Shudhu shesh 4 digit dekhai
+  String _mask(String value) {
+    final v = value.replaceAll(' ', '');
+    if (v.length <= 4) return v;
+    return '•••• ${v.substring(v.length - 4)}';
+  }
+
+  Future<void> _open(String url, {LaunchMode mode = LaunchMode.platformDefault}) async {
+    bool ok = false;
+    try {
+      ok = await launchUrl(Uri.parse(url), mode: mode);
+    } catch (e) {
+      debugPrint('Launch error: $e');
+    }
+    if (!ok) {
+      _snack(
+        LanguageService.tr('Could not open. Please try again.', 'খোলা যায়নি। আবার চেষ্টা করুন।'),
+        error: true,
+      );
     }
   }
 
-  Future<void> _saveNotificationPref(String key, bool val) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(key, val);
+  void _openLegal(String title, String path) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => LegalWebPage(title: title, url: '$_site$path')),
+    );
   }
 
-  // Delete Account Confirmation Dialog
+  Future<void> _goToLogin() async {
+    await AppLockService.setEnabled(false);
+    await AuthService.logout();
+    InvestorDashboardPage.clearCache();
+    if (!mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const LoginPage()),
+          (route) => false,
+    );
+  }
+
+  InputDecoration _fieldDeco(String label, {Widget? suffix}) => InputDecoration(
+    labelText: label,
+    filled: true,
+    fillColor: ivory,
+    labelStyle: const TextStyle(color: muted, fontSize: 13),
+    prefixIcon: const Icon(Icons.lock_outline_rounded, color: emerald, size: 20),
+    suffixIcon: suffix,
+    border: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(12),
+      borderSide: const BorderSide(color: line),
+    ),
+    enabledBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(12),
+      borderSide: const BorderSide(color: line),
+    ),
+    focusedBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(12),
+      borderSide: const BorderSide(color: emerald, width: 1.4),
+    ),
+  );
+
+  Widget _eye(bool visible, VoidCallback onTap) => IconButton(
+    icon: Icon(
+      visible ? Icons.visibility_outlined : Icons.visibility_off_outlined,
+      color: muted,
+      size: 20,
+    ),
+    onPressed: onTap,
+  );
+
+  // ═════════════════════════════════════════════════════════
+  // CHANGE PASSWORD
+  // ═════════════════════════════════════════════════════════
+  void _showChangePasswordModal() {
+    final currentCtrl = TextEditingController();
+    final newCtrl = TextEditingController();
+    final confirmCtrl = TextEditingController();
+    bool showCurrent = false, showNew = false, showConfirm = false;
+    bool saving = false;
+    final pageMessenger = ScaffoldMessenger.of(context);
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (sheetContext) {
+        return StatefulBuilder(
+          builder: (sheetContext, setModalState) {
+            void fail(String msg) {
+              ScaffoldMessenger.of(sheetContext).showSnackBar(
+                SnackBar(content: Text(msg), backgroundColor: danger),
+              );
+            }
+
+            return Padding(
+              padding: EdgeInsets.only(
+                top: 20,
+                left: 20,
+                right: 20,
+                bottom: MediaQuery.of(sheetContext).viewInsets.bottom + 24,
+              ),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            LanguageService.tr('Change Password', 'পাসওয়ার্ড পরিবর্তন'),
+                            style: const TextStyle(
+                                fontSize: 18, fontWeight: FontWeight.w700, color: ink),
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close_rounded),
+                          onPressed: () => Navigator.pop(sheetContext),
+                        ),
+                      ],
+                    ),
+                    Text(
+                      LanguageService.tr('Use at least 8 characters.',
+                          'কমপক্ষে ৮ অক্ষরের পাসওয়ার্ড দিন।'),
+                      style: const TextStyle(fontSize: 12, color: muted),
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: currentCtrl,
+                      obscureText: !showCurrent,
+                      decoration: _fieldDeco(
+                        LanguageService.tr('Current Password', 'বর্তমান পাসওয়ার্ড'),
+                        suffix: _eye(showCurrent,
+                                () => setModalState(() => showCurrent = !showCurrent)),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: newCtrl,
+                      obscureText: !showNew,
+                      decoration: _fieldDeco(
+                        LanguageService.tr('New Password', 'নতুন পাসওয়ার্ড'),
+                        suffix: _eye(showNew, () => setModalState(() => showNew = !showNew)),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: confirmCtrl,
+                      obscureText: !showConfirm,
+                      decoration: _fieldDeco(
+                        LanguageService.tr('Confirm New Password', 'নতুন পাসওয়ার্ড আবার দিন'),
+                        suffix: _eye(showConfirm,
+                                () => setModalState(() => showConfirm = !showConfirm)),
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    FilledButton(
+                      onPressed: saving
+                          ? null
+                          : () async {
+                        // Password e space thakte pare — trim kora hoy na
+                        final current = currentCtrl.text;
+                        final next = newCtrl.text;
+                        final confirm = confirmCtrl.text;
+
+                        if (current.isEmpty) {
+                          fail(LanguageService.tr('Enter your current password.',
+                              'বর্তমান পাসওয়ার্ড দিন।'));
+                          return;
+                        }
+                        if (next.length < 8) {
+                          fail(LanguageService.tr(
+                              'New password must be at least 8 characters.',
+                              'নতুন পাসওয়ার্ড কমপক্ষে ৮ অক্ষরের হতে হবে।'));
+                          return;
+                        }
+                        if (next == current) {
+                          fail(LanguageService.tr(
+                              'New password must be different from the current one.',
+                              'নতুন পাসওয়ার্ড বর্তমানটির থেকে আলাদা হতে হবে।'));
+                          return;
+                        }
+                        if (next != confirm) {
+                          fail(LanguageService.tr(
+                              'Passwords do not match.', 'পাসওয়ার্ড দুটি মিলছে না।'));
+                          return;
+                        }
+
+                        setModalState(() => saving = true);
+                        final res = await DatabaseService.changePassword(
+                          userId: _userId,
+                          oldPassword: current,
+                          newPassword: next,
+                        );
+
+                        if (!sheetContext.mounted) return;
+
+                        if (res['success'] == true) {
+                          Navigator.pop(sheetContext);
+                          pageMessenger.showSnackBar(
+                            SnackBar(
+                              content: Text(LanguageService.tr(
+                                  'Password updated successfully!',
+                                  'পাসওয়ার্ড সফলভাবে পরিবর্তিত হয়েছে!')),
+                              backgroundColor: emerald,
+                            ),
+                          );
+                        } else {
+                          // Sheet khola thake — bhul password abar dite parbe
+                          setModalState(() => saving = false);
+                          fail(res['message']?.toString() ?? 'Error');
+                        }
+                      },
+                      style: FilledButton.styleFrom(
+                        backgroundColor: emerald,
+                        foregroundColor: Colors.white,
+                        minimumSize: const Size(double.infinity, 52),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      ),
+                      child: saving
+                          ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                      )
+                          : Text(
+                        LanguageService.tr('Update Password', 'পাসওয়ার্ড আপডেট করুন'),
+                        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  // ═════════════════════════════════════════════════════════
+  // APP LOCK
+  // ═════════════════════════════════════════════════════════
+  Future<void> _toggleAppLock(bool value) async {
+    final ok = await AppLockService.authenticate(
+      value
+          ? LanguageService.tr('Confirm to turn on app lock', 'অ্যাপ লক চালু করতে নিশ্চিত করুন')
+          : LanguageService.tr('Confirm to turn off app lock', 'অ্যাপ লক বন্ধ করতে নিশ্চিত করুন'),
+    );
+    if (!ok) {
+      _snack(LanguageService.tr('Verification failed.', 'যাচাই করা যায়নি।'), error: true);
+      return;
+    }
+    await AppLockService.setEnabled(value);
+    if (mounted) setState(() => _lockEnabled = value);
+    _snack(value
+        ? LanguageService.tr('App lock is on.', 'অ্যাপ লক চালু হয়েছে।')
+        : LanguageService.tr('App lock is off.', 'অ্যাপ লক বন্ধ হয়েছে।'));
+  }
+
+  // ═════════════════════════════════════════════════════════
+  // SIGN OUT
+  // ═════════════════════════════════════════════════════════
+  void _confirmSignOut() {
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(
+          LanguageService.tr('Sign out', 'সাইন আউট'),
+          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: ink),
+        ),
+        content: Text(
+          LanguageService.tr(
+              'Are you sure you want to sign out of your Biniyog Club account?',
+              'আপনি কি নিশ্চিত যে অ্যাকাউন্ট থেকে সাইন আউট করতে চান?'),
+          style: const TextStyle(fontSize: 13.5, color: muted, height: 1.45),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: Text(LanguageService.tr('Cancel', 'বাতিল'),
+                style: const TextStyle(color: muted, fontWeight: FontWeight.w600)),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.pop(dialogContext);
+              _goToLogin();
+            },
+            style: FilledButton.styleFrom(
+              backgroundColor: danger,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            child: Text(LanguageService.tr('Sign out', 'সাইন আউট')),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ═════════════════════════════════════════════════════════
+  // DELETE ACCOUNT
+  // Age check kori: chalu ba pending investment thakle delete na.
+  // ═════════════════════════════════════════════════════════
+  Future<void> _startDeleteFlow() async {
+    setState(() => _checkingDelete = true);
+    final summary = await DatabaseService.getOpenInvestmentSummary(_userId);
+    if (!mounted) return;
+    setState(() => _checkingDelete = false);
+
+    if (summary['ok'] != true) {
+      _snack(
+        LanguageService.tr('Could not reach the server. Please check your internet connection.',
+            'সার্ভারে সংযোগ করা যায়নি। ইন্টারনেট সংযোগ চেক করুন।'),
+        error: true,
+      );
+      return;
+    }
+
+    if ((summary['totalOpen'] as int) > 0) {
+      _showDeleteBlockedDialog(summary['projectOpen'] as int, summary['groupOpen'] as int);
+      return;
+    }
+
+    _showDeleteAccountDialog();
+  }
+
+  void _showDeleteBlockedDialog(int projectOpen, int groupOpen) {
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(
+          children: [
+            const Icon(Icons.info_outline_rounded, color: goldDeep, size: 22),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                LanguageService.tr('Account can’t be deleted yet', 'এখন অ্যাকাউন্ট ডিলিট করা যাবে না'),
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: ink),
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              LanguageService.tr(
+                  'You still have active or pending investments. Your money and returns are linked to this account, so it can’t be deleted until they are settled.',
+                  'আপনার এখনো চলমান বা অপেক্ষমান বিনিয়োগ আছে। আপনার টাকা ও লভ্যাংশ এই অ্যাকাউন্টের সাথে যুক্ত, তাই সেগুলো নিষ্পত্তি না হওয়া পর্যন্ত অ্যাকাউন্ট ডিলিট করা যাবে না।'),
+              style: const TextStyle(fontSize: 13, color: muted, height: 1.45),
+            ),
+            const SizedBox(height: 12),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: goldSoft,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (projectOpen > 0)
+                    Text(
+                      LanguageService.tr('Project investments: $projectOpen',
+                          'প্রজেক্ট বিনিয়োগ: $projectOpen টি'),
+                      style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: goldDeep),
+                    ),
+                  if (groupOpen > 0)
+                    Text(
+                      LanguageService.tr('Group investments: $groupOpen',
+                          'গ্রুপ বিনিয়োগ: $groupOpen টি'),
+                      style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: goldDeep),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: Text(LanguageService.tr('Close', 'বন্ধ করুন'),
+                style: const TextStyle(color: muted, fontWeight: FontWeight.w600)),
+          ),
+          FilledButton.icon(
+            onPressed: () {
+              Navigator.pop(dialogContext);
+              _open(_hotlineTel);
+            },
+            icon: const Icon(Icons.call_rounded, size: 18),
+            label: Text(LanguageService.tr('Call support', 'সাপোর্টে কল করুন')),
+            style: FilledButton.styleFrom(
+              backgroundColor: emerald,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _showDeleteAccountDialog() {
-    final passwordController = TextEditingController();
-    bool isPasswordVisible = false;
+    final passwordCtrl = TextEditingController();
+    bool visible = false;
+    bool deleting = false;
 
     showDialog(
       context: context,
-      builder: (context) {
+      barrierDismissible: false,
+      builder: (dialogContext) {
         return StatefulBuilder(
-          builder: (context, setDialogState) {
+          builder: (dialogContext, setDialogState) {
             return AlertDialog(
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(20),
-              ),
+              backgroundColor: Colors.white,
+              surfaceTintColor: Colors.transparent,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
               title: Row(
                 children: [
-                  const Icon(Icons.warning_amber_rounded,
-                      color: Colors.redAccent, size: 24),
+                  const Icon(Icons.warning_amber_rounded, color: danger, size: 22),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
                       LanguageService.tr('Delete Account', 'অ্যাকাউন্ট ডিলিট করুন'),
-                      style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.redAccent),
+                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: danger),
                     ),
                   ),
                 ],
@@ -103,54 +610,32 @@ class _SettingsPageState extends State<SettingsPage> {
                   children: [
                     Text(
                       LanguageService.tr(
-                          'Are you sure you want to request account deletion? Your account will be scheduled for deletion in 30 days.',
-                          'আপনি কি নিশ্চিত যে আপনি আপনার অ্যাকাউন্ট ডিলিট করতে চান? আগামী ৩০ দিনের জন্য ডিলেশন শিডিউল করা হবে।'),
-                      style: TextStyle(
-                          fontSize: 12.5,
-                          color: Colors.grey[800],
-                          height: 1.4),
+                          'Your account will be scheduled for deletion in 30 days.',
+                          'আপনার অ্যাকাউন্ট ৩০ দিন পর ডিলিট হওয়ার জন্য শিডিউল করা হবে।'),
+                      style: const TextStyle(fontSize: 13, color: ink, height: 1.45),
                     ),
                     const SizedBox(height: 10),
-
                     Container(
                       padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(
-                        color: Colors.amber.shade50,
+                        color: goldSoft,
                         borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: Colors.amber.shade300),
+                        border: Border.all(color: gold.withAlpha(90)),
                       ),
                       child: Text(
                         LanguageService.tr(
-                            'Note: Logging into your account within 30 days will automatically cancel deletion and restore your account.',
-                            'নোট: আগামী ৩০ দিনের মধ্যে লগইন করলে আপনার অ্যাকাউন্ট রিস্টোর বা পুনরুদ্ধার হয়ে যাবে।'),
-                        style: TextStyle(
-                            fontSize: 11,
-                            color: Colors.amber.shade900,
-                            height: 1.3),
+                            'Logging in within 30 days will cancel the deletion and restore your account.',
+                            '৩০ দিনের মধ্যে লগইন করলে ডিলিট বাতিল হবে এবং অ্যাকাউন্ট ফিরে পাবেন।'),
+                        style: const TextStyle(fontSize: 11.5, color: goldDeep, height: 1.35),
                       ),
                     ),
                     const SizedBox(height: 16),
-
-                    // Confirm Password Input
                     TextField(
-                      controller: passwordController,
-                      obscureText: !isPasswordVisible,
-                      decoration: InputDecoration(
-                        labelText: LanguageService.tr(
-                            'Enter your password', 'আপনার পাসওয়ার্ড দিন'),
-                        prefixIcon:
-                            const Icon(Icons.lock_outline, color: Colors.redAccent),
-                        suffixIcon: IconButton(
-                          icon: Icon(
-                            isPasswordVisible
-                                ? Icons.visibility_outlined
-                                : Icons.visibility_off_outlined,
-                          ),
-                          onPressed: () => setDialogState(
-                              () => isPasswordVisible = !isPasswordVisible),
-                        ),
-                        border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12)),
+                      controller: passwordCtrl,
+                      obscureText: !visible,
+                      decoration: _fieldDeco(
+                        LanguageService.tr('Enter your password', 'আপনার পাসওয়ার্ড দিন'),
+                        suffix: _eye(visible, () => setDialogState(() => visible = !visible)),
                       ),
                     ),
                   ],
@@ -158,71 +643,54 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
               actions: [
                 TextButton(
-                  onPressed: () => Navigator.pop(context),
+                  onPressed: deleting ? null : () => Navigator.pop(dialogContext),
                   child: Text(LanguageService.tr('Cancel', 'বাতিল'),
-                      style: const TextStyle(color: Colors.grey)),
+                      style: const TextStyle(color: muted, fontWeight: FontWeight.w600)),
                 ),
-                ElevatedButton(
-                  onPressed: () async {
-                    final pass = passwordController.text.trim();
+                FilledButton(
+                  onPressed: deleting
+                      ? null
+                      : () async {
+                    final pass = passwordCtrl.text;
                     if (pass.isEmpty) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(LanguageService.tr(
-                              'Please enter your password to confirm.',
-                              'কনফার্ম করতে আপনার পাসওয়ার্ড প্রদান করুন।')),
-                          backgroundColor: Colors.redAccent,
-                        ),
+                      _snack(
+                        LanguageService.tr('Please enter your password to confirm.',
+                            'কনফার্ম করতে পাসওয়ার্ড দিন।'),
+                        error: true,
                       );
                       return;
                     }
 
+                    setDialogState(() => deleting = true);
                     final res = await DatabaseService.requestAccountDeletion(
                       userId: _userId,
                       password: pass,
                     );
-
-                    if (!context.mounted) return;
-                    Navigator.pop(context); // Close dialog
+                    if (!dialogContext.mounted) return;
 
                     if (res['success'] == true) {
-                      // Automatically logout user and redirect to LoginPage
-                      await AuthService.logout();
-
-                      if (!context.mounted) return;
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(LanguageService.tr(
-                              'Account deletion requested! Log in within 30 days to restore.',
-                              'অ্যাকাউন্ট ডিলিট রিকোয়েস্ট গৃহীত হয়েছে! ৩০ দিনের মধ্যে লগইন করলে অ্যাকাউন্ট রিস্টোর হবে।')),
-                          backgroundColor: primaryTeal,
-                          duration: const Duration(seconds: 4),
-                        ),
-                      );
-
-                      Navigator.pushAndRemoveUntil(
-                        context,
-                        MaterialPageRoute(
-                            builder: (context) => const LoginPage()),
-                        (route) => false,
-                      );
+                      Navigator.pop(dialogContext);
+                      _snack(LanguageService.tr(
+                          'Account deletion requested. Log in within 30 days to restore.',
+                          'ডিলিট রিকোয়েস্ট গৃহীত হয়েছে। ৩০ দিনের মধ্যে লগইন করলে অ্যাকাউন্ট ফিরে পাবেন।'));
+                      await _goToLogin();
                     } else {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(res['message'] ?? 'Deletion failed.'),
-                          backgroundColor: Colors.redAccent,
-                        ),
-                      );
+                      setDialogState(() => deleting = false);
+                      _snack(res['message']?.toString() ?? 'Deletion failed.', error: true);
                     }
                   },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.redAccent,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: danger,
                     foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10),
-                    ),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   ),
-                  child: Text(LanguageService.tr('Delete Account', 'অ্যাকাউন্ট ডিলিট করুন')),
+                  child: deleting
+                      ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                  )
+                      : Text(LanguageService.tr('Delete', 'ডিলিট করুন')),
                 ),
               ],
             );
@@ -232,512 +700,392 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
-  // Change Password Modal
-  void _showChangePasswordModal() {
-    final currentPasswordController = TextEditingController();
-    final newPasswordController = TextEditingController();
-    final confirmPasswordController = TextEditingController();
-
-    bool isCurrentVisible = false;
-    bool isNewVisible = false;
-    bool isConfirmVisible = false;
-
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setModalState) {
-            return Padding(
-              padding: EdgeInsets.only(
-                top: 24,
-                left: 20,
-                right: 20,
-                bottom: MediaQuery.of(context).viewInsets.bottom + 24,
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        LanguageService.tr('Change Password', 'পাসওয়ার্ড পরিবর্তন'),
-                        style: const TextStyle(
-                            fontSize: 18, fontWeight: FontWeight.bold),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.close_rounded),
-                        onPressed: () => Navigator.pop(context),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-
-                  // Current Password
-                  TextField(
-                    controller: currentPasswordController,
-                    obscureText: !isCurrentVisible,
-                    decoration: InputDecoration(
-                      labelText: LanguageService.tr(
-                          'Current Password', 'বর্তমান পাসওয়ার্ড'),
-                      prefixIcon: const Icon(Icons.lock_outline, color: primaryTeal),
-                      suffixIcon: IconButton(
-                        icon: Icon(
-                          isCurrentVisible
-                              ? Icons.visibility_outlined
-                              : Icons.visibility_off_outlined,
-                        ),
-                        onPressed: () => setModalState(
-                            () => isCurrentVisible = !isCurrentVisible),
-                      ),
-                      border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12)),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-
-                  // New Password
-                  TextField(
-                    controller: newPasswordController,
-                    obscureText: !isNewVisible,
-                    decoration: InputDecoration(
-                      labelText:
-                          LanguageService.tr('New Password', 'নতুন পাসওয়ার্ড'),
-                      prefixIcon: const Icon(Icons.lock_outline, color: primaryTeal),
-                      suffixIcon: IconButton(
-                        icon: Icon(
-                          isNewVisible
-                              ? Icons.visibility_outlined
-                              : Icons.visibility_off_outlined,
-                        ),
-                        onPressed: () =>
-                            setModalState(() => isNewVisible = !isNewVisible),
-                      ),
-                      border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12)),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-
-                  // Confirm New Password
-                  TextField(
-                    controller: confirmPasswordController,
-                    obscureText: !isConfirmVisible,
-                    decoration: InputDecoration(
-                      labelText: LanguageService.tr(
-                          'Confirm New Password', 'পাসওয়ার্ড নিশ্চিত করুন'),
-                      prefixIcon: const Icon(Icons.lock_outline, color: primaryTeal),
-                      suffixIcon: IconButton(
-                        icon: Icon(
-                          isConfirmVisible
-                              ? Icons.visibility_outlined
-                              : Icons.visibility_off_outlined,
-                        ),
-                        onPressed: () => setModalState(
-                            () => isConfirmVisible = !isConfirmVisible),
-                      ),
-                      border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12)),
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-
-                  ElevatedButton(
-                    onPressed: () async {
-                      final currentPass =
-                          currentPasswordController.text.trim();
-                      final newPass = newPasswordController.text.trim();
-                      final confirmPass =
-                          confirmPasswordController.text.trim();
-
-                      if (currentPass.isEmpty || newPass.length < 6) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(LanguageService.tr(
-                                'Password must be at least 6 characters.',
-                                'পাসওয়ার্ড কমপক্ষে ৬ অক্ষরের হতে হবে।')),
-                            backgroundColor: Colors.redAccent,
-                          ),
-                        );
-                        return;
-                      }
-
-                      if (newPass != confirmPass) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(LanguageService.tr(
-                                'Passwords do not match.',
-                                'পাসওয়ার্ড দুটি মিলছে না।')),
-                            backgroundColor: Colors.redAccent,
-                          ),
-                        );
-                        return;
-                      }
-
-                      final res = await DatabaseService.changePassword(
-                        userId: _userId,
-                        oldPassword: currentPass,
-                        newPassword: newPass,
-                      );
-
-                      if (!context.mounted) return;
-                      Navigator.pop(context);
-
-                      if (res['success'] == true) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(LanguageService.tr(
-                                'Password updated successfully!',
-                                'পাসওয়ার্ড সফলভাবে পরিবর্তিত হয়েছে!')),
-                            backgroundColor: primaryTeal,
-                          ),
-                        );
-                      } else {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(res['message'] ?? 'Error'),
-                            backgroundColor: Colors.redAccent,
-                          ),
-                        );
-                      }
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: primaryTeal,
-                      foregroundColor: Colors.white,
-                      minimumSize: const Size(double.infinity, 50),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                    child: Text(
-                      LanguageService.tr('Update Password', 'পাসওয়ার্ড পরিবর্তন করুন'),
-                      style: const TextStyle(
-                          fontSize: 15, fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                ],
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
-
+  // ═════════════════════════════════════════════════════════
+  // BUILD
+  // ═════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<String>(
       valueListenable: LanguageService.currentLanguage,
-      builder: (context, currentLang, child) {
+      builder: (context, lang, child) {
         return Scaffold(
-          backgroundColor: const Color(0xFFF4F7F6),
+          backgroundColor: ivory,
           appBar: AppBar(
-            backgroundColor: Colors.white,
-            elevation: 0.5,
-            iconTheme: const IconThemeData(color: primaryTeal),
+            backgroundColor: ivory,
+            surfaceTintColor: Colors.transparent,
+            elevation: 0,
+            iconTheme: const IconThemeData(color: ink),
             title: Text(
               LanguageService.tr('Settings', 'সেটিংস'),
-              style: const TextStyle(
-                color: Colors.black87,
-                fontWeight: FontWeight.bold,
-                fontSize: 18,
-              ),
+              style: const TextStyle(color: ink, fontWeight: FontWeight.w700, fontSize: 18),
             ),
           ),
           body: _isLoading
               ? const Center(
-                  child: CircularProgressIndicator(color: primaryTeal))
-              : SingleChildScrollView(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        LanguageService.tr('App preferences and account settings',
-                            'অ্যাপ পছন্দসমূহ এবং অ্যাকাউন্ট সেটিংস'),
-                        style: TextStyle(fontSize: 13, color: Colors.grey[600]),
-                      ),
-                      const SizedBox(height: 16),
-
-                      // 1. Language Preference Section
-                      _buildLanguageSelectorCard(),
-                      const SizedBox(height: 16),
-
-                      // 2. Security & Password Section
-                      _buildSecuritySectionCard(),
-                      const SizedBox(height: 16),
-
-                      // 3. Notifications Preference Section
-                      _buildNotificationsSectionCard(),
-                      const SizedBox(height: 16),
-
-                      // 4. Saved Payout Bank Accounts Section
-                      _buildPayoutAccountsCard(),
-                      const SizedBox(height: 16),
-
-                      // 5. Legal & Policies Section
-                      _buildLegalSectionCard(),
-                      const SizedBox(height: 16),
-
-                      // 6. Danger Zone Section (Account Deletion)
-                      _buildDangerZoneCard(),
-                      const SizedBox(height: 20),
-
-                      // 7. App Info Card
-                      _buildAppInfoCard(),
-                      const SizedBox(height: 24),
-                    ],
-                  ),
-                ),
+            child: SizedBox(
+              width: 28,
+              height: 28,
+              child: CircularProgressIndicator(color: emerald, strokeWidth: 2.4),
+            ),
+          )
+              : _needsLogin
+              ? _buildNeedsLogin()
+              : RefreshIndicator(
+            onRefresh: _loadSettingsData,
+            color: emerald,
+            child: ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.fromLTRB(18, 6, 18, 40),
+              children: [
+                _buildProfileCard(),
+                const SizedBox(height: 24),
+                _sectionHeader(LanguageService.tr('Preferences', 'পছন্দসমূহ')),
+                const SizedBox(height: 12),
+                _buildLanguageCard(),
+                const SizedBox(height: 24),
+                _sectionHeader(LanguageService.tr('Security', 'নিরাপত্তা')),
+                const SizedBox(height: 12),
+                _buildSecurityCard(),
+                const SizedBox(height: 24),
+                _sectionHeader(LanguageService.tr('Payout Account', 'পেআউট অ্যাকাউন্ট')),
+                const SizedBox(height: 12),
+                _buildPayoutCard(),
+                const SizedBox(height: 24),
+                _sectionHeader(LanguageService.tr('Help & Support', 'সাহায্য ও সাপোর্ট')),
+                const SizedBox(height: 12),
+                _buildSupportCard(),
+                const SizedBox(height: 24),
+                _sectionHeader(LanguageService.tr('Legal', 'আইনি তথ্য')),
+                const SizedBox(height: 12),
+                _buildLegalCard(),
+                const SizedBox(height: 24),
+                _buildSignOutButton(),
+                const SizedBox(height: 14),
+                _buildDangerCard(),
+                const SizedBox(height: 24),
+                _buildAppInfo(),
+              ],
+            ),
+          ),
         );
       },
     );
   }
 
-  // Language Selector Card
-  Widget _buildLanguageSelectorCard() {
+  // ─── Shared pieces ────────────────────────────────────────
+  Widget _sectionHeader(String title) {
+    return Row(
+      children: [
+        Transform.rotate(
+          angle: math.pi / 4,
+          child: Container(
+            width: 8,
+            height: 8,
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(colors: [goldLight, gold]),
+            ),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Text(
+          title,
+          style: const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w700,
+            color: ink,
+            letterSpacing: -0.2,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _card(List<Widget> children) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: line),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(children: children),
+    );
+  }
+
+  Widget _divider() => const Divider(height: 1, thickness: 1, color: line, indent: 66);
+
+  Widget _tile({
+    required IconData icon,
+    required Color color,
+    required Color soft,
+    required String title,
+    String? subtitle,
+    Widget? trailing,
+    VoidCallback? onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+        child: Row(
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: soft,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(icon, color: color, size: 20),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: ink),
+                  ),
+                  if (subtitle != null && subtitle.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: const TextStyle(fontSize: 11.5, color: muted, height: 1.3),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            if (trailing != null) ...[const SizedBox(width: 8), trailing]
+            else if (onTap != null)
+              Icon(Icons.chevron_right_rounded, color: muted.withAlpha(150), size: 22),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ─── Profile card ─────────────────────────────────────────
+  (String, Color, Color) _kycBadge() {
+    switch (_kycStatus) {
+      case 'VERIFIED':
+      case 'APPROVED':
+        return (LanguageService.tr('KYC Verified', 'KYC যাচাইকৃত'), emerald, emeraldSoft);
+      case 'SUBMITTED':
+      case 'PENDING':
+      case 'UNDER_REVIEW':
+        return (LanguageService.tr('KYC Under Review', 'KYC যাচাই চলছে'), goldDeep, goldSoft);
+      case 'REJECTED':
+        return (LanguageService.tr('KYC Rejected', 'KYC বাতিল'), danger, dangerSoft);
+      default:
+        return (LanguageService.tr('KYC Not Done', 'KYC করা হয়নি'), terracotta, terracottaSoft);
+    }
+  }
+
+  Widget _buildProfileCard() {
+    final initial = _name.isNotEmpty ? _name[0].toUpperCase() : 'I';
+    final badge = _kycBadge();
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(24),
+      child: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            colors: [Color(0xFF125A43), emeraldDeep, Color(0xFF0B2A3A)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+        ),
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: CustomPaint(
+                painter: _IslamicPatternPainter(color: Colors.white.withAlpha(16), cell: 44),
+              ),
+            ),
+            Positioned.fill(
+              child: Container(
+                margin: const EdgeInsets.all(7),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(color: gold.withAlpha(80), width: 0.8),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(20),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(2),
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(color: gold, width: 1.4),
+                    ),
+                    child: CircleAvatar(
+                      radius: 28,
+                      backgroundColor: emerald,
+                      child: ClipOval(
+                        child: (_avatarUrl != null && _avatarUrl!.isNotEmpty)
+                            ? Image.network(
+                          _avatarUrl!,
+                          width: 56,
+                          height: 56,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => Text(
+                            initial,
+                            style: const TextStyle(
+                                color: Colors.white, fontSize: 22, fontWeight: FontWeight.w600),
+                          ),
+                        )
+                            : Text(
+                          initial,
+                          style: const TextStyle(
+                              color: Colors.white, fontSize: 22, fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 17,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          _email,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(color: Colors.white.withAlpha(170), fontSize: 12),
+                        ),
+                        const SizedBox(height: 10),
+                        GestureDetector(
+                          onTap: () async {
+                            await Navigator.push(
+                              context,
+                              MaterialPageRoute(builder: (_) => const KycPage()),
+                            );
+                            _loadSettingsData();
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                            decoration: BoxDecoration(
+                              color: badge.$3,
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.verified_user_outlined, size: 13, color: badge.$2),
+                                const SizedBox(width: 5),
+                                Text(
+                                  badge.$1,
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                    color: badge.$2,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ─── Language ─────────────────────────────────────────────
+  Widget _buildLanguageCard() {
     final bool isBangla = LanguageService.isBangla;
 
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey.shade200),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: const [
-              Icon(Icons.language_rounded, color: primaryTeal, size: 20),
-              SizedBox(width: 8),
-              Text(
-                'Language / ভাষা',
-                style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-
-          Row(
-            children: [
-              Expanded(
-                child: ChoiceChip(
-                  label: const Text('English (US)'),
-                  selected: !isBangla,
-                  selectedColor: primaryTeal,
-                  labelStyle: TextStyle(
-                    color: !isBangla ? Colors.white : Colors.black87,
-                    fontWeight: FontWeight.bold,
-                  ),
-                  onSelected: (selected) {
-                    if (selected) {
-                      LanguageService.setLanguage('en');
-                      setState(() {});
-                    }
-                  },
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: ChoiceChip(
-                  label: const Text('বাংলা (Bangla)'),
-                  selected: isBangla,
-                  selectedColor: primaryTeal,
-                  labelStyle: TextStyle(
-                    color: isBangla ? Colors.white : Colors.black87,
-                    fontWeight: FontWeight.bold,
-                  ),
-                  onSelected: (selected) {
-                    if (selected) {
-                      LanguageService.setLanguage('bn');
-                      setState(() {});
-                    }
-                  },
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  // Security Section Card
-  Widget _buildSecuritySectionCard() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey.shade200),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            LanguageService.tr('Security & Authentication', 'নিরাপত্তা ও অথেন্টিকেশন'),
-            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 12),
-
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: Colors.teal.shade50,
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: const Icon(Icons.lock_reset_rounded, color: primaryTeal),
-            ),
-            title: Text(
-              LanguageService.tr('Change Password', 'পাসওয়ার্ড পরিবর্তন'),
-              style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.bold),
-            ),
-            subtitle: Text(
-              LanguageService.tr(
-                  'Update your account password', 'আপনার অ্যাকাউন্ট পাসওয়ার্ড আপডেট করুন'),
-              style: TextStyle(fontSize: 11, color: Colors.grey[600]),
-            ),
-            trailing: const Icon(Icons.chevron_right_rounded, color: Colors.grey),
-            onTap: _showChangePasswordModal,
-          ),
-        ],
-      ),
-    );
-  }
-
-  // Notifications Preference Section
-  Widget _buildNotificationsSectionCard() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey.shade200),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            LanguageService.tr('Notification Preferences', 'নোটিফিকেশন পছন্দসমূহ'),
-            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 12),
-
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            activeThumbColor: primaryTeal,
-            title: Text(
-              LanguageService.tr('Push Notifications', 'পুশ নোটিফিকেশন'),
-              style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.bold),
-            ),
-            subtitle: Text(
-              LanguageService.tr('Receive instant alerts for project updates & returns',
-                  'প্রজেক্ট আপডেট ও রিটার্নের তাৎক্ষণিক অ্যালার্ট পাবেন'),
-              style: TextStyle(fontSize: 11, color: Colors.grey[600]),
-            ),
-            value: _pushNotifications,
-            onChanged: (val) {
-              setState(() => _pushNotifications = val);
-              _saveNotificationPref('push_notifications', val);
-            },
-          ),
-          const Divider(height: 1),
-
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            activeThumbColor: primaryTeal,
-            title: Text(
-              LanguageService.tr('Email Alerts', 'ইমেইল অ্যালার্ট'),
-              style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.bold),
-            ),
-            subtitle: Text(
-              LanguageService.tr('Receive investment receipts & distribution statements via email',
-                  'বিনিয়োগ রশিদ ও লভ্যাংশ স্টেটমেন্ট ইমেইলে পাবেন'),
-              style: TextStyle(fontSize: 11, color: Colors.grey[600]),
-            ),
-            value: _emailAlerts,
-            onChanged: (val) {
-              setState(() => _emailAlerts = val);
-              _saveNotificationPref('email_alerts', val);
-            },
-          ),
-        ],
-      ),
-    );
-  }
-
-  // Saved Payout Bank Accounts Section
-  Widget _buildPayoutAccountsCard() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey.shade200),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                LanguageService.tr('Saved Payout Accounts', 'সংরক্ষিত পেআউট ব্যাংক অ্যাকাউন্ট'),
-                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
-              ),
-              TextButton(
-                onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (context) => const KycPage()),
-                  );
-                },
-                child: Text(
-                  LanguageService.tr('Update via KYC', 'KYC-তে আপডেট'),
-                  style: const TextStyle(color: primaryTeal, fontSize: 12),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-
-          Container(
-            padding: const EdgeInsets.all(12),
+    Widget option(String label, bool selected, String code) {
+      return Expanded(
+        child: GestureDetector(
+          onTap: () {
+            if (!selected) {
+              LanguageService.setLanguage(code);
+              setState(() {});
+            }
+          },
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            padding: const EdgeInsets.symmetric(vertical: 11),
+            alignment: Alignment.center,
             decoration: BoxDecoration(
-              color: Colors.grey.shade50,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.grey.shade200),
+              color: selected ? emerald : Colors.transparent,
+              borderRadius: BorderRadius.circular(11),
+            ),
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                color: selected ? Colors.white : ink,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: line),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: lapisSoft,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(Icons.translate_rounded, color: lapis, size: 20),
+              ),
+              const SizedBox(width: 12),
+              const Text(
+                'Language / ভাষা',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: ink),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(4),
+            decoration: BoxDecoration(
+              color: ivory,
+              borderRadius: BorderRadius.circular(14),
             ),
             child: Row(
               children: [
-                const Icon(Icons.account_balance_rounded,
-                    color: primaryTeal, size: 22),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        _payoutAccount['bankName'] as String,
-                        style: const TextStyle(
-                            fontSize: 13, fontWeight: FontWeight.bold),
-                      ),
-                      Text(
-                        'Acc: ${_payoutAccount['bankAccountNumber']}',
-                        style: TextStyle(fontSize: 11, color: Colors.grey[600]),
-                      ),
-                    ],
-                  ),
-                ),
+                option('English', !isBangla, 'en'),
+                option('বাংলা', isBangla, 'bn'),
               ],
             ),
           ),
@@ -746,173 +1094,394 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
-  // Legal & Policies Section
-  Widget _buildLegalSectionCard() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey.shade200),
+  // ─── Security ─────────────────────────────────────────────
+  Widget _buildSecurityCard() {
+    return _card([
+      _tile(
+        icon: Icons.lock_reset_rounded,
+        color: emerald,
+        soft: emeraldSoft,
+        title: LanguageService.tr('Change Password', 'পাসওয়ার্ড পরিবর্তন'),
+        subtitle: LanguageService.tr('Update your account password',
+            'আপনার অ্যাকাউন্টের পাসওয়ার্ড বদলান'),
+        onTap: _showChangePasswordModal,
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            LanguageService.tr('Legal & Compliance', 'আইনি ও নীতিমালা'),
-            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+      if (_lockSupported) ...[
+        _divider(),
+        _tile(
+          icon: Icons.fingerprint_rounded,
+          color: turquoise,
+          soft: turquoiseSoft,
+          title: LanguageService.tr('App Lock', 'অ্যাপ লক'),
+          subtitle: LanguageService.tr(
+              'Ask for fingerprint, face or phone PIN when opening the app',
+              'অ্যাপ খুলতে ফিঙ্গারপ্রিন্ট, ফেস বা ফোনের পিন লাগবে'),
+          trailing: Switch(
+            value: _lockEnabled,
+            activeThumbColor: Colors.white,
+            activeTrackColor: emerald,
+            onChanged: _toggleAppLock,
           ),
-          const SizedBox(height: 12),
-
-          _buildLegalTile(
-            LanguageService.tr('Terms & Conditions', 'ব্যবহারের শর্তাবলী'),
-            Icons.description_outlined,
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                    builder: (context) => const TermsAndConditionsPage()),
-              );
-            },
-          ),
-          const Divider(height: 1),
-          _buildLegalTile(
-            LanguageService.tr('Privacy Policy', 'প্রাইভেসী পলিসি'),
-            Icons.privacy_tip_outlined,
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                    builder: (context) => const PrivacyPolicyPage()),
-              );
-            },
-          ),
-        ],
-      ),
-    );
+        ),
+      ],
+    ]);
   }
 
-  Widget _buildLegalTile(String title, IconData icon, {VoidCallback? onTap}) {
-    return ListTile(
-      contentPadding: EdgeInsets.zero,
-      leading: Icon(icon, color: primaryTeal, size: 20),
-      title: Text(title,
-          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-      trailing: const Icon(Icons.chevron_right_rounded, color: Colors.grey),
-      onTap: onTap,
-    );
-  }
+  // ─── Payout (KYC theke) ───────────────────────────────────
+  Widget _buildPayoutCard() {
+    final hasBank = _bankName.isNotEmpty && _bankAccount.isNotEmpty;
+    final hasMobile = _mobileProvider.isNotEmpty && _mobileNumber.isNotEmpty;
 
-  // Danger Zone Section (Account Deletion)
-  Widget _buildDangerZoneCard() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.red.shade50,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.red.shade200),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Icon(Icons.warning_amber_rounded,
-                  color: Colors.redAccent, size: 20),
-              const SizedBox(width: 8),
-              Text(
-                LanguageService.tr('Danger Zone', 'ডেঞ্জার জোন'),
-                style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.redAccent),
+    Future<void> openKyc() async {
+      await Navigator.push(context, MaterialPageRoute(builder: (_) => const KycPage()));
+      _loadSettingsData();
+    }
+
+    if (!hasBank && !hasMobile) {
+      return Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: goldSoft,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: gold.withAlpha(80)),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.account_balance_outlined, color: goldDeep, size: 24),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                LanguageService.tr(
+                    'No payout account yet. Add your bank or mobile wallet in KYC to receive returns.',
+                    'এখনো কোনো পেআউট অ্যাকাউন্ট নেই। লভ্যাংশ পেতে KYC-তে ব্যাংক বা মোবাইল ওয়ালেট যোগ করুন।'),
+                style: const TextStyle(fontSize: 12.5, color: goldDeep, height: 1.4),
               ),
-            ],
-          ),
-          const SizedBox(height: 12),
+            ),
+            const SizedBox(width: 8),
+            TextButton(
+              onPressed: openKyc,
+              child: Text(
+                LanguageService.tr('Add', 'যোগ করুন'),
+                style: const TextStyle(color: emerald, fontWeight: FontWeight.w700),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
 
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: Container(
-              padding: const EdgeInsets.all(8),
+    return _card([
+      if (hasBank)
+        _tile(
+          icon: Icons.account_balance_rounded,
+          color: emerald,
+          soft: emeraldSoft,
+          title: _bankName,
+          subtitle: '${LanguageService.tr('Account', 'অ্যাকাউন্ট')} ${_mask(_bankAccount)}',
+        ),
+      if (hasBank && hasMobile) _divider(),
+      if (hasMobile)
+        _tile(
+          icon: Icons.phone_android_rounded,
+          color: terracotta,
+          soft: terracottaSoft,
+          title: _mobileProvider,
+          subtitle: _mask(_mobileNumber),
+        ),
+      _divider(),
+      _tile(
+        icon: Icons.edit_outlined,
+        color: goldDeep,
+        soft: goldSoft,
+        title: LanguageService.tr('Update payout details', 'পেআউট তথ্য আপডেট করুন'),
+        subtitle: LanguageService.tr('Changes go through KYC review',
+            'পরিবর্তন KYC যাচাইয়ের মাধ্যমে হয়'),
+        onTap: openKyc,
+      ),
+    ]);
+  }
+
+  // ─── Help & Support (shudhu tottho, kono button na) ───────
+  Widget _buildSupportCard() {
+    Widget row(IconData icon, Color color, Color soft, String label, String value) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 36,
+              height: 36,
               decoration: BoxDecoration(
-                color: Colors.red.shade100,
-                borderRadius: BorderRadius.circular(10),
+                color: soft,
+                borderRadius: BorderRadius.circular(11),
               ),
-              child: const Icon(Icons.delete_forever_rounded,
-                  color: Colors.redAccent),
+              child: Icon(icon, color: color, size: 18),
             ),
-            title: Text(
-              LanguageService.tr('Delete Account', 'অ্যাকাউন্ট ডিলিট করুন'),
-              style: const TextStyle(
-                  fontSize: 13.5,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.redAccent),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label.toUpperCase(),
+                    style: const TextStyle(
+                      fontSize: 9.5,
+                      fontWeight: FontWeight.w700,
+                      color: muted,
+                      letterSpacing: 0.6,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  // Long-press kore copy kora jay
+                  SelectableText(
+                    value,
+                    style: const TextStyle(
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w600,
+                      color: ink,
+                      height: 1.35,
+                    ),
+                  ),
+                ],
+              ),
             ),
-            subtitle: Text(
-              LanguageService.tr(
-                  'Schedule account deletion (30-day recovery buffer)',
-                  'অ্যাকাউন্ট ডিলিট করুন (৩০ দিনের রিকভারি সময় পাবেন)'),
-              style: TextStyle(fontSize: 11, color: Colors.red.shade900),
-            ),
-            trailing:
-                const Icon(Icons.chevron_right_rounded, color: Colors.redAccent),
-            onTap: _showDeleteAccountDialog,
-          ),
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: line),
+      ),
+      child: Column(
+        children: [
+          row(Icons.call_rounded, emerald, emeraldSoft,
+              LanguageService.tr('Hotline', 'হটলাইন'), _hotlineDisplay),
+          row(Icons.mail_outline_rounded, lapis, lapisSoft,
+              LanguageService.tr('Email', 'ইমেইল'), _supportEmail),
+          row(Icons.schedule_rounded, goldDeep, goldSoft,
+              LanguageService.tr('Office Hours', 'অফিস সময়'),
+              LanguageService.tr('Saturday – Thursday, 9:00 AM – 6:00 PM',
+                  'শনিবার – বৃহস্পতিবার, সকাল ৯টা – সন্ধ্যা ৬টা')),
+          row(Icons.location_on_outlined, terracotta, terracottaSoft,
+              LanguageService.tr('Office Address', 'অফিসের ঠিকানা'),
+              '$_officeAddress, Bangladesh'),
+          row(Icons.language_rounded, turquoise, turquoiseSoft,
+              LanguageService.tr('Website', 'ওয়েবসাইট'), 'www.biniyogclub.com'),
         ],
       ),
     );
   }
 
-  // App Info Card
-  Widget _buildAppInfoCard() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey.shade200),
+  // ─── Legal — website er page app er bhitorei dekhay ───────
+  // Lekha website theke ashe, tai app ar website e shob shomoy ek-i thake
+  Widget _buildLegalCard() {
+    return _card([
+      _tile(
+        icon: Icons.description_outlined,
+        color: emerald,
+        soft: emeraldSoft,
+        title: LanguageService.tr('Terms of Service', 'ব্যবহারের শর্তাবলী'),
+        subtitle: LanguageService.tr('Rules for using Biniyog Club',
+            'বিনিয়োগ ক্লাব ব্যবহারের নিয়ম'),
+        onTap: () => _openLegal(
+            LanguageService.tr('Terms of Service', 'ব্যবহারের শর্তাবলী'), '/terms'),
       ),
-      child: Column(
-        children: [
-          Image.asset(
-            'assets/images/logo_full.png',
-            height: 36,
-            errorBuilder: (context, error, stackTrace) => const Text(
-              'Biniyog Club',
-              style: TextStyle(
-                  color: primaryTeal,
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold),
-            ),
+      _divider(),
+      _tile(
+        icon: Icons.privacy_tip_outlined,
+        color: lapis,
+        soft: lapisSoft,
+        title: LanguageService.tr('Privacy Policy', 'গোপনীয়তা নীতি'),
+        subtitle: LanguageService.tr('How your data is collected and used',
+            'আপনার তথ্য কীভাবে সংগ্রহ ও ব্যবহার হয়'),
+        onTap: () => _openLegal(
+            LanguageService.tr('Privacy Policy', 'গোপনীয়তা নীতি'), '/privacy'),
+      ),
+      _divider(),
+      _tile(
+        icon: Icons.gpp_maybe_outlined,
+        color: terracotta,
+        soft: terracottaSoft,
+        title: LanguageService.tr('About & Risk Disclosures', 'আমাদের সম্পর্কে ও ঝুঁকি'),
+        subtitle: LanguageService.tr('Investment risks you should know',
+            'বিনিয়োগের ঝুঁকি সম্পর্কে জানুন'),
+        onTap: () => _openLegal(
+            LanguageService.tr('About & Risk Disclosures', 'আমাদের সম্পর্কে ও ঝুঁকি'), '/about'),
+      ),
+      _divider(),
+      _tile(
+        icon: Icons.verified_user_outlined,
+        color: goldDeep,
+        soft: goldSoft,
+        title: LanguageService.tr('Compliance & KYC FAQ', 'কমপ্লায়েন্স ও KYC প্রশ্নোত্তর'),
+        subtitle: LanguageService.tr('KYC, security and common questions',
+            'KYC, নিরাপত্তা ও সাধারণ প্রশ্ন'),
+        onTap: () => _openLegal(
+            LanguageService.tr('Compliance & KYC FAQ', 'কমপ্লায়েন্স ও KYC প্রশ্নোত্তর'), '/faq'),
+      ),
+    ]);
+  }
+
+  // ─── Sign out + Danger ────────────────────────────────────
+  Widget _buildSignOutButton() {
+    return OutlinedButton.icon(
+      onPressed: _confirmSignOut,
+      icon: const Icon(Icons.logout_rounded, size: 18),
+      label: Text(LanguageService.tr('Sign out', 'সাইন আউট')),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: ink,
+        side: const BorderSide(color: line),
+        backgroundColor: Colors.white,
+        minimumSize: const Size(double.infinity, 50),
+        textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      ),
+    );
+  }
+
+  Widget _buildDangerCard() {
+    return Container(
+      decoration: BoxDecoration(
+        color: dangerSoft,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: danger.withAlpha(60)),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: _tile(
+        icon: Icons.delete_forever_rounded,
+        color: danger,
+        soft: Colors.white,
+        title: LanguageService.tr('Delete Account', 'অ্যাকাউন্ট ডিলিট করুন'),
+        subtitle: LanguageService.tr(
+            'Only possible with no active or pending investments. 30-day recovery period.',
+            'চলমান বা অপেক্ষমান বিনিয়োগ না থাকলেই সম্ভব। ৩০ দিনের মধ্যে ফেরত আনা যাবে।'),
+        trailing: _checkingDelete
+            ? const SizedBox(
+          width: 18,
+          height: 18,
+          child: CircularProgressIndicator(color: danger, strokeWidth: 2),
+        )
+            : const Icon(Icons.chevron_right_rounded, color: danger, size: 22),
+        onTap: _checkingDelete ? null : _startDeleteFlow,
+      ),
+    );
+  }
+
+  // ─── App info (asol version) ──────────────────────────────
+  Widget _buildAppInfo() {
+    final showStoreButton = _publishedOnPlayStore && Platform.isAndroid && _packageName.isNotEmpty;
+
+    return Column(
+      children: [
+        Image.asset(
+          'assets/images/logo_full.png',
+          height: 30,
+          errorBuilder: (_, __, ___) => const Text(
+            'Biniyog Club',
+            style: TextStyle(color: emerald, fontSize: 17, fontWeight: FontWeight.w700),
           ),
+        ),
+        if (_version.isNotEmpty) ...[
           const SizedBox(height: 6),
           Text(
-            'Version 1.0.0 (Production)',
-            style: TextStyle(fontSize: 11.5, color: Colors.grey[600]),
-          ),
-          const SizedBox(height: 12),
-          OutlinedButton(
-            onPressed: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(LanguageService.tr(
-                      'You are using the latest version!',
-                      'আপনি সর্বাধুনিক ভার্সনটি ব্যবহার করছেন!')),
-                  backgroundColor: primaryTeal,
-                ),
-              );
-            },
-            style: OutlinedButton.styleFrom(
-              foregroundColor: primaryTeal,
-              side: const BorderSide(color: primaryTeal),
-              visualDensity: VisualDensity.compact,
-            ),
-            child: Text(LanguageService.tr('Check for Updates', 'আপডেট চেক করুন')),
+            '${LanguageService.tr('Version', 'ভার্সন')} $_version ($_buildNumber)',
+            style: const TextStyle(fontSize: 11.5, color: muted),
           ),
         ],
+        if (showStoreButton) ...[
+          const SizedBox(height: 10),
+          TextButton.icon(
+            onPressed: () => _open(
+              'https://play.google.com/store/apps/details?id=$_packageName',
+              mode: LaunchMode.externalApplication,
+            ),
+            icon: const Icon(Icons.system_update_alt_rounded, size: 18, color: emerald),
+            label: Text(
+              LanguageService.tr('Check for updates on Play Store', 'প্লে স্টোরে আপডেট দেখুন'),
+              style: const TextStyle(color: emerald, fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildNeedsLogin() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.lock_outline_rounded, size: 40, color: goldDeep),
+            const SizedBox(height: 12),
+            Text(
+              LanguageService.tr('Please log in to see your settings',
+                  'সেটিংস দেখতে লগইন করুন'),
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: ink),
+            ),
+            const SizedBox(height: 16),
+            FilledButton(
+              onPressed: _goToLogin,
+              style: FilledButton.styleFrom(
+                backgroundColor: emerald,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              child: Text(LanguageService.tr('Log in', 'লগইন')),
+            ),
+          ],
+        ),
       ),
     );
   }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Islamic geometric pattern (dashboard er moto 8-point star)
+// ═══════════════════════════════════════════════════════════
+class _IslamicPatternPainter extends CustomPainter {
+  final Color color;
+  final double cell;
+
+  _IslamicPatternPainter({required this.color, required this.cell});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.9;
+
+    final r = cell * 0.34;
+
+    for (double y = 0; y <= size.height + cell; y += cell) {
+      final offsetRow = ((y / cell).round() % 2) * cell / 2;
+      for (double x = -cell; x <= size.width + cell; x += cell) {
+        final c = Offset(x + offsetRow, y);
+        for (final start in [0.0, math.pi / 4]) {
+          final path = Path();
+          for (int i = 0; i < 4; i++) {
+            final a = start + i * math.pi / 2;
+            final p = Offset(c.dx + r * math.cos(a), c.dy + r * math.sin(a));
+            i == 0 ? path.moveTo(p.dx, p.dy) : path.lineTo(p.dx, p.dy);
+          }
+          path.close();
+          canvas.drawPath(path, paint);
+        }
+        canvas.drawCircle(c, r * 0.32, paint);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _IslamicPatternPainter old) =>
+      old.color != color || old.cell != cell;
 }
