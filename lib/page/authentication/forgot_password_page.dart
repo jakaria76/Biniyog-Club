@@ -4,6 +4,11 @@ import 'login_page.dart';
 import 'otp_verification_page.dart';
 import 'widgets/auth_card.dart';
 
+const _emerald = Color(0xFF0F4D3A);
+const _gold = Color(0xFFC9A24A);
+const _bg = Color(0xFFF6F1E7);
+const _danger = Color(0xFFB3261E);
+
 class ForgotPasswordPage extends StatefulWidget {
   const ForgotPasswordPage({super.key});
 
@@ -23,51 +28,64 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
     super.dispose();
   }
 
-  void _handleSendOtp() async {
-    if (_formKey.currentState!.validate()) {
-      setState(() => _isLoading = true);
+  void _snack(String msg, {bool ok = true}) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text(msg),
+        backgroundColor: ok ? _emerald : _danger,
+        behavior: SnackBarBehavior.floating,
+      ));
+  }
 
-      final email = _emailController.text.trim();
-      final result = await AuthService.forgotPassword(email: email);
+  Future<void> _handleSendOtp() async {
+    FocusScope.of(context).unfocus();
+    if (!_formKey.currentState!.validate()) return;
 
-      if (!mounted) return;
-      setState(() => _isLoading = false);
+    setState(() => _isLoading = true);
+    final email = _emailController.text.trim().toLowerCase();
+    final result = await AuthService.forgotPassword(email: email);
 
-      if (result['success'] == true) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(result['message'] ?? 'OTP code sent to $email'),
-            backgroundColor: Colors.teal,
-          ),
-        );
+    if (!mounted) return;
+    setState(() => _isLoading = false);
 
-        // Open OTP Verification Screen
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => OtpVerificationPage(email: email),
-          ),
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(result['message'] ?? 'Failed to send OTP code.'),
-            backgroundColor: Colors.redAccent,
-          ),
-        );
-      }
+    if (result['success'] == true) {
+      _snack(result['message']?.toString() ?? 'Code sent to $email');
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => OtpVerificationPage(email: email)),
+      );
+    } else {
+      _snack(result['message']?.toString() ?? 'Failed to send the code.', ok: false);
     }
   }
+
+  InputDecoration _decoration() => InputDecoration(
+    labelText: 'Email Address',
+    hintText: 'name@example.com',
+    prefixIcon: const Icon(Icons.email_outlined, color: _emerald),
+    filled: true,
+    fillColor: Colors.white,
+    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+    enabledBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(12),
+      borderSide: BorderSide(color: Colors.grey.shade300),
+    ),
+    focusedBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(12),
+      borderSide: const BorderSide(color: _emerald, width: 2),
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF4F7F6),
+      backgroundColor: _bg,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.teal),
+          icon: const Icon(Icons.arrow_back, color: _emerald),
           onPressed: () => Navigator.pop(context),
         ),
       ),
@@ -76,21 +94,15 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
           child: AuthCard(
             title: 'Forgot your password?',
             description:
-                "Enter your registered email address and we'll send you a 6-digit OTP code to reset your password.",
+            "Enter the email address you registered with. We'll email you a 6-digit code to reset your password.",
             footer: GestureDetector(
-              onTap: () {
-                Navigator.pushReplacement(
-                  context,
-                  MaterialPageRoute(builder: (context) => const LoginPage()),
-                );
-              },
+              onTap: () => Navigator.pushReplacement(
+                context,
+                MaterialPageRoute(builder: (_) => const LoginPage()),
+              ),
               child: const Text(
                 'Back to sign in',
-                style: TextStyle(
-                  color: Colors.teal,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 14,
-                ),
+                style: TextStyle(color: _emerald, fontWeight: FontWeight.bold, fontSize: 14),
               ),
             ),
             child: Form(
@@ -101,60 +113,61 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
                   TextFormField(
                     controller: _emailController,
                     keyboardType: TextInputType.emailAddress,
-                    decoration: InputDecoration(
-                      labelText: 'Email Address',
-                      hintText: 'name@example.com',
-                      prefixIcon:
-                          const Icon(Icons.email_outlined, color: Colors.teal),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide:
-                            const BorderSide(color: Colors.teal, width: 2),
-                      ),
-                    ),
+                    autofillHints: const [AutofillHints.email],
+                    textInputAction: TextInputAction.send,
+                    onFieldSubmitted: (_) {
+                      if (!_isLoading) _handleSendOtp();
+                    },
+                    decoration: _decoration(),
                     validator: (value) {
-                      if (value == null || value.trim().isEmpty) {
-                        return 'Please enter your email address';
-                      }
-                      if (!RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$')
-                          .hasMatch(value.trim())) {
+                      final v = (value ?? '').trim();
+                      if (v.isEmpty) return 'Please enter your email address';
+                      if (!RegExp(r'^[\w.+\-]+@([\w\-]+\.)+[A-Za-z]{2,}$').hasMatch(v)) {
                         return 'Please enter a valid email address';
                       }
                       return null;
                     },
                   ),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: _gold.withAlpha(30),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: _gold.withAlpha(90)),
+                    ),
+                    child: const Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(Icons.info_outline_rounded, size: 18, color: Color(0xFF8A6A1F)),
+                        SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'The email comes from noreply@biniyogclub.com. If you do not see it in a minute, check your Spam / Promotions folder.',
+                            style: TextStyle(fontSize: 12, color: Color(0xFF5E4A17), height: 1.35),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 20),
                   ElevatedButton(
                     onPressed: _isLoading ? null : _handleSendOtp,
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.teal,
+                      backgroundColor: _emerald,
                       foregroundColor: Colors.white,
+                      disabledBackgroundColor: _emerald.withAlpha(120),
                       padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      elevation: 1,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     ),
                     child: _isLoading
                         ? const SizedBox(
-                            height: 20,
-                            width: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              valueColor:
-                                  AlwaysStoppedAnimation<Color>(Colors.white),
-                            ),
-                          )
-                        : const Text(
-                            'Send OTP Code',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
+                      height: 20,
+                      width: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                    )
+                        : const Text('Send Code',
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                   ),
                 ],
               ),

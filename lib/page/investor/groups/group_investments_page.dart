@@ -1,16 +1,13 @@
-import 'dart:convert';
-import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:image_picker/image_picker.dart';
 
 import '../../authentication/login_page.dart';
 import '../../../services/auth_service.dart';
 import '../../../services/database_service.dart';
 import '../../../services/language_service.dart';
 import 'browse_groups_page.dart';
+import 'group_invest_page.dart';
 
 class GroupInvestmentsPage extends StatefulWidget {
   const GroupInvestmentsPage({super.key});
@@ -212,214 +209,22 @@ class _GroupInvestmentsPageState extends State<GroupInvestmentsPage> {
   // ═════════════════════════════════════════════════════════
   // SUBMIT PROOF
   // ═════════════════════════════════════════════════════════
-  void _showGroupSubmitProofModal(Map<String, dynamic> inv) {
-    final bank = inv['bank'] as Map<String, dynamic>?;
-    final bankId = inv['bankAccountId']?.toString() ?? '';
-    if (bank == null || bankId.isEmpty) {
-      _toast(
-        LanguageService.tr('Payment account for this tier is not set yet. Please contact support.',
-            'এই টিয়ারের পেমেন্ট অ্যাকাউন্ট এখনো সেট করা হয়নি। সাপোর্টে যোগাযোগ করুন।'),
-        error: true,
-      );
-      return;
-    }
-
-    final amount = _num(inv['amountBdt']);
-    final trxRefController = TextEditingController();
-    final notesController = TextEditingController();
-    final picker = ImagePicker();
-    File? proofFile;
-    String? proofDataUri;
-    bool submitting = false;
-    String? error;
-
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+  Future<void> _openPayment(Map<String, dynamic> inv) async {
+    final ok = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => GroupInvestPage(
+          existing: inv,
+          groupName: inv['groupName']?.toString() ?? '',
+          entityName: inv['entityName']?.toString() ?? '',
+        ),
       ),
-      builder: (sheetContext) {
-        return StatefulBuilder(
-          builder: (sheetContext, setModalState) {
-            Future<void> pick() async {
-              try {
-                final picked = await picker.pickImage(
-                  source: ImageSource.gallery,
-                  maxWidth: 1600,
-                  maxHeight: 1600,
-                  imageQuality: 85,
-                );
-                if (picked == null) return;
-                final bytes = await picked.readAsBytes();
-                final mime = picked.mimeType ?? _mimeFromPath(picked.path);
-                setModalState(() {
-                  proofFile = File(picked.path);
-                  proofDataUri = 'data:$mime;base64,${base64Encode(bytes)}';
-                  error = null;
-                });
-              } catch (e) {
-                setModalState(() => error = LanguageService.tr(
-                    'Could not open the image. Please try another one.',
-                    'ছবিটি খোলা যায়নি। অন্য একটি চেষ্টা করুন।'));
-              }
-            }
-
-            Future<void> submit() async {
-              final ref = trxRefController.text.trim();
-              if (ref.isEmpty) {
-                setModalState(() => error = LanguageService.tr(
-                    'Please enter the transaction reference.', 'ট্রানজেকশন রেফারেন্স দিন।'));
-                return;
-              }
-              if (proofDataUri == null) {
-                setModalState(() => error = LanguageService.tr(
-                    'Please upload the payment receipt.', 'পেমেন্ট রসিদ আপলোড করুন।'));
-                return;
-              }
-
-              setModalState(() {
-                submitting = true;
-                error = null;
-              });
-
-              final userData = await AuthService.getUserData();
-              final userId = userData?['id']?.toString() ?? '';
-
-              final res = await DatabaseService.submitGroupInvestmentPayment(
-                groupInvestmentId: inv['id'].toString(),
-                userId: userId,
-                amountBdt: amount,
-                bankAccountId: bankId,
-                transactionRef: ref,
-                proofFileUrl: proofDataUri!,
-                notes: notesController.text.trim(),
-              );
-
-              if (res['success'] == true) {
-                if (sheetContext.mounted) Navigator.pop(sheetContext);
-                _toast(LanguageService.tr('Payment proof submitted. We will verify it soon.',
-                    'পেমেন্ট প্রুফ জমা হয়েছে। শীঘ্রই যাচাই করা হবে।'));
-                _loadGroupInvestments();
-              } else {
-                // Modal khola rakhi, jate user abar chesta korte pare
-                setModalState(() {
-                  submitting = false;
-                  error = res['message']?.toString() ??
-                      LanguageService.tr('Could not submit. Please try again.',
-                          'জমা দেওয়া যায়নি। আবার চেষ্টা করুন।');
-                });
-              }
-            }
-
-            return Padding(
-              padding: EdgeInsets.only(
-                top: 12,
-                left: 20,
-                right: 20,
-                bottom: MediaQuery.of(sheetContext).viewInsets.bottom + 24,
-              ),
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Center(
-                      child: Container(
-                        width: 40,
-                        height: 4,
-                        decoration: BoxDecoration(color: line, borderRadius: BorderRadius.circular(4)),
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            LanguageService.tr('Submit Payment Proof', 'পেমেন্ট প্রুফ জমা দিন'),
-                            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: ink),
-                          ),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.close_rounded, color: muted),
-                          onPressed: submitting ? null : () => Navigator.pop(sheetContext),
-                        ),
-                      ],
-                    ),
-                    Text(
-                      '${_title(inv)} · ${inv['tierName'] ?? ''}',
-                      style: const TextStyle(fontSize: 12.5, color: muted),
-                    ),
-                    const SizedBox(height: 16),
-
-                    // Kot taka, kothay pathate hobe
-                    _bankBox(bank, amount),
-                    const SizedBox(height: 16),
-
-                    _input(
-                      trxRefController,
-                      LanguageService.tr('Transaction reference / slip no. *', 'ট্রানজেকশন রেফারেন্স / স্লিপ নম্বর *'),
-                      enabled: !submitting,
-                    ),
-                    const SizedBox(height: 12),
-                    _input(
-                      notesController,
-                      LanguageService.tr('Notes (optional)', 'নোট (ঐচ্ছিক)'),
-                      enabled: !submitting,
-                    ),
-                    const SizedBox(height: 14),
-                    Text(
-                      LanguageService.tr('Payment receipt / deposit slip *', 'পেমেন্ট রসিদ / ডিপোজিট স্লিপ *'),
-                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: ink),
-                    ),
-                    const SizedBox(height: 6),
-                    _proofPicker(proofFile, submitting ? null : pick),
-
-                    if (error != null) ...[
-                      const SizedBox(height: 12),
-                      _errorBox(error!),
-                    ],
-                    const SizedBox(height: 18),
-                    SizedBox(
-                      width: double.infinity,
-                      height: 50,
-                      child: FilledButton(
-                        onPressed: submitting ? null : submit,
-                        style: FilledButton.styleFrom(
-                          backgroundColor: emerald,
-                          foregroundColor: Colors.white,
-                          disabledBackgroundColor: emerald.withAlpha(120),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                        ),
-                        child: submitting
-                            ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2.2, color: Colors.white),
-                        )
-                            : Text(
-                          LanguageService.tr('Submit Payment Proof', 'পেমেন্ট প্রুফ জমা দিন'),
-                          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            );
-          },
-        );
-      },
     );
-  }
-
-  String _mimeFromPath(String path) {
-    final p = path.toLowerCase();
-    if (p.endsWith('.jpg') || p.endsWith('.jpeg')) return 'image/jpeg';
-    if (p.endsWith('.webp')) return 'image/webp';
-    if (p.endsWith('.heic')) return 'image/heic';
-    return 'image/png';
+    if (ok == true && mounted) {
+      _toast(LanguageService.tr('Payment submitted. It will be active after admin approval.',
+          'পেমেন্ট জমা হয়েছে। অ্যাডমিন অনুমোদনের পর চালু হবে।'));
+      _loadGroupInvestments();
+    }
   }
 
   // ═════════════════════════════════════════════════════════
@@ -782,8 +587,8 @@ class _GroupInvestmentsPageState extends State<GroupInvestmentsPage> {
             const SizedBox(height: 10),
           ] else ...[
             Text(
-              LanguageService.tr('Pay the amount to the bank account, then submit the proof.',
-                  'ব্যাংক অ্যাকাউন্টে টাকা পাঠিয়ে প্রুফ জমা দিন।'),
+              LanguageService.tr('Pay by bank, cash or cheque, then submit the payment details.',
+                  'ব্যাংক, ক্যাশ বা চেকে টাকা দিয়ে পেমেন্টের তথ্য জমা দিন।'),
               style: const TextStyle(fontSize: 11.5, color: muted),
             ),
             const SizedBox(height: 10),
@@ -791,11 +596,11 @@ class _GroupInvestmentsPageState extends State<GroupInvestmentsPage> {
           SizedBox(
             width: double.infinity,
             child: FilledButton.icon(
-              onPressed: () => _showGroupSubmitProofModal(inv),
+              onPressed: () => _openPayment(inv),
               icon: const Icon(Icons.upload_file_rounded, size: 17),
               label: Text(rejected
                   ? LanguageService.tr('Submit Again', 'আবার জমা দিন')
-                  : LanguageService.tr('Submit Payment Proof', 'পেমেন্ট প্রুফ জমা দিন')),
+                  : LanguageService.tr('Submit Payment', 'পেমেন্ট জমা দিন')),
               style: FilledButton.styleFrom(
                 backgroundColor: emerald,
                 foregroundColor: Colors.white,
@@ -825,133 +630,6 @@ class _GroupInvestmentsPageState extends State<GroupInvestmentsPage> {
             child: Text(text, style: TextStyle(fontSize: 11.5, color: color, fontWeight: FontWeight.w600)),
           ),
         ],
-      ),
-    );
-  }
-
-  // ─── Shared pieces ────────────────────────────────────────
-  Widget _bankBox(Map<String, dynamic> bank, double amount) {
-    Widget row(String label, String value, {bool copy = false}) {
-      if (value.isEmpty) return const SizedBox.shrink();
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 3),
-        child: Row(
-          children: [
-            SizedBox(width: 110, child: Text(label, style: const TextStyle(fontSize: 11.5, color: muted))),
-            Expanded(
-              child: Text(value,
-                  style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: ink)),
-            ),
-            if (copy)
-              InkWell(
-                borderRadius: BorderRadius.circular(8),
-                onTap: () async {
-                  await Clipboard.setData(ClipboardData(text: value));
-                  _toast(LanguageService.tr('Copied', 'কপি হয়েছে'));
-                },
-                child: const Padding(
-                  padding: EdgeInsets.all(4),
-                  child: Icon(Icons.copy_rounded, size: 15, color: goldDeep),
-                ),
-              ),
-          ],
-        ),
-      );
-    }
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: goldSoft,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: gold.withAlpha(70)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            LanguageService.tr('Send ${_fmtFull(amount)} to', '${_fmtFull(amount)} পাঠান এই অ্যাকাউন্টে'),
-            style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: goldDeep),
-          ),
-          const SizedBox(height: 8),
-          row(LanguageService.tr('Bank', 'ব্যাংক'), bank['bankName']?.toString() ?? ''),
-          row(LanguageService.tr('Account name', 'অ্যাকাউন্টের নাম'), bank['accountName']?.toString() ?? ''),
-          row(LanguageService.tr('Account no.', 'অ্যাকাউন্ট নম্বর'), bank['accountNumber']?.toString() ?? '',
-              copy: true),
-          row(LanguageService.tr('Branch', 'শাখা'), bank['branchName']?.toString() ?? ''),
-          row(LanguageService.tr('Mobile', 'মোবাইল'), bank['mobileNumber']?.toString() ?? '', copy: true),
-        ],
-      ),
-    );
-  }
-
-  Widget _input(TextEditingController c, String label, {bool enabled = true}) {
-    return TextField(
-      controller: c,
-      enabled: enabled,
-      decoration: InputDecoration(
-        labelText: label,
-        labelStyle: const TextStyle(fontSize: 13, color: muted),
-        filled: true,
-        fillColor: ivory,
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: line)),
-        enabledBorder:
-        OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: line)),
-        focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: emerald, width: 1.4)),
-      ),
-    );
-  }
-
-  Widget _proofPicker(File? file, VoidCallback? onTap) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        height: 120,
-        width: double.infinity,
-        decoration: BoxDecoration(
-          color: ivory,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: file == null ? line : emerald.withAlpha(120)),
-        ),
-        child: file != null
-            ? Stack(
-          children: [
-            Positioned.fill(
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(13),
-                child: Image.file(file, fit: BoxFit.cover),
-              ),
-            ),
-            Positioned(
-              right: 8,
-              bottom: 8,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                decoration: BoxDecoration(
-                  color: Colors.black.withAlpha(140),
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Text(
-                  LanguageService.tr('Change', 'পরিবর্তন'),
-                  style: const TextStyle(color: Colors.white, fontSize: 11),
-                ),
-              ),
-            ),
-          ],
-        )
-            : Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.cloud_upload_outlined, color: goldDeep, size: 28),
-            const SizedBox(height: 6),
-            Text(
-              LanguageService.tr('Tap to choose the receipt image', 'রসিদের ছবি বাছাই করতে ট্যাপ করুন'),
-              style: const TextStyle(fontSize: 11.5, color: muted),
-            ),
-          ],
-        ),
       ),
     );
   }

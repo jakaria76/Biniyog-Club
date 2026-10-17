@@ -1,15 +1,12 @@
-import 'dart:convert';
-import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:image_picker/image_picker.dart';
 
 import '../../authentication/login_page.dart';
 import '../../../services/auth_service.dart';
 import '../../../services/database_service.dart';
 import '../../../services/language_service.dart';
+import 'group_invest_page.dart';
 
 class BrowseGroupsPage extends StatefulWidget {
   const BrowseGroupsPage({super.key});
@@ -106,32 +103,15 @@ class _BrowseGroupsPageState extends State<BrowseGroupsPage> {
     return '৳${amount.toStringAsFixed(0)}';
   }
 
-  String _fmtFull(double amount) {
-    final s = amount.toStringAsFixed(0);
-    final b = StringBuffer();
-    for (int i = 0; i < s.length; i++) {
-      if (i > 0 && (s.length - i) % 3 == 0) b.write(',');
-      b.write(s[i]);
-    }
-    return '৳$b';
-  }
-
   String _pct(double r) {
     final v = r * 100;
     return '${v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(1)}%';
   }
 
-  String _mimeFromPath(String path) {
-    final p = path.toLowerCase();
-    if (p.endsWith('.jpg') || p.endsWith('.jpeg')) return 'image/jpeg';
-    if (p.endsWith('.webp')) return 'image/webp';
-    if (p.endsWith('.heic')) return 'image/heic';
-    return 'image/png';
-  }
-
+  /// Admin tier e payment (bank) account add korle-i invest kora jabe
   bool _hasBank(Map<String, dynamic> tier) {
-    final bank = tier['bank'] as Map<String, dynamic>?;
-    return bank != null && (bank['accountNumber']?.toString() ?? '').isNotEmpty;
+    final bank = tier['bank'];
+    return bank is Map && (bank['accountNumber']?.toString() ?? '').trim().isNotEmpty;
   }
 
   void _toast(String msg, {bool error = false}) {
@@ -159,284 +139,18 @@ class _BrowseGroupsPageState extends State<BrowseGroupsPage> {
       return;
     }
 
-    _showInvestTierModal(userId, tier, groupName, entityName);
-  }
-
-  void _showInvestTierModal(
-      String userId, Map<String, dynamic> tier, String groupName, String entityName) {
-    final minAmount = _num(tier['minAmountBdt']);
-    final maxRaw = tier['maxAmountBdt'];
-    final maxAmount = maxRaw == null ? null : _num(maxRaw);
-    final pct = _num(tier['expectedReturnPct']);
-    final bank = tier['bank'] as Map<String, dynamic>;
-
-    final amountController =
-    TextEditingController(text: minAmount > 0 ? minAmount.toStringAsFixed(0) : '');
-    final trxRefController = TextEditingController();
-    final notesController = TextEditingController();
-    final picker = ImagePicker();
-
-    File? proofFile;
-    String? proofDataUri;
-    bool submitting = false;
-    String? error;
-
-    // Investment toiri hoye gele, proof fail korleo abar notun investment banabo na
-    String? createdInvestmentId;
-    double? createdAmount;
-
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+    final ok = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => GroupInvestPage(tier: tier, groupName: groupName, entityName: entityName),
       ),
-      builder: (sheetContext) {
-        return StatefulBuilder(
-          builder: (sheetContext, setModalState) {
-            final typed = double.tryParse(amountController.text.replaceAll(',', '').trim()) ?? 0;
-
-            Future<void> pick() async {
-              try {
-                final picked = await picker.pickImage(
-                  source: ImageSource.gallery,
-                  maxWidth: 1600,
-                  maxHeight: 1600,
-                  imageQuality: 85,
-                );
-                if (picked == null) return;
-                final bytes = await picked.readAsBytes();
-                final mime = picked.mimeType ?? _mimeFromPath(picked.path);
-                setModalState(() {
-                  proofFile = File(picked.path);
-                  proofDataUri = 'data:$mime;base64,${base64Encode(bytes)}';
-                  error = null;
-                });
-              } catch (_) {
-                setModalState(() => error = LanguageService.tr(
-                    'Could not open the image. Please try another one.',
-                    'ছবিটি খোলা যায়নি। অন্য একটি চেষ্টা করুন।'));
-              }
-            }
-
-            Future<void> submit() async {
-              final amount = createdAmount ?? typed;
-              final ref = trxRefController.text.trim();
-
-              String? problem;
-              if (amount <= 0) {
-                problem = LanguageService.tr('Please enter the amount.', 'পরিমাণ লিখুন।');
-              } else if (minAmount > 0 && amount < minAmount) {
-                problem = LanguageService.tr('Minimum amount is ${_fmtFull(minAmount)}.',
-                    'সর্বনিম্ন পরিমাণ ${_fmtFull(minAmount)}।');
-              } else if (maxAmount != null && maxAmount > 0 && amount > maxAmount) {
-                problem = LanguageService.tr('Maximum amount is ${_fmtFull(maxAmount)}.',
-                    'সর্বোচ্চ পরিমাণ ${_fmtFull(maxAmount)}।');
-              } else if (ref.isEmpty) {
-                problem = LanguageService.tr(
-                    'Please enter the transaction reference.', 'ট্রানজেকশন রেফারেন্স দিন।');
-              } else if (proofDataUri == null) {
-                problem = LanguageService.tr(
-                    'Please upload the payment receipt.', 'পেমেন্ট রসিদ আপলোড করুন।');
-              }
-              if (problem != null) {
-                setModalState(() => error = problem);
-                return;
-              }
-
-              setModalState(() {
-                submitting = true;
-                error = null;
-              });
-
-              // ধাপ ১: investment toiri (age hoye thakle skip)
-              if (createdInvestmentId == null) {
-                final invRes = await DatabaseService.createGroupInvestment(
-                  userId: userId,
-                  tierId: tier['id'].toString(),
-                  amountBdt: amount,
-                  notes: notesController.text.trim(),
-                );
-                if (invRes['success'] != true) {
-                  setModalState(() {
-                    submitting = false;
-                    error = invRes['message']?.toString() ??
-                        LanguageService.tr('Could not create the investment.', 'বিনিয়োগ তৈরি করা যায়নি।');
-                  });
-                  return;
-                }
-                createdInvestmentId = invRes['groupInvestmentId']?.toString();
-                createdAmount = amount;
-              }
-
-              // ধাপ ২: payment proof
-              final payRes = await DatabaseService.submitGroupInvestmentPayment(
-                groupInvestmentId: createdInvestmentId!,
-                userId: userId,
-                amountBdt: amount,
-                bankAccountId: bank['id'].toString(),
-                transactionRef: ref,
-                proofFileUrl: proofDataUri!,
-                notes: notesController.text.trim(),
-              );
-
-              if (payRes['success'] != true) {
-                setModalState(() {
-                  submitting = false;
-                  error = LanguageService.tr(
-                    'Your investment was created, but the proof could not be sent: '
-                        '${payRes['message'] ?? 'unknown error'}. Tap submit to try again, '
-                        'or submit it later from Group Investments.',
-                    'বিনিয়োগ তৈরি হয়েছে, কিন্তু প্রুফ পাঠানো যায়নি: '
-                        '${payRes['message'] ?? ''}। আবার জমা দিন, অথবা পরে গ্রুপ বিনিয়োগ পেজ থেকে দিন।',
-                  );
-                });
-                return;
-              }
-
-              if (sheetContext.mounted) Navigator.pop(sheetContext);
-              if (!mounted) return;
-              await _showSuccessDialog(groupName, tier['name']?.toString() ?? '', amount);
-              if (mounted) Navigator.pop(context, true);
-            }
-
-            return Padding(
-              padding: EdgeInsets.only(
-                top: 12,
-                left: 20,
-                right: 20,
-                bottom: MediaQuery.of(sheetContext).viewInsets.bottom + 24,
-              ),
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Center(
-                      child: Container(
-                        width: 40,
-                        height: 4,
-                        decoration: BoxDecoration(color: line, borderRadius: BorderRadius.circular(4)),
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            tier['name']?.toString() ?? '',
-                            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: ink),
-                          ),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.close_rounded, color: muted),
-                          onPressed: submitting ? null : () => Navigator.pop(sheetContext),
-                        ),
-                      ],
-                    ),
-                    Text(
-                      entityName.isEmpty || entityName.toLowerCase() == groupName.toLowerCase()
-                          ? groupName
-                          : '$groupName — $entityName',
-                      style: const TextStyle(fontSize: 12.5, color: muted),
-                    ),
-                    const SizedBox(height: 16),
-
-                    // ─── Amount ───
-                    TextField(
-                      controller: amountController,
-                      enabled: !submitting && createdInvestmentId == null,
-                      keyboardType: TextInputType.number,
-                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                      onChanged: (_) => setModalState(() => error = null),
-                      decoration: _decoration(
-                        LanguageService.tr('Investment amount (BDT) *', 'বিনিয়োগের পরিমাণ (টাকা) *'),
-                        prefix: '৳ ',
-                        helper: [
-                          if (minAmount > 0) LanguageService.tr('Min ${_fmtFull(minAmount)}', 'সর্বনিম্ন ${_fmtFull(minAmount)}'),
-                          if (maxAmount != null && maxAmount > 0)
-                            LanguageService.tr('Max ${_fmtFull(maxAmount)}', 'সর্বোচ্চ ${_fmtFull(maxAmount)}'),
-                        ].join(' · '),
-                      ),
-                    ),
-                    if (pct > 0 && typed > 0) ...[
-                      const SizedBox(height: 8),
-                      Text(
-                        LanguageService.tr(
-                          'Expected return at ${_pct(pct)}: ${_fmtFull(typed * pct)} (estimate, not guaranteed)',
-                          '${_pct(pct)} হারে প্রত্যাশিত লাভ: ${_fmtFull(typed * pct)} (আনুমানিক, নিশ্চিত নয়)',
-                        ),
-                        style: const TextStyle(fontSize: 11.5, color: emerald, fontWeight: FontWeight.w600),
-                      ),
-                    ],
-                    const SizedBox(height: 16),
-
-                    // ─── Bank ───
-                    _bankBox(bank, typed),
-                    const SizedBox(height: 16),
-
-                    TextField(
-                      controller: trxRefController,
-                      enabled: !submitting,
-                      decoration: _decoration(LanguageService.tr(
-                          'Transaction reference / slip no. *', 'ট্রানজেকশন রেফারেন্স / স্লিপ নম্বর *')),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: notesController,
-                      enabled: !submitting,
-                      decoration: _decoration(LanguageService.tr('Notes (optional)', 'নোট (ঐচ্ছিক)')),
-                    ),
-                    const SizedBox(height: 14),
-                    Text(
-                      LanguageService.tr('Payment receipt / deposit slip *', 'পেমেন্ট রসিদ / ডিপোজিট স্লিপ *'),
-                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: ink),
-                    ),
-                    const SizedBox(height: 6),
-                    _proofPicker(proofFile, submitting ? null : pick),
-
-                    if (error != null) ...[
-                      const SizedBox(height: 12),
-                      _errorBox(error!),
-                    ],
-                    const SizedBox(height: 18),
-                    SizedBox(
-                      width: double.infinity,
-                      height: 50,
-                      child: FilledButton(
-                        onPressed: submitting ? null : submit,
-                        style: FilledButton.styleFrom(
-                          backgroundColor: emerald,
-                          foregroundColor: Colors.white,
-                          disabledBackgroundColor: emerald.withAlpha(120),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                        ),
-                        child: submitting
-                            ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2.2, color: Colors.white),
-                        )
-                            : Text(
-                          createdInvestmentId == null
-                              ? LanguageService.tr('Invest & Submit Proof', 'বিনিয়োগ ও প্রুফ জমা দিন')
-                              : LanguageService.tr('Submit Proof Again', 'আবার প্রুফ জমা দিন'),
-                          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            );
-          },
-        );
-      },
     );
+    if (ok != true || !mounted) return;
+    await _showSuccessDialog(groupName, tier['name']?.toString() ?? '');
+    if (mounted) Navigator.pop(context, true);
   }
 
-  Future<void> _showSuccessDialog(String groupName, String tierName, double amount) {
+  Future<void> _showSuccessDialog(String groupName, String tierName) {
     return showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -454,8 +168,8 @@ class _BrowseGroupsPageState extends State<BrowseGroupsPage> {
         ),
         content: Text(
           LanguageService.tr(
-            '${_fmtFull(amount)} in $groupName · $tierName.\nYour investment becomes active after we verify the payment.',
-            '$groupName · $tierName এ ${_fmtFull(amount)}।\nপেমেন্ট যাচাইয়ের পর বিনিয়োগ চালু হবে।',
+            '$groupName · $tierName\nYour investment is now pending. It becomes active after admin approves the payment.',
+            '$groupName · $tierName\nবিনিয়োগ এখন পেন্ডিং। অ্যাডমিন পেমেন্ট অনুমোদন করলে চালু হবে।',
           ),
           textAlign: TextAlign.center,
           style: const TextStyle(fontSize: 13, color: muted, height: 1.4),
@@ -678,7 +392,6 @@ class _BrowseGroupsPageState extends State<BrowseGroupsPage> {
     final maxAmount = maxRaw == null ? 0.0 : _num(maxRaw);
     final description = tier['description']?.toString() ?? '';
     final benefits = ((tier['benefits'] as List?) ?? []).map((b) => b.toString()).toList();
-    final canInvest = _hasBank(tier);
 
     String range;
     if (minAmount > 0 && maxAmount > 0) {
@@ -774,7 +487,7 @@ class _BrowseGroupsPageState extends State<BrowseGroupsPage> {
           const SizedBox(height: 12),
           SizedBox(
             width: double.infinity,
-            child: canInvest
+            child: _hasBank(tier)
                 ? FilledButton(
               onPressed: () => _startInvest(tier, groupName, entityName),
               style: FilledButton.styleFrom(
@@ -792,12 +505,20 @@ class _BrowseGroupsPageState extends State<BrowseGroupsPage> {
               padding: const EdgeInsets.symmetric(vertical: 11),
               alignment: Alignment.center,
               decoration: BoxDecoration(
-                color: line,
+                color: goldSoft,
                 borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: gold.withAlpha(90)),
               ),
-              child: Text(
-                LanguageService.tr('Not open for investment yet', 'এখনো বিনিয়োগের জন্য খোলা হয়নি'),
-                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: muted),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.schedule_rounded, size: 16, color: goldDeep),
+                  const SizedBox(width: 6),
+                  Text(
+                    LanguageService.tr('Coming Soon', 'শীঘ্রই আসছে'),
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: goldDeep),
+                  ),
+                ],
               ),
             ),
           ),
@@ -809,147 +530,6 @@ class _BrowseGroupsPageState extends State<BrowseGroupsPage> {
   // ═════════════════════════════════════════════════════════
   // SHARED WIDGETS
   // ═════════════════════════════════════════════════════════
-  InputDecoration _decoration(String label, {String? prefix, String? helper}) {
-    return InputDecoration(
-      labelText: label,
-      labelStyle: const TextStyle(fontSize: 13, color: muted),
-      prefixText: prefix,
-      helperText: (helper == null || helper.isEmpty) ? null : helper,
-      helperStyle: const TextStyle(fontSize: 11, color: muted),
-      filled: true,
-      fillColor: ivory,
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: line)),
-      enabledBorder:
-      OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: line)),
-      focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: emerald, width: 1.4)),
-    );
-  }
-
-  Widget _bankBox(Map<String, dynamic> bank, double amount) {
-    Widget row(String label, String value, {bool copy = false}) {
-      if (value.isEmpty) return const SizedBox.shrink();
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 3),
-        child: Row(
-          children: [
-            SizedBox(width: 110, child: Text(label, style: const TextStyle(fontSize: 11.5, color: muted))),
-            Expanded(
-              child: Text(value, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: ink)),
-            ),
-            if (copy)
-              InkWell(
-                borderRadius: BorderRadius.circular(8),
-                onTap: () async {
-                  await Clipboard.setData(ClipboardData(text: value));
-                  _toast(LanguageService.tr('Copied', 'কপি হয়েছে'));
-                },
-                child: const Padding(
-                  padding: EdgeInsets.all(4),
-                  child: Icon(Icons.copy_rounded, size: 15, color: goldDeep),
-                ),
-              ),
-          ],
-        ),
-      );
-    }
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: goldSoft,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: gold.withAlpha(70)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            amount > 0
-                ? LanguageService.tr('Send ${_fmtFull(amount)} to', '${_fmtFull(amount)} পাঠান এই অ্যাকাউন্টে')
-                : LanguageService.tr('Pay into this account', 'এই অ্যাকাউন্টে টাকা পাঠান'),
-            style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: goldDeep),
-          ),
-          const SizedBox(height: 8),
-          row(LanguageService.tr('Bank', 'ব্যাংক'), bank['bankName']?.toString() ?? ''),
-          row(LanguageService.tr('Account name', 'অ্যাকাউন্টের নাম'), bank['accountName']?.toString() ?? ''),
-          row(LanguageService.tr('Account no.', 'অ্যাকাউন্ট নম্বর'), bank['accountNumber']?.toString() ?? '',
-              copy: true),
-          row(LanguageService.tr('Branch', 'শাখা'), bank['branchName']?.toString() ?? ''),
-        ],
-      ),
-    );
-  }
-
-  Widget _proofPicker(File? file, VoidCallback? onTap) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        height: 120,
-        width: double.infinity,
-        decoration: BoxDecoration(
-          color: ivory,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: file == null ? line : emerald.withAlpha(120)),
-        ),
-        child: file != null
-            ? Stack(
-          children: [
-            Positioned.fill(
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(13),
-                child: Image.file(file, fit: BoxFit.cover),
-              ),
-            ),
-            Positioned(
-              right: 8,
-              bottom: 8,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                decoration: BoxDecoration(
-                  color: Colors.black.withAlpha(140),
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Text(
-                  LanguageService.tr('Change', 'পরিবর্তন'),
-                  style: const TextStyle(color: Colors.white, fontSize: 11),
-                ),
-              ),
-            ),
-          ],
-        )
-            : Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.cloud_upload_outlined, color: goldDeep, size: 28),
-            const SizedBox(height: 6),
-            Text(
-              LanguageService.tr('Tap to choose the receipt image', 'রসিদের ছবি বাছাই করতে ট্যাপ করুন'),
-              style: const TextStyle(fontSize: 11.5, color: muted),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _errorBox(String text) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(color: dangerSoft, borderRadius: BorderRadius.circular(10)),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Icon(Icons.error_outline_rounded, size: 16, color: danger),
-          const SizedBox(width: 8),
-          Expanded(child: Text(text, style: const TextStyle(fontSize: 12, color: danger))),
-        ],
-      ),
-    );
-  }
-
   Widget _buildMessage(IconData icon, String title, String subtitle) {
     return Center(
       child: Padding(

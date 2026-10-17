@@ -1185,71 +1185,6 @@ class _InvestmentsPageState extends State<InvestmentsPage> {
     );
   }
 
-  // ─── Status helpers ───────────────────────────────────────
-  String _statusText(String st, {bool underReview = false}) {
-    if (underReview) return LanguageService.tr('Under Review', 'পর্যালোচনায়');
-    switch (st) {
-      case 'ACTIVE':
-        return LanguageService.tr('Active', 'একটিভ');
-      case 'PENDING':
-      case 'PAYMENT_PENDING':
-        return LanguageService.tr('Awaiting Payment', 'পেমেন্ট অপেক্ষমান');
-      case 'COMPLETED':
-      case 'MATURED':
-        return LanguageService.tr('Completed', 'সম্পন্ন');
-      case 'CANCELLED':
-      case 'REJECTED':
-        return LanguageService.tr('Cancelled', 'বাতিল');
-      default:
-        return st;
-    }
-  }
-
-  Color _statusColor(String st, {bool underReview = false}) {
-    if (underReview) return lapis;
-    switch (st) {
-      case 'ACTIVE':
-        return emerald;
-      case 'PENDING':
-      case 'PAYMENT_PENDING':
-        return goldDeep;
-      case 'COMPLETED':
-      case 'MATURED':
-        return lapis;
-      case 'CANCELLED':
-      case 'REJECTED':
-        return danger;
-      default:
-        return terracotta;
-    }
-  }
-
-  Widget _statusPill(String status, {bool underReview = false}) {
-    final c = _statusColor(status, underReview: underReview);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-      decoration: BoxDecoration(
-        color: c.withAlpha(25),
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 6,
-            height: 6,
-            decoration: BoxDecoration(color: c, shape: BoxShape.circle),
-          ),
-          const SizedBox(width: 5),
-          Text(
-            _statusText(status, underReview: underReview),
-            style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, color: c),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _kindBadge(bool isGroup) {
     final c = isGroup ? turquoise : emerald;
     return Container(
@@ -1272,6 +1207,104 @@ class _InvestmentsPageState extends State<InvestmentsPage> {
                 fontSize: 9.5, fontWeight: FontWeight.w800, color: c, letterSpacing: 0.6),
           ),
         ],
+      ),
+    );
+  }
+
+  // ─── Payment status banner (boro, bold) ───────────────────
+  Widget _paymentStatusBanner({
+    required String status,
+    required bool awaiting,
+    required bool underReview,
+    required bool rejected,
+    String? reason,
+  }) {
+    final IconData icon;
+    final Color c;
+    final String title;
+    final String desc;
+
+    if (rejected) {
+      icon = Icons.cancel_rounded;
+      c = danger;
+      title = LanguageService.tr('Payment Rejected', 'পেমেন্ট বাতিল হয়েছে');
+      desc = (reason != null && reason.isNotEmpty)
+          ? LanguageService.tr('Reason: $reason', 'কারণ: $reason')
+          : LanguageService.tr('Please check and submit your payment again.', 'যাচাই করে আবার পেমেন্ট জমা দিন।');
+    } else if (underReview) {
+      icon = Icons.hourglass_top_rounded;
+      c = lapis;
+      title = LanguageService.tr('Payment Under Review', 'পেমেন্ট যাচাই চলছে');
+      desc = LanguageService.tr('Admin is checking your payment. It becomes active after approval.',
+          'অ্যাডমিন আপনার পেমেন্ট যাচাই করছেন। অনুমোদনের পর চালু হবে।');
+    } else if (awaiting) {
+      icon = Icons.error_outline_rounded;
+      c = goldDeep;
+      title = LanguageService.tr('Payment Not Submitted', 'পেমেন্ট জমা হয়নি');
+      desc = LanguageService.tr('Send the money and submit your payment proof below.',
+          'টাকা পাঠিয়ে নিচে পেমেন্ট প্রুফ জমা দিন।');
+    } else if (status == 'ACTIVE') {
+      icon = Icons.verified_rounded;
+      c = emerald;
+      title = LanguageService.tr('Payment Approved · Active', 'পেমেন্ট অনুমোদিত · চালু');
+      desc = LanguageService.tr('Your investment is running.', 'আপনার বিনিয়োগ চলছে।');
+    } else if (status == 'COMPLETED' || status == 'MATURED') {
+      icon = Icons.task_alt_rounded;
+      c = lapis;
+      title = LanguageService.tr('Completed', 'সম্পন্ন');
+      desc = LanguageService.tr('This investment has finished its term.', 'এই বিনিয়োগের মেয়াদ শেষ।');
+    } else {
+      icon = Icons.block_rounded;
+      c = danger;
+      title = LanguageService.tr('Cancelled', 'বাতিল');
+      desc = LanguageService.tr('This investment was cancelled.', 'এই বিনিয়োগ বাতিল হয়েছে।');
+    }
+
+    // Bam pashe rong er dag — borderRadius + ek pasher border Flutter e
+    // assert kore, tai alada strip
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 12),
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: c.withAlpha(22),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: IntrinsicHeight(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Container(width: 5, color: c),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 12, 14, 12),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(icon, color: c, size: 26),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            title,
+                            style: TextStyle(fontSize: 16.5, fontWeight: FontWeight.w900, color: c, height: 1.2),
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            desc,
+                            style: TextStyle(
+                                fontSize: 12.5, fontWeight: FontWeight.w600, color: c.withAlpha(220), height: 1.35),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1360,8 +1393,6 @@ class _InvestmentsPageState extends State<InvestmentsPage> {
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
-                    _statusPill(status, underReview: underReview),
-                    const SizedBox(height: 4),
                     Text(
                       item['certNo'].toString(),
                       style: const TextStyle(
@@ -1372,6 +1403,16 @@ class _InvestmentsPageState extends State<InvestmentsPage> {
               ],
             ),
           ),
+
+          // Payment er obostha — boro kore, jate ek nojore bojha jay
+          _paymentStatusBanner(
+            status: status,
+            awaiting: awaiting,
+            underReview: underReview,
+            rejected: rejected,
+            reason: rejectionReason,
+          ),
+          const SizedBox(height: 12),
 
           // Return breakdown
           Container(

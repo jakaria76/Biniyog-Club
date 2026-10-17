@@ -11,7 +11,6 @@ import '../../../services/auth_service.dart';
 import '../../../services/database_service.dart';
 import '../../../services/language_service.dart';
 import '../dashboard/investor_dashboard_page.dart';
-import '../kyc/kyc_page.dart';
 import 'legal_web_page.dart';
 
 class SettingsPage extends StatefulWidget {
@@ -63,13 +62,8 @@ class _SettingsPageState extends State<SettingsPage> {
   String _name = 'Investor';
   String _email = '';
   String? _avatarUrl;
-  String _kycStatus = 'NOT_STARTED';
+  String _phone = '';
 
-  // Payout — KYC te user nije ja diyeche
-  String _bankName = '';
-  String _bankAccount = '';
-  String _mobileProvider = '';
-  String _mobileNumber = '';
 
   String _version = '';
   String _buildNumber = '';
@@ -125,20 +119,14 @@ class _SettingsPageState extends State<SettingsPage> {
 
     final profile = results[0] as Map<String, dynamic>;
     final info = results[1] as PackageInfo?;
-    final inv = (profile['investorProfile'] as Map?)?.cast<String, dynamic>() ?? {};
 
     if (!mounted) return;
     setState(() {
       _userId = profile['id']?.toString() ?? userId;
       _name = profile['name']?.toString() ?? userData?['name']?.toString() ?? 'Investor';
       _email = profile['email']?.toString() ?? userEmail;
+      _phone = profile['phone']?.toString() ?? userData?['phone']?.toString() ?? '';
       _avatarUrl = profile['avatarUrl']?.toString();
-      _kycStatus = profile['kycStatus']?.toString() ?? 'NOT_STARTED';
-
-      _bankName = inv['bankName']?.toString() ?? '';
-      _bankAccount = inv['bankAccountNumber']?.toString() ?? '';
-      _mobileProvider = inv['mobileProvider']?.toString() ?? '';
-      _mobileNumber = inv['mobileNumber']?.toString() ?? '';
 
       _version = info?.version ?? '';
       _buildNumber = info?.buildNumber ?? '';
@@ -160,13 +148,6 @@ class _SettingsPageState extends State<SettingsPage> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(msg), backgroundColor: error ? danger : emerald),
     );
-  }
-
-  /// Shudhu shesh 4 digit dekhai
-  String _mask(String value) {
-    final v = value.replaceAll(' ', '');
-    if (v.length <= 4) return v;
-    return '•••• ${v.substring(v.length - 4)}';
   }
 
   Future<void> _open(String url, {LaunchMode mode = LaunchMode.platformDefault}) async {
@@ -747,10 +728,6 @@ class _SettingsPageState extends State<SettingsPage> {
                 const SizedBox(height: 12),
                 _buildSecurityCard(),
                 const SizedBox(height: 24),
-                _sectionHeader(LanguageService.tr('Payout Account', 'পেআউট অ্যাকাউন্ট')),
-                const SizedBox(height: 12),
-                _buildPayoutCard(),
-                const SizedBox(height: 24),
                 _sectionHeader(LanguageService.tr('Help & Support', 'সাহায্য ও সাপোর্ট')),
                 const SizedBox(height: 12),
                 _buildSupportCard(),
@@ -867,25 +844,10 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   // ─── Profile card ─────────────────────────────────────────
-  (String, Color, Color) _kycBadge() {
-    switch (_kycStatus) {
-      case 'VERIFIED':
-      case 'APPROVED':
-        return (LanguageService.tr('KYC Verified', 'KYC যাচাইকৃত'), emerald, emeraldSoft);
-      case 'SUBMITTED':
-      case 'PENDING':
-      case 'UNDER_REVIEW':
-        return (LanguageService.tr('KYC Under Review', 'KYC যাচাই চলছে'), goldDeep, goldSoft);
-      case 'REJECTED':
-        return (LanguageService.tr('KYC Rejected', 'KYC বাতিল'), danger, dangerSoft);
-      default:
-        return (LanguageService.tr('KYC Not Done', 'KYC করা হয়নি'), terracotta, terracottaSoft);
-    }
-  }
-
   Widget _buildProfileCard() {
     final initial = _name.isNotEmpty ? _name[0].toUpperCase() : 'I';
-    final badge = _kycBadge();
+    // Email optional — na thakle phone dekhai
+    final contact = _email.isNotEmpty ? _email : _phone;
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(24),
@@ -964,42 +926,10 @@ class _SettingsPageState extends State<SettingsPage> {
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          _email,
+                          contact,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(color: Colors.white.withAlpha(170), fontSize: 12),
-                        ),
-                        const SizedBox(height: 10),
-                        GestureDetector(
-                          onTap: () async {
-                            await Navigator.push(
-                              context,
-                              MaterialPageRoute(builder: (_) => const KycPage()),
-                            );
-                            _loadSettingsData();
-                          },
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                            decoration: BoxDecoration(
-                              color: badge.$3,
-                              borderRadius: BorderRadius.circular(20),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(Icons.verified_user_outlined, size: 13, color: badge.$2),
-                                const SizedBox(width: 5),
-                                Text(
-                                  badge.$1,
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w700,
-                                    color: badge.$2,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
                         ),
                       ],
                     ),
@@ -1127,80 +1057,6 @@ class _SettingsPageState extends State<SettingsPage> {
     ]);
   }
 
-  // ─── Payout (KYC theke) ───────────────────────────────────
-  Widget _buildPayoutCard() {
-    final hasBank = _bankName.isNotEmpty && _bankAccount.isNotEmpty;
-    final hasMobile = _mobileProvider.isNotEmpty && _mobileNumber.isNotEmpty;
-
-    Future<void> openKyc() async {
-      await Navigator.push(context, MaterialPageRoute(builder: (_) => const KycPage()));
-      _loadSettingsData();
-    }
-
-    if (!hasBank && !hasMobile) {
-      return Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: goldSoft,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: gold.withAlpha(80)),
-        ),
-        child: Row(
-          children: [
-            const Icon(Icons.account_balance_outlined, color: goldDeep, size: 24),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                LanguageService.tr(
-                    'No payout account yet. Add your bank or mobile wallet in KYC to receive returns.',
-                    'এখনো কোনো পেআউট অ্যাকাউন্ট নেই। লভ্যাংশ পেতে KYC-তে ব্যাংক বা মোবাইল ওয়ালেট যোগ করুন।'),
-                style: const TextStyle(fontSize: 12.5, color: goldDeep, height: 1.4),
-              ),
-            ),
-            const SizedBox(width: 8),
-            TextButton(
-              onPressed: openKyc,
-              child: Text(
-                LanguageService.tr('Add', 'যোগ করুন'),
-                style: const TextStyle(color: emerald, fontWeight: FontWeight.w700),
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    return _card([
-      if (hasBank)
-        _tile(
-          icon: Icons.account_balance_rounded,
-          color: emerald,
-          soft: emeraldSoft,
-          title: _bankName,
-          subtitle: '${LanguageService.tr('Account', 'অ্যাকাউন্ট')} ${_mask(_bankAccount)}',
-        ),
-      if (hasBank && hasMobile) _divider(),
-      if (hasMobile)
-        _tile(
-          icon: Icons.phone_android_rounded,
-          color: terracotta,
-          soft: terracottaSoft,
-          title: _mobileProvider,
-          subtitle: _mask(_mobileNumber),
-        ),
-      _divider(),
-      _tile(
-        icon: Icons.edit_outlined,
-        color: goldDeep,
-        soft: goldSoft,
-        title: LanguageService.tr('Update payout details', 'পেআউট তথ্য আপডেট করুন'),
-        subtitle: LanguageService.tr('Changes go through KYC review',
-            'পরিবর্তন KYC যাচাইয়ের মাধ্যমে হয়'),
-        onTap: openKyc,
-      ),
-    ]);
-  }
-
   // ─── Help & Support (shudhu tottho, kono button na) ───────
   Widget _buildSupportCard() {
     Widget row(IconData icon, Color color, Color soft, String label, String value) {
@@ -1319,11 +1175,11 @@ class _SettingsPageState extends State<SettingsPage> {
         icon: Icons.verified_user_outlined,
         color: goldDeep,
         soft: goldSoft,
-        title: LanguageService.tr('Compliance & KYC FAQ', 'কমপ্লায়েন্স ও KYC প্রশ্নোত্তর'),
-        subtitle: LanguageService.tr('KYC, security and common questions',
-            'KYC, নিরাপত্তা ও সাধারণ প্রশ্ন'),
+        title: LanguageService.tr('FAQ', 'সাধারণ প্রশ্নোত্তর'),
+        subtitle: LanguageService.tr('Security and common questions',
+            'নিরাপত্তা ও সাধারণ প্রশ্ন'),
         onTap: () => _openLegal(
-            LanguageService.tr('Compliance & KYC FAQ', 'কমপ্লায়েন্স ও KYC প্রশ্নোত্তর'), '/faq'),
+            LanguageService.tr('FAQ', 'সাধারণ প্রশ্নোত্তর'), '/faq'),
       ),
     ]);
   }

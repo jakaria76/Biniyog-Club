@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 import 'package:bcrypt/bcrypt.dart';
@@ -294,53 +295,114 @@ class DatabaseService {
   // AUTH
   // ═════════════════════════════════════════════════════════
 
-  // Register User matching exact Prisma 'users' & 'investor_profiles' tables
+  // ═════════════════════════════════════════════════════════
+  // TABLE SCHEMA (website er Prisma schema ja ache, sheta-i mani)
+  // ═════════════════════════════════════════════════════════
+  /// table → {column: nullable kina}. Ekbar jene rakhi.
+  static final Map<String, Map<String, bool>> _tableCols = {};
+
+  static Future<Map<String, bool>> _columnsOf(String table) async {
+    final cached = _tableCols[table];
+    if (cached != null) return cached;
+    final res = await queryNeonHttp('''
+      SELECT column_name AS "c", is_nullable AS "n"
+      FROM information_schema.columns
+      WHERE table_name = \$1
+    ''', [table]);
+    final cols = {for (final r in res) r['c'].toString(): r['n']?.toString() == 'YES'};
+    if (cols.isNotEmpty) _tableCols[table] = cols;
+    return cols;
+  }
+
+  /// Email chara account — users."email" NOT NULL hole ei nokol thikana boshe.
+  /// Eta kothao dekhano hoy na (profile e "Not provided" dekhay).
+  static const String _noEmailDomain = '@noemail.biniyogclub.com';
+
+  static bool isPlaceholderEmail(String? e) => (e ?? '').toLowerCase().endsWith(_noEmailDomain);
+
+  static String _publicEmail(dynamic e) {
+    final s = e?.toString() ?? '';
+    return isPlaceholderEmail(s) ? '' : s;
+  }
+
+  /// +8801… / 01… — duita-i 01… e ani
+  static String normalizeBdPhone(String v) =>
+      v.replaceAll(RegExp(r'[\s-]'), '').replaceFirst(RegExp(r'^\+?88(?=01)'), '');
+
+  // Register User — website er users + investor_profiles + wallets e
   static Future<Map<String, dynamic>> registerUser({
     required String name,
-    required String email,
+    String? email,
     required String phone,
     required String password,
+    // Nullable rakhi jate purono AuthService.register compile kore —
+    // kintu khali hole register hobe na
     String? nidNumber,
+    DateTime? dateOfBirth,
+    String? address,
+    String? city, // jela — website "city" column e
     String? nomineeNidNumber,
     String? nomineeRelation,
   }) async {
     try {
-      final hashedPassword = hashPassword(password);
-      final cleanEmail = email.trim().toLowerCase();
-      final cleanPhone = phone.trim();
+      final cleanEmail = (email ?? '').trim().toLowerCase();
+      final cleanPhone = normalizeBdPhone(phone.trim());
+      final cleanNid = (nidNumber ?? '').trim();
+      final cleanAddress = (address ?? '').trim();
+      final nomineeNid = (nomineeNidNumber ?? '').trim();
+      final nomineeRel = (nomineeRelation ?? '').trim();
+      if (cleanPhone.isEmpty || cleanNid.isEmpty || cleanAddress.isEmpty || dateOfBirth == null) {
+        return {'success': false, 'message': 'Please fill in all required fields.'};
+      }
+
+      final metas = await Future.wait([_columnsOf('users'), _columnsOf('investor_profiles')]);
+      final userCols = metas[0];
+      final profCols = metas[1];
+      if (userCols.isEmpty || profCols.isEmpty) {
+        return {'success': false, 'message': _connectionErrorMsg()};
+      }
+
+      // Email dile sheta; na dile column nullable hole NULL, na hole nokol thikana
+      String? emailValue;
+      if (cleanEmail.isNotEmpty) {
+        emailValue = cleanEmail;
+      } else if (userCols['email'] == true) {
+        emailValue = null;
+      } else {
+        emailValue = 'u$cleanPhone$_noEmailDomain';
+      }
 
       final userId = _generateUuid();
       final profileId = _generateUuid();
       final walletId = _generateUuid();
       final nowStr = _nowIso();
 
-      // Single Atomic SQL Statement inserting User, InvestorProfile & Wallet in 1 Round-Trip!
+      // Ek query te: duplicate check + user + investor profile + wallet
       final res = await queryNeonHttp('''
         WITH existing_check_user AS (
-          SELECT "id", "email", "phone" FROM users WHERE LOWER("email") = LOWER(\$2) OR ("phone" = \$3 AND \$3 != '') LIMIT 1
+          SELECT "id", "email", "phone" FROM users
+          WHERE (\$2::text IS NOT NULL AND LOWER("email") = LOWER(\$2::text))
+             OR "phone" = \$3::text
+          LIMIT 1
         ),
         existing_check_nid AS (
-          SELECT "nationalId" FROM investor_profiles WHERE "nationalId" = \$8 AND \$8 IS NOT NULL LIMIT 1
+          SELECT "nationalId" FROM investor_profiles WHERE "nationalId" = \$8::text LIMIT 1
         ),
         new_user AS (
           INSERT INTO users (
             "id", "email", "passwordHash", "name", "phone", "role", "status", "emailVerified", "createdAt", "updatedAt"
           )
-          SELECT \$1, \$2, \$4, \$5, \$3, 'INVESTOR'::"UserRole", 'ACTIVE'::"UserStatus", true, \$6, \$6
+          SELECT \$1, \$2::text, \$4, \$5, \$3::text, 'INVESTOR'::"UserRole", 'ACTIVE'::"UserStatus", \$12::boolean, \$6, \$6
           WHERE NOT EXISTS (SELECT 1 FROM existing_check_user) AND NOT EXISTS (SELECT 1 FROM existing_check_nid)
           RETURNING "id"
         ),
         new_profile AS (
           INSERT INTO investor_profiles (
-            "id", "userId", "nationalId", "nomineeNationalId", "nomineeRelation", "country", "createdAt", "updatedAt"
+            "id", "userId", "nationalId", "nomineeNationalId", "nomineeRelation", "address", "city", "country", "createdAt", "updatedAt"
           )
-          SELECT \$7, \$1, \$8, \$9, \$10, 'BD', \$6, \$6
+          SELECT \$7, \$1, \$8::text, \$9::text, \$10::text, \$13::text, \$14::text, 'BD', \$6, \$6
           WHERE EXISTS (SELECT 1 FROM new_user)
-          ON CONFLICT ("userId") DO UPDATE SET
-            "nationalId" = COALESCE(EXCLUDED."nationalId", investor_profiles."nationalId"),
-            "nomineeNationalId" = COALESCE(EXCLUDED."nomineeNationalId", investor_profiles."nomineeNationalId"),
-            "nomineeRelation" = COALESCE(EXCLUDED."nomineeRelation", investor_profiles."nomineeRelation"),
-            "updatedAt" = EXCLUDED."updatedAt"
+          ON CONFLICT ("userId") DO NOTHING
         ),
         new_wallet AS (
           INSERT INTO wallets ("id", "userId", "type", "cachedBalance", "currency", "isActive", "createdAt", "updatedAt")
@@ -348,69 +410,83 @@ class DatabaseService {
           WHERE EXISTS (SELECT 1 FROM new_user)
           ON CONFLICT ("userId") DO NOTHING
         )
-        SELECT 
+        SELECT
           (SELECT "email" FROM existing_check_user) as existing_email,
           (SELECT "phone" FROM existing_check_user) as existing_phone,
           (SELECT "nationalId" FROM existing_check_nid) as existing_nid,
           (SELECT COUNT(*) FROM new_user) as created_count;
       ''', [
-        userId,
-        cleanEmail,
-        cleanPhone.isEmpty ? null : cleanPhone,
-        hashedPassword,
-        name.trim(),
-        nowStr,
-        profileId,
-        (nidNumber?.trim().isEmpty ?? true) ? null : nidNumber?.trim(),
-        (nomineeNidNumber?.trim().isEmpty ?? true) ? null : nomineeNidNumber?.trim(),
-        (nomineeRelation?.trim().isEmpty ?? true) ? null : nomineeRelation?.trim(),
-        walletId,
+        userId, // 1
+        emailValue, // 2
+        cleanPhone, // 3
+        hashPassword(password), // 4
+        name.trim(), // 5
+        nowStr, // 6
+        profileId, // 7
+        cleanNid, // 8
+        nomineeNid.isEmpty ? null : nomineeNid, // 9
+        nomineeRel.isEmpty ? null : nomineeRel, // 10
+        walletId, // 11
+        // Email na thakle "verified" bola jay na
+        cleanEmail.isNotEmpty, // 12
+        cleanAddress, // 13
+        (city ?? '').trim().isEmpty ? null : city!.trim(), // 14
       ]);
 
-      if (res.isNotEmpty) {
-        final row = res.first;
-        final existingEmail = row['existing_email']?.toString();
-        final existingPhone = row['existing_phone']?.toString();
-        final existingNid = row['existing_nid']?.toString();
-        final createdCount = _toInt(row['created_count']);
+      if (res.isEmpty) {
+        debugPrint("Register failed: $_lastConnectionError");
+        return {
+          'success': false,
+          'message': _lastConnectionError != null
+              ? 'Could not create account. (${_shortDbError()})'
+              : 'Could not create account. Please try again.',
+        };
+      }
 
-        if (existingNid != null && existingNid.isNotEmpty) {
-          return {
-            'success': false,
-            'message': 'An account with this NID number already exists.',
-          };
-        }
+      final row = res.first;
+      final existingEmail = _publicEmail(row['existing_email']);
+      final existingPhone = row['existing_phone']?.toString() ?? '';
+      final existingNid = row['existing_nid']?.toString() ?? '';
 
-        if (existingEmail != null && existingEmail.isNotEmpty) {
-          if (existingPhone == cleanPhone && cleanPhone.isNotEmpty) {
-            return {
-              'success': false,
-              'message': 'An account with this phone number already exists. Please log in.',
-            };
-          }
-          return {
-            'success': false,
-            'message': 'An account with this email already exists. Please log in.',
-          };
-        }
+      if (existingNid.isNotEmpty) {
+        return {'success': false, 'message': 'An account with this NID number already exists.'};
+      }
+      if (existingPhone.isNotEmpty && existingPhone == cleanPhone) {
+        return {'success': false, 'message': 'An account with this phone number already exists. Please log in.'};
+      }
+      if (existingEmail.isNotEmpty) {
+        return {'success': false, 'message': 'An account with this email already exists. Please log in.'};
+      }
+      if (_toInt(row['created_count']) == 0) {
+        return {'success': false, 'message': 'Could not create account. Please try again.'};
+      }
 
-        if (createdCount > 0) {
-          return {
-            'success': true,
-            'data': {
-              'id': userId,
-              'name': name.trim(),
-              'email': cleanEmail,
-              'phone': cleanPhone,
-            },
-            'message': 'Registration successful!',
-          };
-        }
+      final dobStr =
+          '${dateOfBirth.year}-${dateOfBirth.month.toString().padLeft(2, '0')}-${dateOfBirth.day.toString().padLeft(2, '0')}';
+
+      // Jonmo tarikh — website schema te je table e column ache sheikhane
+      final dobTable = profCols.containsKey('dateOfBirth')
+          ? 'investor_profiles'
+          : (userCols.containsKey('dateOfBirth') ? 'users' : null);
+      if (dobTable != null) {
+        final key = dobTable == 'users' ? '"id"' : '"userId"';
+        await executeNeonHttp(
+          'UPDATE $dobTable SET "dateOfBirth" = \$1 WHERE $key = \$2',
+          [dobStr, userId],
+        );
+      } else {
+        debugPrint('dateOfBirth column nei — Prisma InvestorProfile e "dateOfBirth DateTime?" add korun');
       }
 
       return {
-        'success': false,
-        'message': 'Could not create account. Please check internet connection.',
+        'success': true,
+        'data': {
+          'id': userId,
+          'name': name.trim(),
+          'email': cleanEmail,
+          'phone': cleanPhone,
+        },
+        'message': 'Registration successful!',
       };
     } catch (e) {
       return {
@@ -419,14 +495,15 @@ class DatabaseService {
       };
     }
   }
-
   // Login User
   static Future<Map<String, dynamic>> loginUser({
     required String email,
     required String password,
   }) async {
     try {
-      final cleanInput = email.trim();
+      final raw = email.trim();
+      // Phone diye login: +8801… / 01… duita-i
+      final cleanInput = RegExp(r'^[+\d\s-]+$').hasMatch(raw) ? normalizeBdPhone(raw) : raw;
 
       final result = await queryNeonHttp('''
         SELECT "id", "name", "email", "phone", "passwordHash", "avatarUrl", "status"::text AS "status", "updatedAt"
@@ -495,7 +572,7 @@ class DatabaseService {
         'data': {
           'id': userId,
           'name': row['name']?.toString() ?? 'Investor',
-          'email': row['email']?.toString() ?? '',
+          'email': _publicEmail(row['email']),
           'phone': row['phone']?.toString() ?? '',
           'avatarUrl': rawAvatar != null && rawAvatar.isNotEmpty ? formatImageUrl(rawAvatar) : null,
         },
@@ -648,11 +725,46 @@ class DatabaseService {
     }
   }
 
-  // Send Forgot Password OTP
-  // OTP ar app e ferot pathano hoy na — shudhu email e jay.
+  // ═════════════════════════════════════════════════════════
+  // FORGOT PASSWORD (email OTP via Resend — biniyogclub.com domain)
+  // ═════════════════════════════════════════════════════════
+
+  /// Resend e verified domain theke mail jay — tai je kono real address e pouchay.
+  static const String _mailFrom = 'Biniyog Club <noreply@biniyogclub.com>';
+  static const String _mailReplyTo = 'support@biniyogclub.com';
+  static const int _otpValidMinutes = 15;
+  static const int _otpResendGapSeconds = 60;
+  static const int _otpMaxAttempts = 5;
+
+  static String _htmlEscape(String s) => s
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#39;');
+
+  static Future<bool> _ensureResetTable() async {
+    final a = await executeNeonHttp('''
+      CREATE TABLE IF NOT EXISTS password_reset_tokens (
+        "id" TEXT PRIMARY KEY,
+        "email" TEXT NOT NULL,
+        "token" TEXT NOT NULL,
+        "expiresAt" TIMESTAMP WITH TIME ZONE NOT NULL,
+        "createdAt" TIMESTAMP WITH TIME ZONE NOT NULL
+      )
+    ''');
+    if (!a) return false;
+    return executeNeonHttp(
+        'ALTER TABLE password_reset_tokens ADD COLUMN IF NOT EXISTS "attempts" INTEGER NOT NULL DEFAULT 0');
+  }
+
+  // Send Forgot Password OTP — OTP app e ferot jay na, shudhu email e jay.
   static Future<Map<String, dynamic>> sendForgotPasswordOtp(String email) async {
     try {
       final cleanEmail = email.trim().toLowerCase();
+      if (cleanEmail.isEmpty || isPlaceholderEmail(cleanEmail)) {
+        return {'success': false, 'message': 'Please enter your registered email address.'};
+      }
 
       final apiKey = DbConfig.resendApiKey.trim();
       if (apiKey.isEmpty || apiKey == 'your_resend_api_key') {
@@ -663,7 +775,7 @@ class DatabaseService {
       }
 
       final userRes = await queryNeonHttp(
-          'SELECT "id", "name" FROM users WHERE LOWER("email") = LOWER(\$1)',
+          'SELECT "id", "name" FROM users WHERE LOWER("email") = LOWER(\$1) LIMIT 1',
           [cleanEmail]);
 
       if (userRes.isEmpty) {
@@ -675,18 +787,31 @@ class DatabaseService {
         };
       }
 
-      final userName = userRes.first['name']?.toString() ?? 'Investor';
-      final otp = (100000 + Random.secure().nextInt(900000)).toString();
+      if (!await _ensureResetTable()) {
+        return {'success': false, 'message': _connectionErrorMsg()};
+      }
 
-      await executeNeonHttp('''
-        CREATE TABLE IF NOT EXISTS password_reset_tokens (
-          "id" TEXT PRIMARY KEY,
-          "email" TEXT NOT NULL,
-          "token" TEXT NOT NULL,
-          "expiresAt" TIMESTAMP WITH TIME ZONE NOT NULL,
-          "createdAt" TIMESTAMP WITH TIME ZONE NOT NULL
-        );
-      ''');
+      // 60 second er moddhe abar pathano jabe na (spam / Resend limit)
+      final recent = await queryNeonHttp('''
+        SELECT EXTRACT(EPOCH FROM (NOW() - "createdAt"))::int AS "age"
+        FROM password_reset_tokens
+        WHERE LOWER("email") = LOWER(\$1)
+        ORDER BY "createdAt" DESC LIMIT 1
+      ''', [cleanEmail]);
+      if (recent.isNotEmpty) {
+        final age = int.tryParse(recent.first['age']?.toString() ?? '') ?? 9999;
+        if (age < _otpResendGapSeconds) {
+          return {
+            'success': false,
+            'message': 'Please wait ${_otpResendGapSeconds - age}s before requesting a new code.',
+          };
+        }
+      }
+
+      final userName = _htmlEscape(userRes.first['name']?.toString().trim().isNotEmpty == true
+          ? userRes.first['name'].toString().trim()
+          : 'Investor');
+      final otp = (100000 + Random.secure().nextInt(900000)).toString();
 
       // Purono OTP gulo bad — shudhu shesh ta kaj korbe
       await executeNeonHttp(
@@ -694,14 +819,15 @@ class DatabaseService {
           [cleanEmail]);
 
       final now = DateTime.now().toUtc();
+      final tokenId = _generateUuid();
       final saved = await executeNeonHttp('''
-        INSERT INTO password_reset_tokens ("id", "email", "token", "expiresAt", "createdAt")
-        VALUES (\$1, \$2, \$3, \$4, \$5)
+        INSERT INTO password_reset_tokens ("id", "email", "token", "expiresAt", "createdAt", "attempts")
+        VALUES (\$1, \$2, \$3, \$4, \$5, 0)
       ''', [
-        _generateUuid(),
+        tokenId,
         cleanEmail,
         otp,
-        now.add(const Duration(minutes: 15)).toIso8601String(),
+        now.add(const Duration(minutes: _otpValidMinutes)).toIso8601String(),
         now.toIso8601String(),
       ]);
 
@@ -714,122 +840,174 @@ class DatabaseService {
           'Content-Type': 'application/json',
         },
         body: jsonEncode({
-          'from': 'Biniyog Club <onboarding@resend.dev>',
+          'from': _mailFrom,
           'to': [cleanEmail],
-          'subject': 'Reset Your Biniyog Club Password',
+          'reply_to': _mailReplyTo,
+          'subject': 'Your Biniyog Club password reset code: $otp',
+          'text': 'Assalamu Alaikum $userName,\n\n'
+              'Your Biniyog Club password reset code is: $otp\n\n'
+              'This code is valid for $_otpValidMinutes minutes. Never share it with anyone — '
+              'Biniyog Club will never ask for this code.\n\n'
+              'If you did not request a password reset, you can safely ignore this email.\n\n'
+              '— Biniyog Club\nhttps://biniyogclub.com',
           'html': '''
-            <div style="font-family: Arial, sans-serif; padding: 24px; background-color: #f4f7f6;">
-              <div style="max-width: 500px; margin: 0 auto; background: white; border-radius: 16px; padding: 24px; border: 1px solid #e2e8f0;">
-                <h2 style="color: #047857; margin-top: 0;">Biniyog Club</h2>
-                <p style="color: #334155; font-size: 14px;">Hello <strong>$userName</strong>,</p>
-                <p style="color: #334155; font-size: 14px;">You requested to reset your password. Here is your 6-digit OTP code:</p>
-                <div style="background-color: #f0fdf4; border: 1px solid #bbf7d0; padding: 16px; text-align: center; border-radius: 12px; margin: 20px 0;">
-                  <span style="font-size: 32px; font-weight: bold; letter-spacing: 6px; color: #047857;">$otp</span>
-                </div>
-                <p style="color: #64748b; font-size: 12px;">This OTP code is valid for 15 minutes. If you did not request a password reset, please ignore this email.</p>
-              </div>
-            </div>
-          ''',
+<div style="font-family:Arial,Helvetica,sans-serif;background:#f6f1e7;padding:28px 12px;">
+  <div style="max-width:480px;margin:0 auto;background:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #e8dfc9;">
+    <div style="background:#0f4d3a;padding:22px 24px;">
+      <div style="color:#d4af61;font-size:12px;letter-spacing:2px;font-weight:bold;">BINIYOG CLUB</div>
+      <div style="color:#ffffff;font-size:20px;font-weight:bold;margin-top:6px;">Password reset code</div>
+    </div>
+    <div style="padding:24px;">
+      <p style="color:#1f2a24;font-size:14px;margin:0 0 12px;">Assalamu Alaikum <strong>$userName</strong>,</p>
+      <p style="color:#3d4a43;font-size:14px;margin:0 0 18px;">Use this 6-digit code in the Biniyog Club app to reset your password:</p>
+      <div style="background:#f3f8f5;border:1px solid #cfe3d8;border-radius:12px;padding:18px;text-align:center;">
+        <span style="font-size:34px;font-weight:bold;letter-spacing:8px;color:#0f4d3a;">$otp</span>
+      </div>
+      <p style="color:#6b7570;font-size:12.5px;margin:18px 0 0;">This code is valid for <strong>$_otpValidMinutes minutes</strong>. Never share it with anyone — Biniyog Club will never ask for this code.</p>
+      <p style="color:#6b7570;font-size:12.5px;margin:10px 0 0;">If you did not request a password reset, you can safely ignore this email. Your password will not change.</p>
+    </div>
+    <div style="border-top:1px solid #efe8d8;padding:14px 24px;color:#9a8f73;font-size:11.5px;">
+      Biniyog Club · <a href="https://biniyogclub.com" style="color:#0f4d3a;">biniyogclub.com</a>
+    </div>
+  </div>
+</div>
+''',
         }),
-      ).timeout(const Duration(seconds: 15));
+      ).timeout(const Duration(seconds: 20));
 
       if (mailRes.statusCode < 200 || mailRes.statusCode >= 300) {
-        debugPrint("Resend Error ${mailRes.statusCode}: ${mailRes.body}");
+        debugPrint('Resend Error ${mailRes.statusCode}: ${mailRes.body}');
+        // Mail na gele code-o rakha hobe na — jate abar sathe sathe try kora jay
+        await executeNeonHttp('DELETE FROM password_reset_tokens WHERE "id" = \$1', [tokenId]);
+        String reason = '';
+        try {
+          final m = jsonDecode(mailRes.body);
+          if (m is Map && m['message'] != null) reason = ' (${m['message']})';
+        } catch (_) {}
         return {
           'success': false,
-          'message': 'Could not send the OTP email. Please try again later.',
+          'message': 'Could not send the email. Please try again later.$reason',
         };
       }
 
       return {
         'success': true,
-        'message': 'OTP sent successfully to $cleanEmail!',
+        'message': 'A 6-digit code has been sent to $cleanEmail. Check your inbox (and spam folder).',
       };
+    } on TimeoutException {
+      return {'success': false, 'message': 'Email server did not respond. Please try again.'};
     } catch (e) {
-      return {
-        'success': false,
-        'message': 'Database error: ${e.toString()}',
-      };
+      return {'success': false, 'message': 'Something went wrong: ${e.toString()}'};
     }
   }
 
-  // Verify Reset OTP Code
+  // Verify Reset OTP Code — 5 bar vul dile code bad hoye jay
   static Future<Map<String, dynamic>> verifyResetOtp(String email, String otp) async {
     try {
       final cleanEmail = email.trim().toLowerCase();
       final cleanOtp = otp.trim();
+      if (!RegExp(r'^\d{6}$').hasMatch(cleanOtp)) {
+        return {'success': false, 'message': 'Please enter the 6-digit code.'};
+      }
 
       final res = await queryNeonHttp('''
-        SELECT "id", "expiresAt" FROM password_reset_tokens
-        WHERE LOWER("email") = LOWER(\$1) AND "token" = \$2
+        SELECT "id", "token",
+               ("expiresAt" < NOW()) AS "expired",
+               COALESCE((to_jsonb(t) ->> 'attempts')::int, 0) AS "attempts"
+        FROM password_reset_tokens t
+        WHERE LOWER("email") = LOWER(\$1)
         ORDER BY "createdAt" DESC
         LIMIT 1
-      ''', [cleanEmail, cleanOtp]);
+      ''', [cleanEmail]);
 
       if (res.isEmpty) {
         return {
           'success': false,
           'message': _lastConnectionError != null
               ? _connectionErrorMsg()
-              : 'Invalid OTP code. Please check and try again.',
+              : 'No active code found. Please request a new code.',
         };
       }
 
-      final expiresAt = DateTime.tryParse(res.first['expiresAt']?.toString() ?? '');
-      if (expiresAt == null || DateTime.now().toUtc().isAfter(expiresAt)) {
+      final row = res.first;
+      final id = row['id'].toString();
+      final expired = row['expired'] == true || row['expired']?.toString() == 'true';
+      final attempts = int.tryParse(row['attempts']?.toString() ?? '') ?? 0;
+
+      if (expired) {
+        await executeNeonHttp('DELETE FROM password_reset_tokens WHERE "id" = \$1', [id]);
+        return {'success': false, 'message': 'This code has expired. Please request a new one.'};
+      }
+
+      if (attempts >= _otpMaxAttempts) {
+        await executeNeonHttp('DELETE FROM password_reset_tokens WHERE "id" = \$1', [id]);
+        return {'success': false, 'message': 'Too many wrong attempts. Please request a new code.'};
+      }
+
+      if (row['token']?.toString() != cleanOtp) {
+        final used = attempts + 1;
+        if (used >= _otpMaxAttempts) {
+          await executeNeonHttp('DELETE FROM password_reset_tokens WHERE "id" = \$1', [id]);
+          return {'success': false, 'message': 'Too many wrong attempts. Please request a new code.'};
+        }
+        await executeNeonHttp(
+            'UPDATE password_reset_tokens SET "attempts" = \$2 WHERE "id" = \$1', [id, used]);
+        final left = _otpMaxAttempts - used;
         return {
           'success': false,
-          'message': 'OTP code has expired. Please request a new one.',
+          'message': 'Wrong code. $left attempt${left == 1 ? '' : 's'} left.',
         };
       }
 
-      return {
-        'success': true,
-        'message': 'OTP verified successfully!',
-      };
+      return {'success': true, 'message': 'Code verified!'};
     } catch (e) {
-      return {
-        'success': false,
-        'message': 'Database error: ${e.toString()}',
-      };
+      return {'success': false, 'message': 'Something went wrong: ${e.toString()}'};
     }
   }
 
-  // Reset Password using OTP
+  // Reset Password using OTP — code abar check hoy, tarpor password badlay
   static Future<Map<String, dynamic>> resetPasswordWithOtp({
     required String email,
     required String otp,
     required String newPassword,
   }) async {
     try {
-      final verifyRes = await verifyResetOtp(email, otp);
-      if (verifyRes['success'] != true) {
-        return verifyRes;
+      if (newPassword.length < 8) {
+        return {'success': false, 'message': 'Password must be at least 8 characters.'};
       }
+
+      final verifyRes = await verifyResetOtp(email, otp);
+      if (verifyRes['success'] != true) return verifyRes;
 
       final cleanEmail = email.trim().toLowerCase();
 
-      final ok = await executeNeonHttp('''
+      final updated = await queryNeonHttp('''
         UPDATE users
         SET "passwordHash" = \$1, "updatedAt" = \$2
         WHERE LOWER("email") = LOWER(\$3)
+        RETURNING "id"
       ''', [hashPassword(newPassword), _nowIso(), cleanEmail]);
 
-      if (!ok) return {'success': false, 'message': _connectionErrorMsg()};
+      if (updated.isEmpty) {
+        return {
+          'success': false,
+          'message': _lastConnectionError != null
+              ? _connectionErrorMsg()
+              : 'Account not found. Please try again.',
+        };
+      }
 
+      // Code ekbar-i kaj kore
       await executeNeonHttp(
           'DELETE FROM password_reset_tokens WHERE LOWER("email") = LOWER(\$1)',
           [cleanEmail]);
 
       return {
         'success': true,
-        'message': 'Password reset successful! Please log in with your new password.',
+        'message': 'Password changed! Please sign in with your new password.',
       };
     } catch (e) {
-      return {
-        'success': false,
-        'message': 'Database error: ${e.toString()}',
-      };
+      return {'success': false, 'message': 'Something went wrong: ${e.toString()}'};
     }
   }
 
@@ -890,313 +1068,6 @@ class DatabaseService {
   }
 
   // ═════════════════════════════════════════════════════════
-  // KYC
-  // ═════════════════════════════════════════════════════════
-
-  /// Ei status e thakle notun kore KYC jama dewa jabe na
-  static const Set<String> _kycLockedStatuses = {
-    'SUBMITTED',
-    'UNDER_REVIEW',
-    'VERIFIED',
-    'APPROVED',
-  };
-
-  /// kyc table e kon kon column ache (ekbar jene rakhi). Website er schema te
-  /// date of birth, permanent address eshob thakle sheta-o save hobe — na
-  /// thakle chupchap bad (age egula form e niye fele dewa hoto).
-  static Set<String>? _kycColumns;
-
-  static Future<Set<String>> _getKycColumns() async {
-    if (_kycColumns != null) return _kycColumns!;
-    final res = await queryNeonHttp('''
-      SELECT column_name FROM information_schema.columns
-      WHERE table_name = 'kyc'
-    ''');
-    final cols = res.map((r) => r['column_name'].toString()).toSet();
-    if (cols.isNotEmpty) _kycColumns = cols;
-    return cols;
-  }
-
-  // Submit Real KYC Application
-  static Future<Map<String, dynamic>> submitKycData({
-    required String userId,
-    required String fullName,
-    required String documentType,
-    required String documentNumber,
-    required String division,
-    required String district,
-    required String thana,
-    required String address,
-    required String bankName,
-    required String bankAccountNumber,
-    required String mobileProvider,
-    required String mobileNumber,
-    required String nomineeNid,
-    required String nomineeRelation,
-    String? frontPhotoBase64,
-    String? backPhotoBase64,
-    String? nomineeFrontBase64,
-    String? nomineeBackBase64,
-    // Website er schema te column thakle tobei save hoy
-    Map<String, String?> extraFields = const {},
-  }) async {
-    // Login chara KYC na — age "latest user" er naame KYC jama hoye jeto
-    if (userId.isEmpty) return {'success': false, 'message': _loginRequiredMsg};
-
-    try {
-      final nowStr = _nowIso();
-
-      String docEnum = 'NATIONAL_ID';
-      if (documentType.contains('PASSPORT')) {
-        docEnum = 'PASSPORT';
-      } else if (documentType.contains('DRIVING')) {
-        docEnum = 'DRIVING_LICENSE';
-      }
-
-      final checks = await Future.wait([
-        queryNeonHttp('SELECT "id", "status"::text AS "status" FROM kyc WHERE "userId" = \$1', [userId]),
-        // Ek-i document number onno account e already ache kina
-        queryNeonHttp('''
-          SELECT 1 AS "taken" FROM kyc
-          WHERE "documentNumber" = \$1 AND "userId" <> \$2
-          LIMIT 1
-        ''', [documentNumber, userId]),
-      ]);
-      if (_lastConnectionError != null) {
-        return {'success': false, 'message': _connectionErrorMsg()};
-      }
-
-      final existingKyc = checks[0];
-      if (checks[1].isNotEmpty) {
-        return {
-          'success': false,
-          'message': 'This document number is already used by another account. Please contact support.',
-        };
-      }
-
-      final prevStatus = existingKyc.isNotEmpty ? existingKyc.first['status']?.toString() ?? '' : '';
-      if (_kycLockedStatuses.contains(prevStatus)) {
-        return {
-          'success': false,
-          'message': prevStatus == 'VERIFIED' || prevStatus == 'APPROVED'
-              ? 'Your KYC is already verified.'
-              : 'Your KYC is already under review. Please wait for the result.',
-        };
-      }
-
-      final isNew = existingKyc.isEmpty;
-      final kycId = isNew ? _generateUuid() : existingKyc.first['id'].toString();
-
-      // ধাপ ১: tottho save — status ekhono "SUBMITTED" na (notun hole matro row)
-      bool ok;
-      if (!isNew) {
-        ok = await executeNeonHttp('''
-          UPDATE kyc SET
-            "fullName" = \$1,
-            "documentType" = \$2::"KycDocumentType",
-            "documentNumber" = \$3,
-            "presentAddress" = \$4,
-            "presentDivision" = \$5,
-            "presentDistrict" = \$6,
-            "presentUpazila" = \$7,
-            "bankName" = \$8,
-            "bankAccountNumber" = \$9,
-            "mobileProvider" = \$10,
-            "mobileNumber" = \$11,
-            "updatedAt" = \$12
-          WHERE "id" = \$13 AND "userId" = \$14
-        ''', [
-          fullName, docEnum, documentNumber, address, division, district, thana,
-          bankName, bankAccountNumber, mobileProvider, mobileNumber, nowStr, kycId, userId,
-        ]);
-      } else {
-        ok = await executeNeonHttp('''
-          INSERT INTO kyc (
-            "id", "userId", "status", "fullName", "documentType", "documentNumber",
-            "presentAddress", "presentDivision", "presentDistrict", "presentUpazila",
-            "bankName", "bankAccountNumber", "mobileProvider", "mobileNumber",
-            "submittedAt", "createdAt", "updatedAt"
-          ) VALUES (
-            \$1, \$2, 'SUBMITTED'::"KycStatus", \$3, \$4::"KycDocumentType", \$5,
-            \$6, \$7, \$8, \$9,
-            \$10, \$11, \$12, \$13,
-            \$14, \$14, \$14
-          )
-        ''', [
-          kycId, userId, fullName, docEnum, documentNumber, address, division, district, thana,
-          bankName, bankAccountNumber, mobileProvider, mobileNumber, nowStr,
-        ]);
-      }
-      if (!ok) return {'success': false, 'message': _connectionErrorMsg()};
-
-      // ধাপ ২: website schema te thaka baki column (DOB, permanent address …)
-      final wanted = <String, String>{
-        for (final e in extraFields.entries)
-          if (e.value != null && e.value!.trim().isNotEmpty) e.key: e.value!.trim(),
-      };
-      if (wanted.isNotEmpty) {
-        final cols = await _getKycColumns();
-        final usable = wanted.entries.where((e) => cols.contains(e.key)).toList();
-        if (usable.isNotEmpty) {
-          final sets = <String>[];
-          final params = <dynamic>[];
-          for (final e in usable) {
-            params.add(e.value);
-            sets.add('"${e.key}" = \$${params.length}');
-          }
-          params.add(kycId);
-          await executeNeonHttp(
-            'UPDATE kyc SET ${sets.join(', ')} WHERE "id" = \$${params.length}',
-            params,
-          );
-        }
-      }
-
-      // ধাপ ৩: chobi — ekta-o fail korle KYC "jama" dhora hobe na
-      final docs = <(String, String?)>[
-        ('NATIONAL_ID_FRONT', frontPhotoBase64),
-        ('NATIONAL_ID_BACK', backPhotoBase64),
-        ('NOMINEE_NID_FRONT', nomineeFrontBase64),
-        ('NOMINEE_NID_BACK', nomineeBackBase64),
-      ];
-      for (final (type, data) in docs) {
-        if (!await _saveKycDocument(kycId, type, data)) {
-          if (isNew) {
-            // Notun row muche dei, jate "jama hoyeche kintu chobi nei" obostha na thake
-            await executeNeonHttp('DELETE FROM kyc_documents WHERE "kycId" = \$1', [kycId]);
-            await executeNeonHttp('DELETE FROM kyc WHERE "id" = \$1', [kycId]);
-          }
-          return {
-            'success': false,
-            'message': 'Could not upload your document photos. Please check your internet and try again.',
-          };
-        }
-      }
-
-      // ধাপ ৪: shob thik — ekhon review er jonno pathai
-      if (!isNew) {
-        final sent = await executeNeonHttp('''
-          UPDATE kyc SET "status" = 'SUBMITTED'::"KycStatus", "submittedAt" = \$1, "updatedAt" = \$1
-          WHERE "id" = \$2
-        ''', [nowStr, kycId]);
-        if (!sent) return {'success': false, 'message': _connectionErrorMsg()};
-      }
-
-      // Nominee investor profile e (website eikhan thekei dekhay)
-      await executeNeonHttp('''
-        INSERT INTO investor_profiles ("id", "userId", "nomineeNationalId", "nomineeRelation", "address", "city", "country", "createdAt", "updatedAt")
-        VALUES (\$1, \$2, \$3, \$4, \$5, \$6, 'BD', \$7, \$7)
-        ON CONFLICT ("userId") DO UPDATE SET
-          "nomineeNationalId" = EXCLUDED."nomineeNationalId",
-          "nomineeRelation" = EXCLUDED."nomineeRelation",
-          "address" = COALESCE(investor_profiles."address", EXCLUDED."address"),
-          "city" = COALESCE(investor_profiles."city", EXCLUDED."city"),
-          "updatedAt" = EXCLUDED."updatedAt";
-      ''', [_generateUuid(), userId, nomineeNid, nomineeRelation, address, district, nowStr]);
-
-      return {
-        'success': true,
-        'message': 'KYC submitted successfully!',
-      };
-    } catch (e) {
-      return {
-        'success': false,
-        'message': 'Database error: ${e.toString()}',
-      };
-    }
-  }
-
-  // Fetch KYC Status
-  // 'error': 'network' thakle server e pouchano jayni — tokhon "NOT_STARTED"
-  // dhore niye abar jama dite dibo na.
-  static Future<Map<String, dynamic>> getKycStatus(String userId, {String? email}) async {
-    if (userId.isEmpty) return {'status': 'NOT_STARTED', 'error': 'login'};
-
-    try {
-      final results = await Future.wait([
-        queryNeonHttp('''
-          SELECT k."id", k."status"::text AS "status", k."documentType"::text AS "documentType",
-                 to_jsonb(k) AS "raw"
-          FROM kyc k
-          WHERE k."userId" = \$1
-          LIMIT 1
-        ''', [userId]),
-        queryNeonHttp('''
-          SELECT "nomineeNationalId", "nomineeRelation"
-          FROM investor_profiles WHERE "userId" = \$1
-        ''', [userId]),
-      ]);
-      if (_lastConnectionError != null) return {'status': 'NOT_STARTED', 'error': 'network'};
-
-      final prof = results[1].isNotEmpty ? results[1].first : <String, dynamic>{};
-
-      if (results[0].isEmpty) {
-        return {
-          'status': 'NOT_STARTED',
-          'nomineeNid': prof['nomineeNationalId']?.toString() ?? '',
-          'nomineeRelation': prof['nomineeRelation']?.toString() ?? '',
-        };
-      }
-
-      final row = results[0].first;
-      final kycId = row['id'].toString();
-
-      Map<String, dynamic> raw = {};
-      final r0 = row['raw'];
-      if (r0 is Map) {
-        raw = Map<String, dynamic>.from(r0);
-      } else if (r0 is String) {
-        try {
-          raw = Map<String, dynamic>.from(jsonDecode(r0) as Map);
-        } catch (_) {}
-      }
-      String f(String k) => raw[k]?.toString() ?? '';
-
-      final docsRes = await queryNeonHttp(
-          'SELECT "id", "documentType"::text AS "documentType", "createdAt" FROM kyc_documents WHERE "kycId" = \$1',
-          [kycId]);
-
-      final List<Map<String, dynamic>> documents = docsRes.map((d) {
-        return <String, dynamic>{
-          'id': d['id'].toString(),
-          'type': d['documentType']?.toString() ?? '',
-          'createdAt': d['createdAt']?.toString() ?? '',
-        };
-      }).toList();
-
-      final rawStatus = row['status']?.toString() ?? 'NOT_STARTED';
-
-      return {
-        'id': kycId,
-        'status': rawStatus == 'APPROVED' ? 'VERIFIED' : rawStatus,
-        'fullName': f('fullName'),
-        'documentType': row['documentType']?.toString() ?? '',
-        'documentNumber': f('documentNumber'),
-        'address': f('presentAddress'),
-        'division': f('presentDivision'),
-        'district': f('presentDistrict'),
-        'upazila': f('presentUpazila'),
-        'bankName': f('bankName'),
-        'bankAccountNumber': f('bankAccountNumber'),
-        'mobileProvider': f('mobileProvider'),
-        'mobileNumber': f('mobileNumber'),
-        'dateOfBirth': f('dateOfBirth'),
-        'reviewNote': raw['reviewNote']?.toString(),
-        'submittedAt': f('submittedAt'),
-        'reviewedAt': f('reviewedAt'),
-        'nomineeNid': prof['nomineeNationalId']?.toString() ?? '',
-        'nomineeRelation': prof['nomineeRelation']?.toString() ?? '',
-        // Website schema te thaka baki field (thakle) — resubmit e age theke bhora
-        'raw': raw,
-        'documents': documents,
-      };
-    } catch (e) {
-      debugPrint("Get KYC Status Error: $e");
-      return {'status': 'NOT_STARTED', 'error': 'network'};
-    }
-  }
-
-  // ═════════════════════════════════════════════════════════
   // PROJECT INVESTMENT
   // ═════════════════════════════════════════════════════════
 
@@ -1211,21 +1082,7 @@ class DatabaseService {
     if (userId.isEmpty) return {'success': false, 'message': _loginRequiredMsg};
 
     try {
-      final kycRes = await queryNeonHttp(
-          'SELECT "status"::text AS "status" FROM kyc WHERE "userId" = \$1',
-          [userId]);
-      if (kycRes.isEmpty && _lastConnectionError != null) {
-        return {'success': false, 'message': _connectionErrorMsg()};
-      }
-      final kycStatus = kycRes.isNotEmpty ? kycRes.first['status']?.toString() ?? '' : '';
-      if (kycStatus != 'VERIFIED' && kycStatus != 'APPROVED') {
-        return {
-          'success': false,
-          'message':
-          'KYC verification required. Please complete and get your KYC approved before investing.',
-        };
-      }
-
+      // KYC ar lage na — account thakle-i invest kora jay
       String profileId;
       final profRes = await queryNeonHttp(
           'SELECT "id" FROM investor_profiles WHERE "userId" = \$1',
@@ -1435,6 +1292,197 @@ class DatabaseService {
         'success': false,
         'message': 'Database error: ${e.toString()}',
       };
+    }
+  }
+
+  // ═════════════════════════════════════════════════════════
+  // PROJECT INVEST + PAYMENT (ek shathe) — Bank / Cash / Cheque
+  // Investment toiri → payment er tottho admin er kache (manual_payment_submissions)
+  // → status PAYMENT_PENDING. Admin approve korle ACTIVE (website e).
+  // ═════════════════════════════════════════════════════════
+  static final Map<String, ({String cast, Set<String> labels})> _payMethodMetaCache = {};
+
+  /// paymentMethod column enum hole tar value gula (na hole text).
+  /// Column-i na thakle cast/labels khali.
+  static Future<({String cast, Set<String> labels})> _paymentMethodMeta(
+      [String table = 'manual_payment_submissions']) async {
+    final cached = _payMethodMetaCache[table];
+    if (cached != null) return cached;
+    final col = await queryNeonHttp('''
+      SELECT data_type AS "t", udt_name AS "u" FROM information_schema.columns
+      WHERE table_name = \$1 AND column_name = 'paymentMethod'
+    ''', [table]);
+    if (col.isEmpty) return (cast: '', labels: <String>{});
+    final t = col.first['t']?.toString() ?? '';
+    final u = col.first['u']?.toString() ?? '';
+    if (t != 'USER-DEFINED') {
+      return _payMethodMetaCache[table] = (cast: '', labels: <String>{});
+    }
+    final labels = await queryNeonHttp('''
+      SELECT e.enumlabel AS "v" FROM pg_enum e JOIN pg_type ty ON e.enumtypid = ty.oid
+      WHERE ty.typname = \$1
+    ''', [u]);
+    return _payMethodMetaCache[table] =
+    (cast: '::"$u"', labels: labels.map((r) => r['v'].toString()).toSet());
+  }
+
+  static String _fmtTk(double v) {
+    final s = v.toStringAsFixed(0);
+    final b = StringBuffer();
+    for (int i = 0; i < s.length; i++) {
+      if (i > 0 && (s.length - i) % 3 == 0) b.write(',');
+      b.write(s[i]);
+    }
+    return 'BDT $b';
+  }
+
+  /// methods: 'BANK', 'CASH', 'CHEQUE' (ek ba ekadhik)
+  static Future<Map<String, dynamic>> investWithPayment({
+    required String userId,
+    required String projectId,
+    required double amountBdt,
+    required List<String> methods,
+    double bankAmount = 0,
+    double cashAmount = 0,
+    double chequeAmount = 0,
+    String? bankAccountId,
+    String? bankAccountLabel,
+    String? bankTransactionId,
+    String? bankReceiptUrl,
+    String? cashReceiver,
+    String? chequeImageUrl,
+  }) async {
+    if (userId.isEmpty) return {'success': false, 'message': _loginRequiredMsg};
+    final m = methods.toSet();
+    if (m.isEmpty) return {'success': false, 'message': 'Please choose a payment method.'};
+
+    // App er check server eo — kichu miss gele investment-i hobe na
+    if (m.contains('BANK') &&
+        ((bankTransactionId ?? '').trim().isEmpty || (bankReceiptUrl ?? '').isEmpty)) {
+      return {'success': false, 'message': 'Bank payment needs the transaction number and receipt image.'};
+    }
+    if (m.contains('CASH') && (cashReceiver ?? '').trim().isEmpty) {
+      return {'success': false, 'message': 'Please select who received the cash.'};
+    }
+    if (m.contains('CHEQUE') && (chequeImageUrl ?? '').isEmpty) {
+      return {'success': false, 'message': 'Please upload the cheque image.'};
+    }
+    final parts = (m.contains('BANK') ? bankAmount : 0) +
+        (m.contains('CASH') ? cashAmount : 0) +
+        (m.contains('CHEQUE') ? chequeAmount : 0);
+    if (m.length > 1 && (parts - amountBdt).abs() > 0.5) {
+      return {'success': false, 'message': 'The split amounts must add up to the total.'};
+    }
+
+    // ধাপ ১: investment (min/max/baki/status — shob createInvestment e check hoy)
+    final inv = await createInvestment(userId: userId, projectId: projectId, amountBdt: amountBdt);
+    if (inv['success'] != true) return inv;
+    final investmentId = inv['investmentId'].toString();
+
+    Future<Map<String, dynamic>> undo(String msg) async {
+      // Payment save na hole addha investment rakhbo na
+      await executeNeonHttp('''
+        DELETE FROM investments i USING investor_profiles p
+        WHERE i."id" = \$1 AND i."investorProfileId" = p."id" AND p."userId" = \$2
+          AND i."status"::text = 'PENDING'
+      ''', [investmentId, userId]);
+      return {'success': false, 'message': msg};
+    }
+
+    try {
+      final metas = await Future.wait([
+        _paymentMethodMeta(),
+        _columnsOf('manual_payment_submissions'),
+      ]);
+      final pm = metas[0] as ({String cast, Set<String> labels});
+      final cols = metas[1] as Map<String, bool>;
+
+      // paymentMethod — DB je value nite pare tar moddhe theke
+      String pick(List<String> candidates, String fallback) {
+        if (pm.labels.isEmpty) return candidates.first;
+        for (final c in candidates) {
+          if (pm.labels.contains(c)) return c;
+        }
+        return pm.labels.contains(fallback) ? fallback : pm.labels.first;
+      }
+
+      final String method;
+      if (m.length > 1) {
+        method = pick(['MIXED', 'MULTIPLE', 'OTHER'], m.contains('BANK') ? 'BANK_TRANSFER' : 'CASH');
+      } else if (m.contains('BANK')) {
+        method = pick(['BANK_TRANSFER', 'BANK_DEPOSIT', 'BANK'], 'BANK_TRANSFER');
+      } else if (m.contains('CASH')) {
+        method = pick(['CASH', 'CASH_DEPOSIT', 'CASH_PAYMENT'], 'BANK_TRANSFER');
+      } else {
+        method = pick(['CHEQUE', 'CHECK', 'BANK_CHEQUE'], 'BANK_TRANSFER');
+      }
+
+      // Admin ek nojore shob dekhte pay — notes e pura bhag
+      final lines = <String>[
+        'Payment: ${[if (m.contains('BANK')) 'Bank', if (m.contains('CASH')) 'Cash', if (m.contains('CHEQUE')) 'Cheque'].join(' + ')}'
+            ' — total ${_fmtTk(amountBdt)}',
+        if (m.contains('BANK'))
+          'Bank: ${_fmtTk(m.length > 1 ? bankAmount : amountBdt)}'
+              '${(bankAccountLabel ?? '').isNotEmpty ? ' to $bankAccountLabel' : ''}'
+              ', TRX ${bankTransactionId!.trim()}, receipt: $bankReceiptUrl',
+        if (m.contains('CASH'))
+          'Cash: ${_fmtTk(m.length > 1 ? cashAmount : amountBdt)} handed to ${cashReceiver!.trim()}',
+        if (m.contains('CHEQUE'))
+          'Cheque: ${_fmtTk(m.length > 1 ? chequeAmount : amountBdt)}, image: $chequeImageUrl',
+      ];
+
+      final proofUrl = m.contains('BANK') ? bankReceiptUrl! : (m.contains('CHEQUE') ? chequeImageUrl! : '');
+      final ref = m.contains('BANK')
+          ? bankTransactionId!.trim()
+          : (m.contains('CASH') ? 'CASH - ${cashReceiver!.trim()}' : 'CHEQUE');
+      final bankId = (m.contains('BANK') && (bankAccountId ?? '').isNotEmpty) ? bankAccountId : null;
+      final nowStr = _nowIso();
+
+      String? orEmpty(String? v, String col) =>
+          (v == null || v.isEmpty) ? ((cols[col] ?? true) ? null : '') : v;
+
+      final ins = await queryNeonHttp('''
+        INSERT INTO manual_payment_submissions (
+          "id", "investmentId", "submittedBy", "status", "amountBdt",
+          "bankAccountId", "paymentMethod", "transactionRef", "proofFileUrl",
+          "proofMimeType", "notes", "createdAt", "updatedAt"
+        ) VALUES (
+          \$1, \$2, \$3, 'SUBMITTED'::"ManualPaymentStatus", \$4,
+          \$5, \$6${pm.cast}, \$7, \$8,
+          \$9, \$10, \$11, \$11
+        )
+        RETURNING "id"
+      ''', [
+        _generateUuid(),
+        investmentId,
+        userId,
+        amountBdt,
+        bankId,
+        method,
+        ref,
+        orEmpty(proofUrl, 'proofFileUrl'),
+        orEmpty(proofUrl.isEmpty ? '' : 'image/jpeg', 'proofMimeType'),
+        lines.join('\n'),
+        nowStr,
+      ]);
+
+      if (ins.isEmpty) {
+        return await undo('Could not save your payment details. (${_shortDbError()})');
+      }
+
+      await executeNeonHttp('''
+        UPDATE investments
+        SET "status" = 'PAYMENT_PENDING'::"InvestmentStatus", "paymentPendingAt" = \$1, "updatedAt" = \$1
+        WHERE "id" = \$2
+      ''', [nowStr, investmentId]);
+
+      return {
+        'success': true,
+        'investmentId': investmentId,
+        'message': 'Investment submitted! It will be active after admin approval.',
+      };
+    } catch (e) {
+      return await undo('Could not save your payment details. Please try again.');
     }
   }
 
@@ -1695,73 +1743,48 @@ class DatabaseService {
 
       final results = await Future.wait([
         queryNeonHttp('''
-          SELECT "id", "name", "email", "phone", "emailVerified", "phoneVerified", "createdAt", "avatarUrl"
-          FROM users
-          WHERE "id" = \$1
+          SELECT u."id", u."name", u."email", u."phone", u."emailVerified", u."phoneVerified",
+                 u."createdAt", u."avatarUrl", to_jsonb(u) ->> 'dateOfBirth' AS "dob"
+          FROM users u
+          WHERE u."id" = \$1
         ''', [activeUserId]),
         queryNeonHttp('''
-          SELECT "status"::text AS "status", "fullName", "documentType"::text AS "documentType", "documentNumber",
-                 "presentAddress", "presentDivision", "presentDistrict", "presentUpazila",
-                 "bankName", "bankAccountNumber", "mobileProvider", "mobileNumber"
-          FROM kyc
-          WHERE "userId" = \$1
-        ''', [activeUserId]),
-        queryNeonHttp('''
-          SELECT "nationalId", "address", "city", "country", "occupation",
-                 "annualIncomeRange", "investmentExperience", "riskTolerance",
-                 "nomineeNationalId", "nomineeRelation"
-          FROM investor_profiles
-          WHERE "userId" = \$1
+          SELECT to_jsonb(p) AS "raw"
+          FROM investor_profiles p
+          WHERE p."userId" = \$1
         ''', [activeUserId]),
       ]);
 
       final userRes = results[0];
-      final kycRes = results[1];
-      final profRes = results[2];
+      final profRes = results[1];
 
       if (userRes.isEmpty) return {};
       final uRow = userRes.first;
 
-      Map<String, dynamic> kycData = {};
-      String kycStatus = 'NOT_STARTED';
-      if (kycRes.isNotEmpty) {
-        final k = kycRes.first;
-        kycStatus = k['status']?.toString() ?? 'NOT_STARTED';
-        if (kycStatus == 'APPROVED') kycStatus = 'VERIFIED';
-        kycData = {
-          'fullName': k['fullName']?.toString() ?? '',
-          'documentType': k['documentType']?.toString() ?? '',
-          'documentNumber': k['documentNumber']?.toString() ?? '',
-          'presentAddress': k['presentAddress']?.toString() ?? '',
-          'presentDivision': k['presentDivision']?.toString() ?? '',
-          'presentDistrict': k['presentDistrict']?.toString() ?? '',
-          'presentUpazila': k['presentUpazila']?.toString() ?? '',
-          'bankName': k['bankName']?.toString() ?? '',
-          'bankAccountNumber': k['bankAccountNumber']?.toString() ?? '',
-          'mobileProvider': k['mobileProvider']?.toString() ?? '',
-          'mobileNumber': k['mobileNumber']?.toString() ?? '',
-        };
+      Map<String, dynamic> p = {};
+      if (profRes.isNotEmpty) {
+        final r0 = profRes.first['raw'];
+        if (r0 is Map) {
+          p = Map<String, dynamic>.from(r0);
+        } else if (r0 is String) {
+          try {
+            p = Map<String, dynamic>.from(jsonDecode(r0) as Map);
+          } catch (_) {}
+        }
       }
-
-      String kyc(String key) => kycData[key]?.toString() ?? '';
-      final p = profRes.isNotEmpty ? profRes.first : <String, dynamic>{};
 
       // Kono banano default nei — user ja dey ni, ta khali ('') thake
       String prof(String key) => p[key]?.toString().trim() ?? '';
 
+      // Jonmo tarikh: investor_profiles e na thakle users e
+      String dob = prof('dateOfBirth');
+      if (dob.isEmpty) dob = uRow['dob']?.toString() ?? '';
+
       final profMap = <String, String>{
-        'nationalId': kyc('documentNumber').isNotEmpty ? kyc('documentNumber') : prof('nationalId'),
-        'documentType': kyc('documentType'),
-        'fullName': kyc('fullName'),
-        'address': kyc('presentAddress').isNotEmpty ? kyc('presentAddress') : prof('address'),
-        'city': kyc('presentDistrict').isNotEmpty ? kyc('presentDistrict') : prof('city'),
-        'division': kyc('presentDivision'),
-        'district': kyc('presentDistrict'),
-        'thana': kyc('presentUpazila'),
-        'bankName': kyc('bankName'),
-        'bankAccountNumber': kyc('bankAccountNumber'),
-        'mobileProvider': kyc('mobileProvider'),
-        'mobileNumber': kyc('mobileNumber'),
+        'nationalId': prof('nationalId'),
+        'dateOfBirth': dob,
+        'address': prof('address'),
+        'city': prof('city'),
         'nomineeNationalId': prof('nomineeNationalId'),
         'nomineeRelation': prof('nomineeRelation'),
         'country': prof('country'),
@@ -1776,13 +1799,12 @@ class DatabaseService {
       return {
         'id': uRow['id'].toString(),
         'name': uRow['name']?.toString() ?? '',
-        'email': uRow['email']?.toString() ?? '',
+        'email': _publicEmail(uRow['email']),
         'phone': uRow['phone']?.toString() ?? '',
-        'emailVerified': (uRow['emailVerified'] as bool?) ?? false,
+        'emailVerified': !isPlaceholderEmail(uRow['email']?.toString()) && ((uRow['emailVerified'] as bool?) ?? false),
         'phoneVerified': (uRow['phoneVerified'] as bool?) ?? false,
         'createdAt': uRow['createdAt']?.toString() ?? '',
         'avatarUrl': rawAvatar != null && rawAvatar.isNotEmpty ? formatImageUrl(rawAvatar) : null,
-        'kycStatus': kycStatus,
         'investorProfile': profMap,
       };
     } catch (e) {
@@ -1805,7 +1827,6 @@ class DatabaseService {
           SELECT
             (SELECT "avatarUrl" FROM users WHERE "id" = \$1) as avatar_url,
             (SELECT COUNT(*) FROM notifications WHERE "userId" = \$1 AND "isRead" = false) as unread_notif_count,
-            (SELECT "status"::text FROM kyc WHERE "userId" = \$1 LIMIT 1) as kyc_status,
             (SELECT COUNT(*) FROM investments i JOIN investor_profiles p ON i."investorProfileId" = p."id"
              WHERE p."userId" = \$1 AND i."status"::text IN ('ACTIVE', 'MATURED', 'COMPLETED')) as active_inv_count,
             (SELECT COALESCE(SUM(i."amountBdt"), 0) FROM investments i JOIN investor_profiles p ON i."investorProfileId" = p."id"
@@ -1859,7 +1880,6 @@ class DatabaseService {
 
       String? avatarUrl;
       int unreadNotifCount = 0;
-      String kycStatus = 'NOT_STARTED';
       double projectInvested = 0.0;
       double groupInvested = 0.0;
       int activeProjCount = 0;
@@ -1875,7 +1895,6 @@ class DatabaseService {
         final rawAvatar = row['avatar_url']?.toString() ?? '';
         if (rawAvatar.isNotEmpty) avatarUrl = formatImageUrl(rawAvatar);
         unreadNotifCount = _toInt(row['unread_notif_count']);
-        kycStatus = row['kyc_status']?.toString() ?? 'NOT_STARTED';
         projectInvested = _toDouble(row['total_invested_amt']);
         groupInvested = _toDouble(row['group_invested_amt']);
         activeProjCount = _toInt(row['active_inv_count']);
@@ -1901,7 +1920,6 @@ class DatabaseService {
       return {
         'avatarUrl': avatarUrl,
         'unreadNotificationCount': unreadNotifCount,
-        'kycStatus': kycStatus,
         'totalInvested': projectInvested + groupInvested,
         'projectInvested': projectInvested,
         'groupInvested': groupInvested,
@@ -1983,7 +2001,6 @@ class DatabaseService {
   static const Set<String> userUploadCategories = {
     'PAYMENT_RECEIPT',
     'INVESTMENT_AGREEMENT',
-    'KYC',
     'PROJECT_DOCUMENT',
   };
 
@@ -2082,11 +2099,8 @@ class DatabaseService {
       final results = await Future.wait([
         // [0] age contract er query chilo — page e kothao dekhay na, tai bad
         Future.value(<Map<String, dynamic>>[]),
-        queryNeonHttp('''
-          SELECT k."id", k."status"::text AS "status", k."submittedAt", k."reviewedAt"
-          FROM kyc k
-          WHERE k."userId" = \$1
-        ''', [userId]),
+        // [1] age KYC chilo — KYC ar nei
+        Future.value(<Map<String, dynamic>>[]),
         // Investment certificate gulo alada section e, tai ekhane bad.
         // Website soft-delete kora document o bad.
         queryNeonHttp('''
@@ -2104,22 +2118,6 @@ class DatabaseService {
       ]);
 
       final docs = _emptyDocs();
-
-      String day(String s) => s.length >= 10 ? s.substring(0, 10) : s;
-
-      if (results[1].isNotEmpty) {
-        final kRow = results[1].first;
-        final kStatus = kRow['status']?.toString() ?? '';
-
-        // Tarikh gulo raw pathai — page nijer bhashay sajabe
-        docs['kycDocs']!.add({
-          'id': kRow['id'].toString(),
-          'title': 'KYC Verification',
-          'submittedAt': day(kRow['submittedAt']?.toString() ?? ''),
-          'reviewedAt': day(kRow['reviewedAt']?.toString() ?? ''),
-          'status': kStatus == 'APPROVED' ? 'VERIFIED' : kStatus,
-        });
-      }
 
       for (final r in results[2]) {
         final cat = r['category']?.toString() ?? 'PROJECT_DOCUMENT';
@@ -3099,34 +3097,345 @@ class DatabaseService {
     }
   }
 
-  /// true = save hoyeche (ba pathanor kichu chilo na)
-  static Future<bool> _saveKycDocument(
-      String kycId, String docType, String? fileData) async {
-    if (fileData == null || fileData.isEmpty) return true;
-    try {
-      await executeNeonHttp(
-          'DELETE FROM kyc_documents WHERE "kycId" = \$1 AND "documentType" = \$2::"KycDocumentType"',
-          [kycId, docType]);
+  // ═════════════════════════════════════════════════════════
+  // GROUP INVEST + PAYMENT — Bank / Cash / Cheque (project er motoi)
+  // group_investment_payments e SUBMITTED → group investment PAYMENT_PENDING.
+  // Admin approve korle ACTIVE (website e).
+  // ═════════════════════════════════════════════════════════
 
-      return await executeNeonHttp('''
-        INSERT INTO kyc_documents (
-          "id", "kycId", "documentType", "storageKey", "mimeType", "sizeBytes", "createdAt"
-        ) VALUES (
-          \$1, \$2, \$3::"KycDocumentType", \$4, \$5, \$6, \$7
-        )
-      ''', [
-        _generateUuid(),
-        kycId,
-        docType,
-        fileData,
-        _mimeFromDataUri(fileData),
-        fileData.length,
-        _nowIso(),
-      ]);
+  /// App er check server eo — kichu miss gele kichui save hobe na
+  static String? _checkPaymentParts({
+    required Set<String> m,
+    required double amountBdt,
+    required double bankAmount,
+    required double cashAmount,
+    required double chequeAmount,
+    String? bankTransactionId,
+    String? bankReceiptUrl,
+    String? cashReceiver,
+    String? chequeImageUrl,
+  }) {
+    if (m.isEmpty) return 'Please choose a payment method.';
+    if (amountBdt <= 0) return 'Please enter the amount.';
+    if (m.contains('BANK') &&
+        ((bankTransactionId ?? '').trim().isEmpty || (bankReceiptUrl ?? '').isEmpty)) {
+      return 'Bank payment needs the transaction number and receipt image.';
+    }
+    if (m.contains('CASH') && (cashReceiver ?? '').trim().isEmpty) {
+      return 'Please select who received the cash.';
+    }
+    if (m.contains('CHEQUE') && (chequeImageUrl ?? '').isEmpty) {
+      return 'Please upload the cheque image.';
+    }
+    final parts = (m.contains('BANK') ? bankAmount : 0) +
+        (m.contains('CASH') ? cashAmount : 0) +
+        (m.contains('CHEQUE') ? chequeAmount : 0);
+    if (m.length > 1 && (parts - amountBdt).abs() > 0.5) {
+      return 'The split amounts must add up to the total.';
+    }
+    return null;
+  }
+
+  /// group_investment_payments e ekta SUBMITTED row (column/enum dekhe dekhe)
+  static Future<Map<String, dynamic>> _insertGroupPayment({
+    required String groupInvestmentId,
+    required String userId,
+    required double amountBdt,
+    required Set<String> m,
+    required double bankAmount,
+    required double cashAmount,
+    required double chequeAmount,
+    String? bankAccountId,
+    String? tierBankAccountId,
+    String? bankAccountLabel,
+    String? bankTransactionId,
+    String? bankReceiptUrl,
+    String? cashReceiver,
+    String? chequeImageUrl,
+  }) async {
+    const table = 'group_investment_payments';
+    final metas = await Future.wait([_paymentMethodMeta(table), _columnsOf(table)]);
+    final pm = metas[0] as ({String cast, Set<String> labels});
+    final cols = metas[1] as Map<String, bool>;
+    if (cols.isEmpty) return {'success': false, 'message': _connectionErrorMsg()};
+
+    String pick(List<String> candidates, String fallback) {
+      if (pm.labels.isEmpty) return candidates.first;
+      for (final c in candidates) {
+        if (pm.labels.contains(c)) return c;
+      }
+      return pm.labels.contains(fallback) ? fallback : pm.labels.first;
+    }
+
+    final String method;
+    if (m.length > 1) {
+      method = pick(['MIXED', 'MULTIPLE', 'OTHER'], m.contains('BANK') ? 'BANK_TRANSFER' : 'CASH');
+    } else if (m.contains('BANK')) {
+      method = pick(['BANK_TRANSFER', 'BANK_DEPOSIT', 'BANK'], 'BANK_TRANSFER');
+    } else if (m.contains('CASH')) {
+      method = pick(['CASH', 'CASH_DEPOSIT', 'CASH_PAYMENT'], 'BANK_TRANSFER');
+    } else {
+      method = pick(['CHEQUE', 'CHECK', 'BANK_CHEQUE'], 'BANK_TRANSFER');
+    }
+
+    final lines = <String>[
+      'Payment: ${[if (m.contains('BANK')) 'Bank', if (m.contains('CASH')) 'Cash', if (m.contains('CHEQUE')) 'Cheque'].join(' + ')}'
+          ' — total ${_fmtTk(amountBdt)}',
+      if (m.contains('BANK'))
+        'Bank: ${_fmtTk(m.length > 1 ? bankAmount : amountBdt)}'
+            '${(bankAccountLabel ?? '').isNotEmpty ? ' to $bankAccountLabel' : ''}'
+            ', TRX ${bankTransactionId!.trim()}, receipt: $bankReceiptUrl',
+      if (m.contains('CASH'))
+        'Cash: ${_fmtTk(m.length > 1 ? cashAmount : amountBdt)} handed to ${cashReceiver!.trim()}',
+      if (m.contains('CHEQUE'))
+        'Cheque: ${_fmtTk(m.length > 1 ? chequeAmount : amountBdt)}, image: $chequeImageUrl',
+    ];
+
+    final proofUrl = m.contains('BANK') ? bankReceiptUrl! : (m.contains('CHEQUE') ? chequeImageUrl! : '');
+    final ref = m.contains('BANK')
+        ? bankTransactionId!.trim()
+        : (m.contains('CASH') ? 'CASH - ${cashReceiver!.trim()}' : 'CHEQUE');
+
+    // Bank na hole bankAccountId khali — kintu column NOT NULL hole tier er account
+    String? bankId = (m.contains('BANK') && (bankAccountId ?? '').isNotEmpty) ? bankAccountId : null;
+    if (bankId == null && cols.containsKey('bankAccountId') && cols['bankAccountId'] == false) {
+      bankId = (tierBankAccountId ?? '').isNotEmpty ? tierBankAccountId : null;
+      if (bankId == null) {
+        return {'success': false, 'message': 'Payment account for this tier is not set yet. Please contact support.'};
+      }
+    }
+
+    String? orEmpty(String? v, String col) =>
+        (v == null || v.isEmpty) ? ((cols[col] ?? true) ? null : '') : v;
+
+    final nowStr = _nowIso();
+    final names = <String>[];
+    final values = <String>[];
+    final params = <dynamic>[];
+    void add(String col, dynamic v, {String cast = '', String? raw}) {
+      if (!cols.containsKey(col)) return;
+      names.add('"$col"');
+      if (raw != null) {
+        values.add(raw);
+      } else {
+        params.add(v);
+        values.add('\$${params.length}$cast');
+      }
+    }
+
+    add('id', _generateUuid());
+    add('groupInvestmentId', groupInvestmentId);
+    add('submittedBy', userId);
+    add('status', null, raw: "'SUBMITTED'::\"ManualPaymentStatus\"");
+    add('amountBdt', amountBdt);
+    add('bankAccountId', bankId);
+    add('paymentMethod', method, cast: pm.cast);
+    add('transactionRef', orEmpty(ref, 'transactionRef'));
+    add('proofFileUrl', orEmpty(proofUrl, 'proofFileUrl'));
+    add('proofMimeType', orEmpty(proofUrl.isEmpty ? '' : 'image/jpeg', 'proofMimeType'));
+    add('notes', lines.join('\n'));
+    add('createdAt', nowStr);
+    add('updatedAt', nowStr);
+
+    final ins = await queryNeonHttp('''
+      INSERT INTO group_investment_payments (${names.join(', ')})
+      VALUES (${values.join(', ')})
+      RETURNING "id"
+    ''', params);
+
+    if (ins.isEmpty) {
+      return {'success': false, 'message': 'Could not save your payment details. (${_shortDbError()})'};
+    }
+
+    await executeNeonHttp('''
+      UPDATE group_investments
+      SET "status" = 'PAYMENT_PENDING'::"GroupInvestmentStatus", "updatedAt" = \$1
+      WHERE "id" = \$2
+    ''', [nowStr, groupInvestmentId]);
+
+    return {'success': true};
+  }
+
+  /// Notun group investment + payment ek shathe (Browse Groups theke)
+  static Future<Map<String, dynamic>> groupInvestWithPayment({
+    required String userId,
+    required String tierId,
+    required double amountBdt,
+    required List<String> methods,
+    double bankAmount = 0,
+    double cashAmount = 0,
+    double chequeAmount = 0,
+    String? bankAccountId,
+    String? bankAccountLabel,
+    String? bankTransactionId,
+    String? bankReceiptUrl,
+    String? cashReceiver,
+    String? chequeImageUrl,
+  }) async {
+    if (userId.isEmpty) return {'success': false, 'message': _loginRequiredMsg};
+    final m = methods.toSet();
+    final problem = _checkPaymentParts(
+      m: m,
+      amountBdt: amountBdt,
+      bankAmount: bankAmount,
+      cashAmount: cashAmount,
+      chequeAmount: chequeAmount,
+      bankTransactionId: bankTransactionId,
+      bankReceiptUrl: bankReceiptUrl,
+      cashReceiver: cashReceiver,
+      chequeImageUrl: chequeImageUrl,
+    );
+    if (problem != null) return {'success': false, 'message': problem};
+
+    // Tier er nijer bank account (bankAccountId NOT NULL hole lagbe)
+    final tier = await queryNeonHttp(
+        'SELECT "bankAccountId" FROM group_tiers WHERE "id" = \$1', [tierId]);
+    final tierBankId = tier.isEmpty ? null : tier.first['bankAccountId']?.toString();
+
+    // ধাপ ১: investment (tier chalu? min/max? — createGroupInvestment e check)
+    final inv = await createGroupInvestment(userId: userId, tierId: tierId, amountBdt: amountBdt);
+    if (inv['success'] != true) return inv;
+    final gid = inv['groupInvestmentId'].toString();
+
+    Future<Map<String, dynamic>> undo(String msg) async {
+      // Payment save na hole addha investment rakhbo na
+      await executeNeonHttp('''
+        DELETE FROM group_investments gi
+        WHERE gi."id" = \$1 AND gi."investorUserId" = \$2
+          AND NOT EXISTS (SELECT 1 FROM group_investment_payments p WHERE p."groupInvestmentId" = gi."id")
+      ''', [gid, userId]);
+      return {'success': false, 'message': msg};
+    }
+
+    try {
+      final res = await _insertGroupPayment(
+        groupInvestmentId: gid,
+        userId: userId,
+        amountBdt: amountBdt,
+        m: m,
+        bankAmount: bankAmount,
+        cashAmount: cashAmount,
+        chequeAmount: chequeAmount,
+        bankAccountId: bankAccountId,
+        tierBankAccountId: tierBankId,
+        bankAccountLabel: bankAccountLabel,
+        bankTransactionId: bankTransactionId,
+        bankReceiptUrl: bankReceiptUrl,
+        cashReceiver: cashReceiver,
+        chequeImageUrl: chequeImageUrl,
+      );
+      if (res['success'] != true) return await undo(res['message']?.toString() ?? 'Could not save your payment.');
+      return {
+        'success': true,
+        'groupInvestmentId': gid,
+        'message': 'Investment submitted! It will be active after admin approval.',
+      };
     } catch (e) {
-      debugPrint("Save KYC Document Warning: $e");
-      return false;
+      return await undo('Could not save your payment details. Please try again.');
     }
   }
-}
 
+  /// Age theke thaka (PAYMENT_PENDING / proof bad pora) group investment er payment
+  static Future<Map<String, dynamic>> submitGroupPaymentMulti({
+    required String groupInvestmentId,
+    required String userId,
+    required double amountBdt,
+    required List<String> methods,
+    double bankAmount = 0,
+    double cashAmount = 0,
+    double chequeAmount = 0,
+    String? bankAccountId,
+    String? bankAccountLabel,
+    String? bankTransactionId,
+    String? bankReceiptUrl,
+    String? cashReceiver,
+    String? chequeImageUrl,
+  }) async {
+    if (userId.isEmpty) return {'success': false, 'message': _loginRequiredMsg};
+    final m = methods.toSet();
+    final problem = _checkPaymentParts(
+      m: m,
+      amountBdt: amountBdt,
+      bankAmount: bankAmount,
+      cashAmount: cashAmount,
+      chequeAmount: chequeAmount,
+      bankTransactionId: bankTransactionId,
+      bankReceiptUrl: bankReceiptUrl,
+      cashReceiver: cashReceiver,
+      chequeImageUrl: chequeImageUrl,
+    );
+    if (problem != null) return {'success': false, 'message': problem};
+
+    try {
+      final check = await queryNeonHttp('''
+        SELECT gi."status"::text AS "status", gi."amountBdt", gt."bankAccountId" AS "tierBankId",
+               EXISTS (
+                 SELECT 1 FROM group_investment_payments x
+                 WHERE x."groupInvestmentId" = gi."id" AND x."status"::text = 'SUBMITTED'
+               ) AS "hasPending"
+        FROM group_investments gi
+        JOIN group_tiers gt ON gt."id" = gi."tierId"
+        WHERE gi."id" = \$1 AND gi."investorUserId" = \$2
+      ''', [groupInvestmentId, userId]);
+
+      if (check.isEmpty) {
+        return {
+          'success': false,
+          'message': _lastConnectionError != null ? _connectionErrorMsg() : 'Group investment not found.',
+        };
+      }
+      final row = check.first;
+      final st = row['status']?.toString() ?? '';
+      if (st != 'PENDING' && st != 'PAYMENT_PENDING') {
+        return {'success': false, 'message': 'This investment is not awaiting payment.'};
+      }
+      if (row['hasPending'] == true || row['hasPending']?.toString() == 'true') {
+        return {'success': false, 'message': 'A payment is already under review.'};
+      }
+      // Taka investment er shoman-i hote hobe
+      final invAmount = _toDouble(row['amountBdt']);
+      if (invAmount > 0 && (invAmount - amountBdt).abs() > 0.5) {
+        return {'success': false, 'message': 'Amount must be ${_fmtTk(invAmount)}.'};
+      }
+
+      final res = await _insertGroupPayment(
+        groupInvestmentId: groupInvestmentId,
+        userId: userId,
+        amountBdt: amountBdt,
+        m: m,
+        bankAmount: bankAmount,
+        cashAmount: cashAmount,
+        chequeAmount: chequeAmount,
+        bankAccountId: bankAccountId,
+        tierBankAccountId: row['tierBankId']?.toString(),
+        bankAccountLabel: bankAccountLabel,
+        bankTransactionId: bankTransactionId,
+        bankReceiptUrl: bankReceiptUrl,
+        cashReceiver: cashReceiver,
+        chequeImageUrl: chequeImageUrl,
+      );
+      if (res['success'] != true) return res;
+      return <String, dynamic>{
+        'success': true,
+        'message': 'Payment submitted! It will be checked by admin.',
+      };
+    } catch (e) {
+      return {'success': false, 'message': 'Could not save your payment details. Please try again.'};
+    }
+  }
+
+  /// Neon er error body theke shudhu "message" ta
+  static String _shortDbError() {
+    final e = _lastConnectionError ?? '';
+    final m = RegExp(r'"message"\s*:\s*"([^"]+)"').firstMatch(e);
+    final msg = m?.group(1) ?? e;
+    if (msg.isEmpty) return 'unknown error';
+    if (e.contains('HTTP 413') || msg.toLowerCase().contains('too large')) {
+      return 'photo is too large';
+    }
+    return msg.length > 140 ? '${msg.substring(0, 140)}…' : msg;
+  }
+
+
+
+}

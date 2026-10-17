@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../authentication/login_page.dart';
-import '../kyc/kyc_page.dart';
 import '../../../services/auth_service.dart';
 import '../../../services/cloudinary_service.dart';
 import '../../../services/database_service.dart';
@@ -56,7 +55,6 @@ class _ProfilePageState extends State<ProfilePage> {
   String _phone = '';
   String? _avatarUrl;
   DateTime? _memberSince;
-  String _kycStatus = 'NOT_STARTED';
 
   /// DB te ja ache tai — khali hole ''
   Map<String, String> _p = {};
@@ -107,7 +105,6 @@ class _ProfilePageState extends State<ProfilePage> {
         _email = profile['email']?.toString() ?? '';
         _phone = profile['phone']?.toString() ?? '';
         _avatarUrl = profile['avatarUrl']?.toString();
-        _kycStatus = (profile['kycStatus']?.toString() ?? 'NOT_STARTED').toUpperCase();
         _memberSince = DateTime.tryParse(profile['createdAt']?.toString() ?? '')?.toLocal();
 
         final raw = (profile['investorProfile'] as Map?) ?? {};
@@ -138,27 +135,6 @@ class _ProfilePageState extends State<ProfilePage> {
     return '${_months[d.month - 1]} ${d.day}, ${d.year}';
   }
 
-  bool get _isKycVerified => _kycStatus == 'VERIFIED' || _kycStatus == 'APPROVED';
-
-  bool get _hasKycData =>
-      _v('fullName').isNotEmpty ||
-          _v('nationalId').isNotEmpty ||
-          _v('bankName').isNotEmpty ||
-          _v('mobileNumber').isNotEmpty;
-
-  String _docTypeLabel(String type) {
-    switch (type) {
-      case 'PASSPORT':
-        return LanguageService.tr('Passport', 'পাসপোর্ট');
-      case 'DRIVING_LICENSE':
-        return LanguageService.tr('Driving License', 'ড্রাইভিং লাইসেন্স');
-      case 'NATIONAL_ID':
-        return LanguageService.tr('National ID', 'জাতীয় পরিচয়পত্র');
-      default:
-        return LanguageService.tr('ID Document', 'পরিচয়পত্র');
-    }
-  }
-
   /// DB te enum ba code thakle sundor kore dekhai: "BD" → Bangladesh, "SOME_VALUE" → Some Value
   String _pretty(String value) {
     if (value.isEmpty) return '';
@@ -173,7 +149,7 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   String get _fullAddress {
-    final parts = [_v('address'), _v('thana'), _v('district'), _v('division')]
+    final parts = [_v('address'), _v('city')]
         .where((s) => s.isNotEmpty)
         .toList();
     // Address er bhitore district age theke thakle dui bar dekhabo na
@@ -189,12 +165,6 @@ class _ProfilePageState extends State<ProfilePage> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(msg), backgroundColor: error ? danger : emerald),
     );
-  }
-
-  Future<void> _openKyc() async {
-    await Navigator.push(context, MaterialPageRoute(builder: (_) => const KycPage()));
-    // KYC theke fire ashle notun status dekhai
-    _loadProfileData();
   }
 
   // ═════════════════════════════════════════════════════════
@@ -440,13 +410,9 @@ class _ProfilePageState extends State<ProfilePage> {
                 const SizedBox(height: 12),
                 _buildContactCard(),
                 const SizedBox(height: 24),
-                _sectionHeader(LanguageService.tr('KYC Verification', 'KYC যাচাই')),
+                _sectionHeader(LanguageService.tr('Personal Information', 'ব্যক্তিগত তথ্য')),
                 const SizedBox(height: 12),
-                _buildKycStatusCard(),
-                if (_hasKycData) ...[
-                  const SizedBox(height: 12),
-                  _buildKycInfoCard(),
-                ],
+                _buildPersonalCard(),
                 const SizedBox(height: 24),
                 _sectionHeader(
                     LanguageService.tr('Investor Profile', 'বিনিয়োগকারী প্রোফাইল')),
@@ -556,26 +522,9 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   // ─── Hero ─────────────────────────────────────────────────
-  (String, Color, Color) _kycBadge() {
-    switch (_kycStatus) {
-      case 'VERIFIED':
-      case 'APPROVED':
-        return (LanguageService.tr('KYC Verified', 'KYC যাচাইকৃত'), emerald, emeraldSoft);
-      case 'SUBMITTED':
-      case 'PENDING':
-      case 'UNDER_REVIEW':
-        return (LanguageService.tr('KYC Under Review', 'KYC যাচাই চলছে'), goldDeep, goldSoft);
-      case 'REJECTED':
-        return (LanguageService.tr('KYC Rejected', 'KYC বাতিল'), danger, dangerSoft);
-      default:
-        return (LanguageService.tr('KYC Not Done', 'KYC করা হয়নি'), terracotta, terracottaSoft);
-    }
-  }
-
   Widget _buildHeroCard() {
     final displayName = _name.isEmpty ? LanguageService.tr('Investor', 'বিনিয়োগকারী') : _name;
     final initial = displayName[0].toUpperCase();
-    final badge = _kycBadge();
     final hasPhoto = _avatarUrl != null && _avatarUrl!.isNotEmpty;
     final busy = _isUploadingPhoto || _isDeletingPhoto;
 
@@ -690,10 +639,6 @@ class _ProfilePageState extends State<ProfilePage> {
                           ),
                         ),
                       ),
-                      if (_isKycVerified) ...[
-                        const SizedBox(width: 6),
-                        const Icon(Icons.verified_rounded, color: goldLight, size: 20),
-                      ],
                     ],
                   ),
                   if (_memberSince != null) ...[
@@ -704,25 +649,6 @@ class _ProfilePageState extends State<ProfilePage> {
                       style: TextStyle(color: Colors.white.withAlpha(170), fontSize: 12),
                     ),
                   ],
-                  const SizedBox(height: 12),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: badge.$3,
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.verified_user_outlined, size: 13, color: badge.$2),
-                        const SizedBox(width: 5),
-                        Text(
-                          badge.$1,
-                          style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: badge.$2),
-                        ),
-                      ],
-                    ),
-                  ),
                   const SizedBox(height: 16),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -792,115 +718,27 @@ class _ProfilePageState extends State<ProfilePage> {
     ]);
   }
 
-  // ─── KYC status ───────────────────────────────────────────
-  Widget _buildKycStatusCard() {
-    final badge = _kycBadge();
-
-    final String message;
-    final String action;
-    switch (_kycStatus) {
-      case 'VERIFIED':
-      case 'APPROVED':
-        message = LanguageService.tr('Your identity is verified. You can invest in projects.',
-            'আপনার পরিচয় যাচাই হয়েছে। আপনি প্রজেক্টে বিনিয়োগ করতে পারবেন।');
-        action = LanguageService.tr('View KYC', 'KYC দেখুন');
-        break;
-      case 'SUBMITTED':
-      case 'PENDING':
-      case 'UNDER_REVIEW':
-        message = LanguageService.tr('Your documents are being reviewed by our team.',
-            'আমাদের টিম আপনার কাগজপত্র যাচাই করছে।');
-        action = LanguageService.tr('View KYC', 'KYC দেখুন');
-        break;
-      case 'REJECTED':
-        message = LanguageService.tr('Your KYC was not approved. Please check the reason and submit again.',
-            'আপনার KYC অনুমোদন হয়নি। কারণ দেখে আবার জমা দিন।');
-        action = LanguageService.tr('Resubmit', 'আবার জমা দিন');
-        break;
-      default:
-        message = LanguageService.tr('Complete KYC to start investing.',
-            'বিনিয়োগ শুরু করতে KYC সম্পন্ন করুন।');
-        action = LanguageService.tr('Complete KYC', 'KYC করুন');
-    }
-
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: badge.$3,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: badge.$2.withAlpha(50)),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 42,
-            height: 42,
-            decoration: BoxDecoration(
-              color: badge.$2,
-              borderRadius: BorderRadius.circular(13),
-            ),
-            child: const Icon(Icons.shield_outlined, color: Colors.white, size: 21),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  badge.$1,
-                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: badge.$2),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  message,
-                  style: TextStyle(fontSize: 11.5, color: badge.$2.withAlpha(210), height: 1.35),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 8),
-          FilledButton(
-            onPressed: _openKyc,
-            style: FilledButton.styleFrom(
-              backgroundColor: badge.$2,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              visualDensity: VisualDensity.compact,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-            ),
-            child: Text(action, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
-          ),
-        ],
-      ),
-    );
+  // ─── Personal info (registration e ja diyeche) ───────────
+  String _fmtDob(String raw) {
+    final d = DateTime.tryParse(raw.trim());
+    if (d == null) return '';
+    return _fmtDate(DateTime(d.year, d.month, d.day));
   }
 
-  // ─── KYC info (user nije KYC te ja diyeche) ───────────────
-  Widget _buildKycInfoCard() {
-    final docType = _v('documentType');
-    final docNo = _v('nationalId');
-    final bank = _v('bankName').isEmpty
-        ? ''
-        : '${_v('bankName')}${_v('bankAccountNumber').isNotEmpty ? ' · ${_mask(_v('bankAccountNumber'))}' : ''}';
-    final wallet = _v('mobileProvider').isEmpty
-        ? ''
-        : '${_v('mobileProvider')}${_v('mobileNumber').isNotEmpty ? ' · ${_mask(_v('mobileNumber'))}' : ''}';
+  Widget _buildPersonalCard() {
     final nominee = _v('nomineeNationalId').isEmpty
         ? ''
         : '${_pretty(_v('nomineeRelation')).isEmpty ? '' : '${_pretty(_v('nomineeRelation'))} · '}'
         'NID ${_mask(_v('nomineeNationalId'))}';
 
     return _card([
-      _infoRow(Icons.person_outline_rounded, emerald, emeraldSoft,
-          LanguageService.tr('Full Name (as on ID)', 'পূর্ণ নাম (পরিচয়পত্র অনুযায়ী)'), _v('fullName')),
-      _infoRow(Icons.badge_outlined, lapis, lapisSoft, _docTypeLabel(docType), _mask(docNo)),
+      _infoRow(Icons.cake_outlined, goldDeep, goldSoft,
+          LanguageService.tr('Date of Birth', 'জন্ম তারিখ'), _fmtDob(_v('dateOfBirth'))),
+      _infoRow(Icons.badge_outlined, lapis, lapisSoft,
+          LanguageService.tr('National ID', 'জাতীয় পরিচয়পত্র'), _mask(_v('nationalId'))),
       _infoRow(Icons.location_on_outlined, terracotta, terracottaSoft,
-          LanguageService.tr('Present Address', 'বর্তমান ঠিকানা'), _fullAddress),
-      _infoRow(Icons.account_balance_outlined, emerald, emeraldSoft,
-          LanguageService.tr('Payout Bank', 'পেআউট ব্যাংক'), bank),
-      _infoRow(Icons.phone_android_rounded, turquoise, turquoiseSoft,
-          LanguageService.tr('Mobile Wallet', 'মোবাইল ওয়ালেট'), wallet),
-      _infoRow(Icons.supervisor_account_outlined, goldDeep, goldSoft,
+          LanguageService.tr('Address', 'ঠিকানা'), _fullAddress),
+      _infoRow(Icons.supervisor_account_outlined, emerald, emeraldSoft,
           LanguageService.tr('Nominee', 'নমিনি'), nominee),
     ]);
   }

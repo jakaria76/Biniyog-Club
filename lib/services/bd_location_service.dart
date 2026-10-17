@@ -4,7 +4,8 @@ import 'package:http/http.dart' as http;
 import 'language_service.dart';
 
 class BdLocationService {
-  // Complete Bangladesh Geolocation Dataset (Divisions -> Districts -> Upazilas)
+  // Bangladesh: Division -> District -> Upazila/Thana (shob thana nei — tai
+  // registration e "Other" diye nije likha jay)
   static final Map<String, Map<String, List<String>>> _bdData = {
     'Dhaka': {
       'Dhaka': ['Dhanmondi', 'Gulshan', 'Mirpur', 'Uttara', 'Mohammadpur', 'Badda', 'Tejgaon', 'Savar', 'Dhamrai', 'Keraniganj'],
@@ -88,7 +89,7 @@ class BdLocationService {
     },
   };
 
-  // Complete 100% Comprehensive Bangla Translation Map for Divisions, Districts & Upazilas
+  // Bangla naam (division, district, upazila)
   static const Map<String, String> _bnTranslations = {
     // Divisions
     'Dhaka': 'ঢাকা',
@@ -309,7 +310,7 @@ class BdLocationService {
     'Chandpur Sadar': 'চাঁদপুর সদর',
     'Faridganj': 'ফরিদগঞ্জ',
     'Haimchar': 'হাইমচর',
-    'Hajiganj': 'হাাজীগঞ্জ',
+    'Hajiganj': 'হাজীগঞ্জ',
     'Kachua': 'কচুয়া',
     'Matlab North': 'মতলব উত্তর',
     'Matlab South': 'মতলব দক্ষিণ',
@@ -411,7 +412,7 @@ class BdLocationService {
     'Panchbibi': 'পাঁচবিবি',
     'Khulna Sadar': 'খুলনা সদর',
     'Sonadanga': 'সোনাডাঙ্গা',
-    'Khalishpur': 'খালিDirectory',
+    'Khalishpur': 'খালিশপুর',
     'Batiaghata': 'বটিয়াঘাটা',
     'Dacope': 'দাকোপ',
     'Dumuria': 'ডুমুরিয়া',
@@ -426,7 +427,7 @@ class BdLocationService {
     'Bagherpara': 'বাঘারপাড়া',
     'Chaugachha': 'চৌগাছা',
     'Jhikargachha': 'ঝিকরগাছা',
-    'Keshabpur': 'কেশবরপুর',
+    'Keshabpur': 'কেশবপুর',
     'Manirampur': 'মণিরামপুর',
     'Sharsha': 'শার্শা',
     'Kushtia Sadar': 'কুষ্টিয়া সদর',
@@ -694,6 +695,29 @@ class BdLocationService {
     if (LanguageService.isBangla) {
       return list.map((e) => localize(e)).toList();
     }
+    return list;
+  }
+
+  // ═════════════════════════════════════════════════════════
+  // ENGLISH KEY API — DB te shob shomoy English naam jay, screen e
+  // bhasha onujayi dekhay. (Upor er method gula Bangla mode e Bangla naam
+  // ferot dey — bhasha bodlale dropdown er value mile na, tai notun page
+  // gulo egula use kore.)
+  // ═════════════════════════════════════════════════════════
+  static List<String> divisionKeys() => _bdData.keys.toList();
+
+  static List<String> districtKeys(String? divisionKey) {
+    if (divisionKey == null) return [];
+    final d = _bdData[divisionKey];
+    if (d == null) return [];
+    final list = d.keys.toList()..sort();
+    return list;
+  }
+
+  static List<String> upazilaKeys(String? divisionKey, String? districtKey) {
+    if (divisionKey == null || districtKey == null) return [];
+    final list = List<String>.from(_bdData[divisionKey]?[districtKey] ?? const []);
+    list.sort();
     return list;
   }
 

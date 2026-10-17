@@ -5,7 +5,6 @@ import '../../authentication/login_page.dart';
 import '../documents/documents_page.dart';
 import '../groups/browse_groups_page.dart';
 import '../groups/group_investments_page.dart';
-import '../kyc/kyc_page.dart';
 import '../notifications/notifications_page.dart';
 import '../portfolio/investments_page.dart';
 import '../portfolio/portfolio_page.dart';
@@ -916,9 +915,9 @@ class _InvestorDashboardPageState extends State<InvestorDashboardPage> {
       lapisSoft,
       ),
       (
-      LanguageService.tr('KYC', 'কেওয়াইসি'),
-      Icons.verified_user_outlined,
-      const KycPage() as Widget,
+      LanguageService.tr('Documents', 'ডকুমেন্টস'),
+      Icons.folder_outlined,
+      const DocumentsPage() as Widget,
       goldDeep,
       goldSoft,
       ),
@@ -1725,8 +1724,6 @@ class _InvestorDashboardPageState extends State<InvestorDashboardPage> {
       Icons.person_outline_rounded, const ProfilePage() as Widget),
       (LanguageService.tr('Settings', 'সেটিংস'), Icons.settings_outlined,
       const SettingsPage() as Widget),
-      (LanguageService.tr('KYC', 'কেওয়াইসি'), Icons.verified_user_outlined,
-      const KycPage() as Widget),
     ];
 
     return Drawer(

@@ -1,16 +1,19 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../../services/auth_service.dart';
 import 'reset_password_page.dart';
 import 'widgets/auth_card.dart';
 
+const _emerald = Color(0xFF0F4D3A);
+const _goldDeep = Color(0xFF8A6A1F);
+const _bg = Color(0xFFF6F1E7);
+const _danger = Color(0xFFB3261E);
+
 class OtpVerificationPage extends StatefulWidget {
   final String email;
 
-  const OtpVerificationPage({
-    super.key,
-    required this.email,
-  });
+  const OtpVerificationPage({super.key, required this.email});
 
   @override
   State<OtpVerificationPage> createState() => _OtpVerificationPageState();
@@ -22,6 +25,7 @@ class _OtpVerificationPageState extends State<OtpVerificationPage> {
 
   bool _isLoading = false;
   bool _isResending = false;
+  String? _error;
 
   int _resendSeconds = 60;
   Timer? _timer;
@@ -36,11 +40,14 @@ class _OtpVerificationPageState extends State<OtpVerificationPage> {
     setState(() => _resendSeconds = 60);
     _timer?.cancel();
     _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (!mounted) return;
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
       if (_resendSeconds > 0) {
         setState(() => _resendSeconds--);
       } else {
-        _timer?.cancel();
+        timer.cancel();
       }
     });
   }
@@ -52,106 +59,103 @@ class _OtpVerificationPageState extends State<OtpVerificationPage> {
     super.dispose();
   }
 
-  void _handleResendOtp() async {
-    if (_resendSeconds > 0 || _isResending) return;
+  String get _maskedEmail {
+    final e = widget.email;
+    final at = e.indexOf('@');
+    if (at <= 2) return e;
+    return '${e.substring(0, 2)}${'•' * (at - 2).clamp(1, 6)}${e.substring(at)}';
+  }
 
-    setState(() => _isResending = true);
+  void _snack(String msg, {bool ok = true}) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text(msg),
+        backgroundColor: ok ? _emerald : _danger,
+        behavior: SnackBarBehavior.floating,
+      ));
+  }
+
+  Future<void> _handleResendOtp() async {
+    if (_resendSeconds > 0 || _isResending) return;
+    setState(() {
+      _isResending = true;
+      _error = null;
+    });
 
     final res = await AuthService.forgotPassword(email: widget.email);
-
     if (!mounted) return;
     setState(() => _isResending = false);
 
     if (res['success'] == true) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(res['message'] ?? 'New OTP sent to ${widget.email}'),
-          backgroundColor: Colors.teal,
-        ),
-      );
+      _otpController.clear();
+      _snack(res['message']?.toString() ?? 'New code sent to ${widget.email}');
       _startResendTimer();
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(res['message'] ?? 'Failed to resend OTP.'),
-          backgroundColor: Colors.redAccent,
-        ),
-      );
+      _snack(res['message']?.toString() ?? 'Failed to resend the code.', ok: false);
     }
   }
 
-  void _handleVerifyOtp() async {
-    if (_formKey.currentState!.validate()) {
-      setState(() => _isLoading = true);
+  Future<void> _handleVerifyOtp() async {
+    if (_isLoading) return;
+    FocusScope.of(context).unfocus();
+    if (!_formKey.currentState!.validate()) return;
 
-      final otp = _otpController.text.trim();
-      final res = await AuthService.verifyOtp(
-        email: widget.email,
-        otp: otp,
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+
+    final otp = _otpController.text.trim();
+    final res = await AuthService.verifyOtp(email: widget.email, otp: otp);
+
+    if (!mounted) return;
+    setState(() => _isLoading = false);
+
+    if (res['success'] == true) {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) => ResetPasswordPage(email: widget.email, otp: otp),
+        ),
       );
-
-      if (!mounted) return;
-      setState(() => _isLoading = false);
-
-      if (res['success'] == true) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('OTP Verified! Create your new password.'),
-            backgroundColor: Colors.teal,
-          ),
-        );
-
-        // Open Reset Password Screen
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (context) => ResetPasswordPage(
-              email: widget.email,
-              otp: otp,
-            ),
-          ),
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(res['message'] ?? 'Invalid or expired OTP.'),
-            backgroundColor: Colors.redAccent,
-          ),
-        );
-      }
+    } else {
+      setState(() => _error = res['message']?.toString() ?? 'Invalid or expired code.');
+      _otpController.clear();
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF4F7F6),
+      backgroundColor: _bg,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.teal),
+          icon: const Icon(Icons.arrow_back, color: _emerald),
           onPressed: () => Navigator.pop(context),
         ),
       ),
       body: SafeArea(
         child: SingleChildScrollView(
           child: AuthCard(
-            title: 'Verify OTP Code',
-            description: 'Enter the 6-digit OTP code sent to ${widget.email}',
+            title: 'Enter the code',
+            description:
+            'We emailed a 6-digit code to $_maskedEmail. It is valid for 15 minutes.',
             footer: Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Text("Didn't receive the code? ",
+                Text("Didn't get the email? ",
                     style: TextStyle(color: Colors.grey[700], fontSize: 13)),
                 TextButton(
-                  onPressed: _resendSeconds == 0 ? _handleResendOtp : null,
+                  onPressed: (_resendSeconds == 0 && !_isResending) ? _handleResendOtp : null,
                   child: Text(
-                    _resendSeconds > 0
-                        ? 'Resend in ${_resendSeconds}s'
-                        : (_isResending ? 'Sending...' : 'Resend OTP'),
+                    _isResending
+                        ? 'Sending...'
+                        : (_resendSeconds > 0 ? 'Resend in ${_resendSeconds}s' : 'Resend code'),
                     style: TextStyle(
-                      color: _resendSeconds == 0 ? Colors.teal : Colors.grey,
+                      color: _resendSeconds == 0 ? _emerald : Colors.grey,
                       fontWeight: FontWeight.bold,
                       fontSize: 13,
                     ),
@@ -166,63 +170,85 @@ class _OtpVerificationPageState extends State<OtpVerificationPage> {
                 children: [
                   TextFormField(
                     controller: _otpController,
+                    autofocus: true,
                     keyboardType: TextInputType.number,
-                    maxLength: 6,
+                    autofillHints: const [AutofillHints.oneTimeCode],
+                    inputFormatters: [
+                      FilteringTextInputFormatter.digitsOnly,
+                      LengthLimitingTextInputFormatter(6),
+                    ],
                     textAlign: TextAlign.center,
                     style: const TextStyle(
-                      fontSize: 24,
+                      fontSize: 26,
                       fontWeight: FontWeight.bold,
-                      letterSpacing: 8.0,
+                      letterSpacing: 10,
+                      color: _emerald,
                     ),
+                    onChanged: (v) {
+                      if (_error != null) setState(() => _error = null);
+                      if (v.length == 6) _handleVerifyOtp();
+                    },
                     decoration: InputDecoration(
                       hintText: '••••••',
-                      counterText: '',
-                      border: OutlineInputBorder(
+                      filled: true,
+                      fillColor: Colors.white,
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                      enabledBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide(
+                            color: _error != null ? _danger : Colors.grey.shade300),
                       ),
                       focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
-                        borderSide:
-                            const BorderSide(color: Colors.teal, width: 2),
+                        borderSide: BorderSide(
+                            color: _error != null ? _danger : _emerald, width: 2),
                       ),
                     ),
                     validator: (value) {
                       if (value == null || value.trim().length != 6) {
-                        return 'Please enter the 6-digit OTP code';
+                        return 'Please enter the 6-digit code';
                       }
                       return null;
                     },
                   ),
-                  const SizedBox(height: 24),
-
+                  if (_error != null) ...[
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        const Icon(Icons.error_outline_rounded, size: 18, color: _danger),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(_error!,
+                              style: const TextStyle(
+                                  color: _danger, fontSize: 13, fontWeight: FontWeight.w600)),
+                        ),
+                      ],
+                    ),
+                  ],
+                  const SizedBox(height: 12),
+                  Text(
+                    'Check your Spam / Promotions folder if the email is not in your inbox.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 12, color: _goldDeep),
+                  ),
+                  const SizedBox(height: 20),
                   ElevatedButton(
                     onPressed: _isLoading ? null : _handleVerifyOtp,
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.teal,
+                      backgroundColor: _emerald,
                       foregroundColor: Colors.white,
+                      disabledBackgroundColor: _emerald.withAlpha(120),
                       padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      elevation: 1,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     ),
                     child: _isLoading
                         ? const SizedBox(
-                            height: 20,
-                            width: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              valueColor:
-                                  AlwaysStoppedAnimation<Color>(Colors.white),
-                            ),
-                          )
-                        : const Text(
-                            'Verify & Continue',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
+                      height: 20,
+                      width: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                    )
+                        : const Text('Verify & Continue',
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                   ),
                 ],
               ),

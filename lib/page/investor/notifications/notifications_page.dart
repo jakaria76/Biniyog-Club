@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
 import '../../authentication/login_page.dart';
-import '../kyc/kyc_page.dart';
 import '../portfolio/investments_page.dart';
 import '../projects/my_projects_page.dart';
 import '../../../services/auth_service.dart';
@@ -162,7 +161,6 @@ class _NotificationsPageState extends State<NotificationsPage> {
       return const InvestmentsPage();
     }
     if (type.startsWith('PROJECT_')) return const MyProjectsPage();
-    if (type.startsWith('KYC_')) return const KycPage();
     return null;
   }
 
@@ -419,8 +417,8 @@ class _NotificationsPageState extends State<NotificationsPage> {
           ),
           const SizedBox(height: 4),
           Text(
-            LanguageService.tr('Updates about your investments and KYC will appear here.',
-                'আপনার বিনিয়োগ ও KYC সংক্রান্ত আপডেট এখানে দেখাবে।'),
+            LanguageService.tr('Updates about your investments will appear here.',
+                'আপনার বিনিয়োগ সংক্রান্ত আপডেট এখানে দেখাবে।'),
             textAlign: TextAlign.center,
             style: const TextStyle(fontSize: 12.5, color: muted, height: 1.4),
           ),

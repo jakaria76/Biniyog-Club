@@ -12,7 +12,6 @@ import '../../../services/database_service.dart';
 import '../../../services/language_service.dart';
 import '../../../services/pdf_service.dart';
 import '../../authentication/login_page.dart';
-import '../kyc/kyc_page.dart';
 
 // ─── Palette ───
 const Color _emerald = Color(0xFF0E4A37);
@@ -256,7 +255,6 @@ class _DocumentsPageState extends State<DocumentsPage> {
   Map<String, String> get categoryDropdownOptions => {
     'PAYMENT_RECEIPT': LanguageService.tr('Payment Receipt', 'পেমেন্ট রিসিট'),
     'INVESTMENT_AGREEMENT': LanguageService.tr('Investment Agreement', 'বিনিয়োগ চুক্তি'),
-    'KYC': LanguageService.tr('KYC Supporting Document', 'কেওয়াইসি সহায়ক নথি'),
     'PROJECT_DOCUMENT': LanguageService.tr('Other Document', 'অন্যান্য নথি'),
   };
 
@@ -793,18 +791,6 @@ class _DocumentsPageState extends State<DocumentsPage> {
                 ),
                 const SizedBox(height: 14),
                 _buildSectionCard(
-                  icon: Icons.verified_user_outlined,
-                  color: _turquoise,
-                  soft: _turquoiseSoft,
-                  title: LanguageService.tr(
-                      'KYC Documents', 'কেওয়াইসি ডকুমেন্টস'),
-                  items: _categorizedDocs['kycDocs'] ?? [],
-                  emptyMsg: LanguageService.tr('No KYC documents found.',
-                      'কোনো কেওয়াইসি নথি পাওয়া যায়নি।'),
-                  rowBuilder: _buildKycRow,
-                ),
-                const SizedBox(height: 14),
-                _buildSectionCard(
                   icon: Icons.receipt_long_outlined,
                   color: _lapis,
                   soft: _lapisSoft,
@@ -842,7 +828,7 @@ class _DocumentsPageState extends State<DocumentsPage> {
                   rowBuilder: _buildFileRow,
                 ),
                 const SizedBox(height: 14),
-                // Agreement, KYC sohayok nothi, project document — age upload
+                // Agreement, project document — age upload
                 // korle kothao dekhato na
                 _buildSectionCard(
                   icon: Icons.folder_open_rounded,
@@ -1155,66 +1141,6 @@ class _DocumentsPageState extends State<DocumentsPage> {
   }
 
 
-
-  Widget _buildKycRow(Map<String, dynamic> item) {
-    final status = item['status']?.toString() ?? '';
-    final sub = item['submittedAt']?.toString() ?? '';
-    final rev = item['reviewedAt']?.toString() ?? '';
-    final parts = <String>[
-      if (sub.isNotEmpty)
-        LanguageService.tr('Submitted ${PdfService.formatDate(sub)}',
-            'জমা ${PdfService.formatDate(sub)}'),
-      if (rev.isNotEmpty)
-        LanguageService.tr('Reviewed ${PdfService.formatDate(rev)}',
-            'যাচাই ${PdfService.formatDate(rev)}'),
-    ];
-    final needsAction = status == 'REJECTED' || status == 'NOT_STARTED';
-
-    return InkWell(
-      // KYC page e giye details dekha / abar jama dewa jay
-      onTap: () async {
-        await Navigator.push(context, MaterialPageRoute(builder: (_) => const KycPage()));
-        if (mounted) _loadDocumentsData();
-      },
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    LanguageService.tr('KYC Verification', 'কেওয়াইসি ভেরিফিকেশন'),
-                    style: const TextStyle(
-                        fontSize: 13.5, fontWeight: FontWeight.w700, color: _ink),
-                  ),
-                  if (parts.isNotEmpty) ...[
-                    const SizedBox(height: 3),
-                    Text(
-                      parts.join(' · '),
-                      style: const TextStyle(fontSize: 11, color: _muted),
-                    ),
-                  ],
-                  if (needsAction) ...[
-                    const SizedBox(height: 4),
-                    Text(
-                      LanguageService.tr('Tap to complete your KYC', 'কেওয়াইসি সম্পন্ন করতে চাপ দিন'),
-                      style: const TextStyle(fontSize: 11, color: _danger, fontWeight: FontWeight.w600),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            _statusPill(status),
-            const SizedBox(width: 4),
-            const Icon(Icons.chevron_right_rounded, color: _muted, size: 20),
-          ],
-        ),
-      ),
-    );
-  }
 
   Widget _buildFileRow(Map<String, dynamic> item) {
     final busy = _busy.contains('doc-${item['id']}');
