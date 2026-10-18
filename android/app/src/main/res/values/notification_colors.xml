@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Notification er icon / app name er rong (Biniyog emerald) -->
+    <color name="notification_brand">#0E4A37</color>
+</resources>

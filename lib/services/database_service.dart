@@ -7,6 +7,8 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:postgres/postgres.dart';
 import '../config/db_config.dart';
+import 'email_service.dart';
+import 'push_service.dart';
 
 class DatabaseService {
   static final http.Client _httpClient = http.Client();
@@ -351,7 +353,8 @@ class DatabaseService {
       final cleanAddress = (address ?? '').trim();
       final nomineeNid = (nomineeNidNumber ?? '').trim();
       final nomineeRel = (nomineeRelation ?? '').trim();
-      if (cleanPhone.isEmpty || cleanNid.isEmpty || cleanAddress.isEmpty || dateOfBirth == null) {
+      // NID, thikana, nominee — pore profile theke deya jay (website er motoi)
+      if (name.trim().isEmpty || cleanPhone.isEmpty || dateOfBirth == null) {
         return {'success': false, 'message': 'Please fill in all required fields.'};
       }
 
@@ -423,13 +426,13 @@ class DatabaseService {
         name.trim(), // 5
         nowStr, // 6
         profileId, // 7
-        cleanNid, // 8
+        cleanNid.isEmpty ? null : cleanNid, // 8
         nomineeNid.isEmpty ? null : nomineeNid, // 9
         nomineeRel.isEmpty ? null : nomineeRel, // 10
         walletId, // 11
         // Email na thakle "verified" bola jay na
         cleanEmail.isNotEmpty, // 12
-        cleanAddress, // 13
+        cleanAddress.isEmpty ? null : cleanAddress, // 13
         (city ?? '').trim().isEmpty ? null : city!.trim(), // 14
       ]);
 
@@ -477,6 +480,9 @@ class DatabaseService {
       } else {
         debugPrint('dateOfBirth column nei — Prisma InvestorProfile e "dateOfBirth DateTime?" add korun');
       }
+
+      // Welcome mail (forgot password er motoi Resend) — registration atkabe na
+      unawaited(EmailService.sendWelcome(userId: userId, name: name.trim(), email: cleanEmail));
 
       return {
         'success': true,
@@ -1283,6 +1289,14 @@ class DatabaseService {
         WHERE "id" = \$2
       ''', [nowStr, investmentId]);
 
+      unawaited(EmailService.sendProjectPaymentSubmitted(submissionId));
+      unawaited(PushService.showLocal(
+        title: 'Payment Submitted',
+        body: 'Your payment of ${_fmtTk(amountBdt)} has been submitted. It will become active after admin approval.',
+        kind: 'PENDING',
+        group: false,
+      ));
+
       return {
         'success': true,
         'message': 'Payment proof submitted successfully for review!',
@@ -1476,6 +1490,10 @@ class DatabaseService {
         WHERE "id" = \$2
       ''', [nowStr, investmentId]);
 
+      // User er notification page e "Pending" (mail worker pathabe)
+      await _notifyProjectPending(userId: userId, investmentId: investmentId, amountBdt: amountBdt);
+      unawaited(EmailService.sendProjectPending(investmentId));
+
       return {
         'success': true,
         'investmentId': investmentId,
@@ -1484,6 +1502,84 @@ class DatabaseService {
     } catch (e) {
       return await undo('Could not save your payment details. Please try again.');
     }
+  }
+
+  // ═════════════════════════════════════════════════════════
+  // USER NOTIFICATIONS (app theke) — notification page e dekhay.
+  // Type SYSTEM (enum e PENDING nei); data.kind diye page icon/link thik kore.
+  // Mail app pathay na — biniyog-mailer worker DB dekhe pathay.
+  // ═════════════════════════════════════════════════════════
+  static Future<void> _notifyProjectPending({
+    required String userId,
+    required String investmentId,
+    required double amountBdt,
+  }) async {
+    try {
+      final rows = await queryNeonHttp('''
+        INSERT INTO notifications ("id", "userId", "type", "title", "body", "data", "isRead", "createdAt")
+        SELECT \$1, \$2, 'SYSTEM'::"NotificationType", 'Investment Pending',
+               'Your investment of ' || \$3 || ' in "' || pr."title" ||
+               '" has been submitted. It will become active after admin approval.',
+               jsonb_build_object('kind', 'PENDING', 'investmentId', i."id", 'projectId', pr."id"),
+               false, \$4
+        FROM investments i
+        JOIN projects pr ON pr."id" = i."projectId"
+        WHERE i."id" = \$5
+        RETURNING "title", "body"
+      ''', [_generateUuid(), userId, _fmtTk(amountBdt), _nowIso(), investmentId]);
+      _pushFromRow(rows, group: false);
+    } catch (e) {
+      debugPrint("Notify project pending error: $e");
+    }
+  }
+
+  static Future<void> _notifyGroupPending({
+    required String userId,
+    required String groupInvestmentId,
+    required double amountBdt,
+    bool resubmitted = false,
+  }) async {
+    try {
+      final rows = await queryNeonHttp('''
+        INSERT INTO notifications ("id", "userId", "type", "title", "body", "data", "isRead", "createdAt")
+        SELECT \$1, \$2, 'SYSTEM'::"NotificationType", \$3,
+               \$4 || ' ' || \$5 || ' for ' || bg."name" || ' — ' || gt."name" ||
+               ' has been submitted. It will become active after admin approval.',
+               jsonb_build_object('kind', 'PENDING', 'groupInvestmentId', gi."id"),
+               false, \$6
+        FROM group_investments gi
+        JOIN group_tiers gt     ON gt."id" = gi."tierId"
+        JOIN group_entities ge  ON ge."id" = gt."entityId"
+        JOIN business_groups bg ON bg."id" = ge."groupId"
+        WHERE gi."id" = \$7
+        RETURNING "title", "body"
+      ''', [
+        _generateUuid(),
+        userId,
+        resubmitted ? 'Payment Submitted' : 'Investment Pending',
+        resubmitted ? 'Your payment of' : 'Your investment of',
+        _fmtTk(amountBdt),
+        _nowIso(),
+        groupInvestmentId,
+      ]);
+      _pushFromRow(rows, group: true);
+    } catch (e) {
+      debugPrint("Notify group pending error: $e");
+    }
+  }
+
+  /// Notification page e ja dhuklo, oi lekhai phone er notification e dekhai
+  static void _pushFromRow(List<Map<String, dynamic>> rows, {required bool group}) {
+    if (rows.isEmpty) return;
+    final title = rows.first['title']?.toString() ?? '';
+    final body = rows.first['body']?.toString() ?? '';
+    if (title.isEmpty) return;
+    unawaited(PushService.showLocal(
+      title: title,
+      body: body,
+      kind: 'PENDING',
+      group: group,
+    ));
   }
 
   // ═════════════════════════════════════════════════════════
@@ -1733,6 +1829,127 @@ class DatabaseService {
     return uRes.isNotEmpty ? uRes.first['id'].toString() : '';
   }
 
+  // ═════════════════════════════════════════════════════════
+  // PROFILE EDIT — nam, phone, email, jonmo tarikh, NID, thikana, nominee,
+  // pesha ityadi. Khali ('') dile oi tottho muche jay (NULL).
+  // Shudhu website er schema te je column ache, sheguloi bodlay.
+  // ═════════════════════════════════════════════════════════
+  static const List<String> editableProfileFields = [
+    'nationalId',
+    'address',
+    'city',
+    'nomineeName',
+    'nomineeNationalId',
+    'nomineeRelation',
+    'occupation',
+    'annualIncomeRange',
+    'investmentExperience',
+    'riskTolerance',
+  ];
+
+  static Future<Map<String, dynamic>> updateUserProfile({
+    required String userId,
+    required String name,
+    required String phone,
+    String? email,
+    DateTime? dateOfBirth,
+    Map<String, String> profile = const {},
+  }) async {
+    if (userId.isEmpty) return {'success': false, 'message': _loginRequiredMsg};
+    try {
+      final cleanName = name.trim();
+      final cleanPhone = normalizeBdPhone(phone.trim());
+      final cleanEmail = (email ?? '').trim().toLowerCase();
+      if (cleanName.length < 3) return {'success': false, 'message': 'Please enter your full name.'};
+      if (!RegExp(r'^01[3-9]\d{8}$').hasMatch(cleanPhone)) {
+        return {'success': false, 'message': 'Please enter a valid mobile number (01XXXXXXXXX).'};
+      }
+
+      final vals = <String, String?>{
+        for (final k in editableProfileFields)
+          if (profile.containsKey(k)) k: (profile[k] ?? '').trim().isEmpty ? null : profile[k]!.trim(),
+      };
+      final nid = vals['nationalId'];
+
+      await _ensureInvestorProfileExists(userId);
+      final metas = await Future.wait([_columnsOf('users'), _columnsOf('investor_profiles')]);
+      final userCols = metas[0];
+      final profCols = metas[1];
+      if (userCols.isEmpty || profCols.isEmpty) return {'success': false, 'message': _connectionErrorMsg()};
+
+      // Onno karo sathe mile jay kina
+      final dup = await queryNeonHttp('''
+        SELECT
+          (SELECT 1 FROM users WHERE "id" <> \$1 AND "phone" = \$2 LIMIT 1) AS "phoneTaken",
+          (SELECT 1 FROM users WHERE "id" <> \$1 AND \$3::text IS NOT NULL AND LOWER("email") = LOWER(\$3::text) LIMIT 1) AS "emailTaken",
+          (SELECT 1 FROM investor_profiles WHERE "userId" <> \$1 AND \$4::text IS NOT NULL AND "nationalId" = \$4::text LIMIT 1) AS "nidTaken",
+          (SELECT "email" FROM users WHERE "id" = \$1) AS "oldEmail"
+      ''', [userId, cleanPhone, cleanEmail.isEmpty ? null : cleanEmail, nid]);
+      if (dup.isEmpty) return {'success': false, 'message': _connectionErrorMsg()};
+      final d = dup.first;
+      if (d['phoneTaken'] != null) {
+        return {'success': false, 'message': 'This mobile number is already used by another account.'};
+      }
+      if (d['emailTaken'] != null) {
+        return {'success': false, 'message': 'This email is already used by another account.'};
+      }
+      if (d['nidTaken'] != null) {
+        return {'success': false, 'message': 'This NID number is already used by another account.'};
+      }
+      final nomineeNid = vals['nomineeNationalId'];
+      if (nid != null && nomineeNid != null && nid == nomineeNid) {
+        return {'success': false, 'message': 'Nominee NID cannot be your own NID.'};
+      }
+
+      // Email khali: column nullable hole NULL, na hole nokol thikana
+      final String? emailValue = cleanEmail.isNotEmpty
+          ? cleanEmail
+          : (userCols['email'] == true ? null : 'u$cleanPhone$_noEmailDomain');
+      final oldEmail = (d['oldEmail']?.toString() ?? '').toLowerCase();
+      final emailChanged = (emailValue ?? '').toLowerCase() != oldEmail;
+      final nowStr = _nowIso();
+
+      final dobStr = dateOfBirth == null
+          ? null
+          : '${dateOfBirth.year}-${dateOfBirth.month.toString().padLeft(2, '0')}-${dateOfBirth.day.toString().padLeft(2, '0')}';
+
+      // users
+      final uSets = <String>['"name" = \$2', '"phone" = \$3', '"email" = \$4', '"updatedAt" = \$5'];
+      final uParams = <dynamic>[userId, cleanName, cleanPhone, emailValue, nowStr];
+      if (emailChanged && userCols.containsKey('emailVerified')) uSets.add('"emailVerified" = false');
+      if (!profCols.containsKey('dateOfBirth') && userCols.containsKey('dateOfBirth')) {
+        uParams.add(dobStr);
+        uSets.add('"dateOfBirth" = \$${uParams.length}');
+      }
+      final okUser = await executeNeonHttp('UPDATE users SET ${uSets.join(', ')} WHERE "id" = \$1', uParams);
+      if (!okUser) return {'success': false, 'message': _connectionErrorMsg()};
+
+      // investor_profiles — shudhu ja column ache
+      final pSets = <String>['"updatedAt" = \$2'];
+      final pParams = <dynamic>[userId, nowStr];
+      vals.forEach((k, v) {
+        if (!profCols.containsKey(k)) return;
+        pParams.add(v);
+        pSets.add('"$k" = \$${pParams.length}');
+      });
+      if (profCols.containsKey('dateOfBirth')) {
+        pParams.add(dobStr);
+        pSets.add('"dateOfBirth" = \$${pParams.length}');
+      }
+      final okProf =
+          await executeNeonHttp('UPDATE investor_profiles SET ${pSets.join(', ')} WHERE "userId" = \$1', pParams);
+      if (!okProf) return {'success': false, 'message': _connectionErrorMsg()};
+
+      return {
+        'success': true,
+        'message': 'Profile updated.',
+        'data': {'id': userId, 'name': cleanName, 'email': cleanEmail, 'phone': cleanPhone},
+      };
+    } catch (e) {
+      return {'success': false, 'message': 'Database error: ${e.toString()}'};
+    }
+  }
+
   // Fetch Full User Profile & Investor Profile
   static Future<Map<String, dynamic>> getUserProfileFull(String userId, {String? email}) async {
     try {
@@ -1785,6 +2002,7 @@ class DatabaseService {
         'dateOfBirth': dob,
         'address': prof('address'),
         'city': prof('city'),
+        'nomineeName': prof('nomineeName'),
         'nomineeNationalId': prof('nomineeNationalId'),
         'nomineeRelation': prof('nomineeRelation'),
         'country': prof('country'),
@@ -1950,7 +2168,7 @@ class DatabaseService {
     if (userId.isEmpty) return [];
     try {
       final res = await queryNeonHttp('''
-        SELECT n."id", n."title", n."body", n."type"::text AS "type", n."isRead", n."createdAt"
+        SELECT n."id", n."title", n."body", n."type"::text AS "type", n."isRead", n."createdAt", n."data"
         FROM notifications n
         WHERE n."userId" = \$1
         ORDER BY n."createdAt" DESC
@@ -1958,6 +2176,17 @@ class DatabaseService {
       ''', [userId, limit]);
 
       return res.map((r) {
+        // data kokhono Map, kokhono JSON string hishebe ashe
+        Map<String, dynamic> data = {};
+        final raw = r['data'];
+        if (raw is Map) {
+          data = Map<String, dynamic>.from(raw);
+        } else if (raw is String && raw.isNotEmpty) {
+          try {
+            final d = jsonDecode(raw);
+            if (d is Map) data = Map<String, dynamic>.from(d);
+          } catch (_) {}
+        }
         return <String, dynamic>{
           'id': r['id'].toString(),
           'title': r['title']?.toString() ?? '',
@@ -1965,6 +2194,7 @@ class DatabaseService {
           'type': r['type']?.toString() ?? 'SYSTEM',
           'isRead': (r['isRead'] as bool?) ?? false,
           'createdAt': r['createdAt']?.toString() ?? '',
+          'data': data,
         };
       }).toList();
     } catch (e) {
@@ -3085,6 +3315,14 @@ class DatabaseService {
         WHERE "id" = \$2
       ''', [nowStr, groupInvestmentId]);
 
+      await _notifyGroupPending(
+        userId: userId,
+        groupInvestmentId: groupInvestmentId,
+        amountBdt: amountBdt,
+        resubmitted: true,
+      );
+      unawaited(EmailService.sendGroupPaymentSubmitted(groupInvestmentId));
+
       return {
         'success': true,
         'message': 'Group investment payment proof submitted successfully!',
@@ -3325,6 +3563,8 @@ class DatabaseService {
         chequeImageUrl: chequeImageUrl,
       );
       if (res['success'] != true) return await undo(res['message']?.toString() ?? 'Could not save your payment.');
+      await _notifyGroupPending(userId: userId, groupInvestmentId: gid, amountBdt: amountBdt);
+      unawaited(EmailService.sendGroupPending(gid));
       return {
         'success': true,
         'groupInvestmentId': gid,
@@ -3415,6 +3655,13 @@ class DatabaseService {
         chequeImageUrl: chequeImageUrl,
       );
       if (res['success'] != true) return res;
+      await _notifyGroupPending(
+        userId: userId,
+        groupInvestmentId: groupInvestmentId,
+        amountBdt: amountBdt,
+        resubmitted: true,
+      );
+      unawaited(EmailService.sendGroupPaymentSubmitted(groupInvestmentId));
       return <String, dynamic>{
         'success': true,
         'message': 'Payment submitted! It will be checked by admin.',
@@ -3439,3 +3686,4 @@ class DatabaseService {
 
 
 }
+

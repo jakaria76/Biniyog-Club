@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'database_service.dart';
+import 'push_service.dart'; // PushService ইম্পোর্ট করা হলো
 
 class AuthService {
   static const String _tokenKey = 'auth_token';
@@ -66,6 +67,9 @@ class AuthService {
   // Logout
   static Future<void> logout() async {
     try {
+      // লগআউট করার সময় পুশ টোকেন আনরেজিস্টার ও ডিলিট করা[cite: 1]
+      await PushService.unregister();
+
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(_tokenKey);
       await prefs.remove(_userKey);

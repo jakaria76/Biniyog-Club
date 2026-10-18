@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'screens/splash_screen.dart';
 import 'services/app_lock_service.dart';
 import 'services/language_service.dart';
+import 'services/push_service.dart'; // PushService import করা হলো
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -12,6 +15,12 @@ void main() async {
     debugPrint("Failed to load .env file: $e");
   }
   await LanguageService.init();
+
+  // Firebase এবং Push Service ইনিশিয়ালাইজেশন[cite: 1]
+  await Firebase.initializeApp();
+  FirebaseMessaging.onBackgroundMessage(firebaseBackgroundHandler);
+  await PushService.init();
+
   runApp(const MyApp());
 }
 
@@ -28,6 +37,7 @@ class MyApp extends StatelessWidget {
       valueListenable: LanguageService.currentLanguage,
       builder: (context, currentLang, child) {
         return MaterialApp(
+          navigatorKey: PushService.navigatorKey, // Push navigation এর জন্য যুক্ত করা হলো[cite: 1]
           debugShowCheckedModeBanner: false,
           title: 'Biniyog Club',
           theme: ThemeData(

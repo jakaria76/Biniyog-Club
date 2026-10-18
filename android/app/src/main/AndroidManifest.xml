@@ -8,11 +8,25 @@
         android:maxSdkVersion="32" />
     <!-- App lock (fingerprint / face) -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+    <!-- Firebase Push Notification Permission -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
 
     <application
         android:label="Biniyog Club"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
+
+        <!-- Firebase: notification channel, choto shada icon, emerald rong -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="biniyog_default"/>
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@drawable/ic_notification"/>
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_color"
+            android:resource="@color/notification_brand"/>
+
         <activity
             android:name=".MainActivity"
             android:exported="true"

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -15,6 +16,8 @@ import '../reports/reports_page.dart';
 import '../settings/settings_page.dart';
 import '../../../services/auth_service.dart';
 import '../../../services/database_service.dart';
+import '../../../services/email_service.dart';
+import '../../../services/push_service.dart';
 import '../../../services/language_service.dart';
 
 class InvestorDashboardPage extends StatefulWidget {
@@ -90,6 +93,9 @@ class _InvestorDashboardPageState extends State<InvestorDashboardPage> {
 
   final ScrollController _recentScrollController = ScrollController();
 
+  /// App khola thakle protি minute e approve/cancel/reject mail check
+  Timer? _mailTimer;
+
   // ─── Cache ───
   static Map<String, dynamic>? _cachedSummary;
   static Map<String, dynamic>? _cachedUser;
@@ -104,6 +110,12 @@ class _InvestorDashboardPageState extends State<InvestorDashboardPage> {
   @override
   void initState() {
     super.initState();
+    _registerPush();
+    _mailTimer = Timer.periodic(const Duration(minutes: 1), (_) async {
+      final u = await AuthService.getUserData();
+      final id = u?['id']?.toString() ?? '';
+      if (id.isNotEmpty) EmailService.checkStatusMails(id);
+    });
     if (_cachedSummary != null && _cachedSummary!.isNotEmpty && _cachedUser != null) {
       _applySummary(_cachedSummary!, _cachedUser);
       _latestNotif = _cachedLatestNotif;
@@ -112,6 +124,21 @@ class _InvestorDashboardPageState extends State<InvestorDashboardPage> {
     } else {
       _loadDashboardData();
     }
+  }
+
+  /// Push er jonno ei phone er token save (login er por dashboard-i prothom page)
+  Future<void> _registerPush() async {
+    final u = await AuthService.getUserData();
+    final id = u?['id']?.toString() ?? '';
+    // Push e tap korle kon page khulbe — page gulo ekhane import kora ache
+    PushService.pageFor = (data) {
+      final kind = data['kind']?.toString() ?? '';
+      if (kind.isEmpty || kind == 'WELCOME') return const NotificationsPage();
+      return data['group']?.toString() == 'true'
+          ? const GroupInvestmentsPage()
+          : const InvestmentsPage();
+    };
+    if (id.isNotEmpty) unawaited(PushService.registerForUser(id));
   }
 
   void _applySummary(Map<String, dynamic> summary, Map<String, dynamic>? userData) {
@@ -132,6 +159,7 @@ class _InvestorDashboardPageState extends State<InvestorDashboardPage> {
 
   @override
   void dispose() {
+    _mailTimer?.cancel();
     _recentScrollController.dispose();
     super.dispose();
   }
@@ -155,6 +183,9 @@ class _InvestorDashboardPageState extends State<InvestorDashboardPage> {
       );
       return;
     }
+
+    // Admin website e approve / cancel / reject korle mail (background e)
+    unawaited(EmailService.checkStatusMails(userId));
 
     final results = await Future.wait<dynamic>([
       DatabaseService.getDashboardSummary(userId, email: userEmail),
@@ -1968,6 +1999,8 @@ class _InvestorDashboardPageState extends State<InvestorDashboardPage> {
               onPressed: () async {
                 final nav = Navigator.of(context);
                 nav.pop();
+                // Ei phone e ar ei user er push jabe na
+                await PushService.unregister();
                 await AuthService.logout();
                 clearCache();
                 nav.pushAndRemoveUntil(

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../authentication/login_page.dart';
+import '../groups/group_investments_page.dart';
 import '../portfolio/investments_page.dart';
 import '../projects/my_projects_page.dart';
 import '../../../services/auth_service.dart';
@@ -127,8 +128,17 @@ class _NotificationsPageState extends State<NotificationsPage> {
     return '${_months[d.month - 1]} ${d.day}, ${d.year}';
   }
 
+  Map<String, dynamic> _data(Map<String, dynamic> n) {
+    final d = n['data'];
+    return d is Map ? Map<String, dynamic>.from(d) : <String, dynamic>{};
+  }
+
   /// Ki dhoroner notification — icon ar color
-  (IconData, Color, Color) _style(String type) {
+  (IconData, Color, Color) _style(String type, [Map<String, dynamic> data = const {}]) {
+    // App er "Pending" notification (type SYSTEM, data.kind = PENDING)
+    if (data['kind'] == 'PENDING') {
+      return (Icons.hourglass_top_rounded, goldDeep, goldSoft);
+    }
     switch (type) {
       case 'INVESTMENT_CONFIRMED':
         return (Icons.check_circle_outline_rounded, emerald, emeraldSoft);
@@ -156,7 +166,10 @@ class _NotificationsPageState extends State<NotificationsPage> {
   }
 
   /// Notification er dhoron dekhe kon page khulbe (na thakle null)
-  Widget? _targetPage(String type) {
+  Widget? _targetPage(String type, [Map<String, dynamic> data = const {}]) {
+    // data te ki ache dekhe thik page — group naki project
+    if (data['groupInvestmentId'] != null) return const GroupInvestmentsPage();
+    if (data['investmentId'] != null) return const InvestmentsPage();
     if (type.startsWith('INVESTMENT_') || type.startsWith('PAYMENT_')) {
       return const InvestmentsPage();
     }
@@ -170,7 +183,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
       DatabaseService.markNotificationAsRead(n['id'].toString(), userId: _userId);
       n['isRead'] = true;
     }
-    final page = _targetPage(n['type']?.toString() ?? '');
+    final page = _targetPage(n['type']?.toString() ?? '', _data(n));
     if (page != null) {
       Navigator.push(context, MaterialPageRoute(builder: (_) => page));
     }
@@ -273,8 +286,9 @@ class _NotificationsPageState extends State<NotificationsPage> {
     final id = n['id'].toString();
     final type = n['type']?.toString() ?? 'SYSTEM';
     final isNew = _newIds.contains(id);
-    final style = _style(type);
-    final hasTarget = _targetPage(type) != null;
+    final data = _data(n);
+    final style = _style(type, data);
+    final hasTarget = _targetPage(type, data) != null;
     final title = n['title']?.toString() ?? '';
     final body = n['body']?.toString() ?? '';
     final when = _when(n['createdAt']?.toString() ?? '');

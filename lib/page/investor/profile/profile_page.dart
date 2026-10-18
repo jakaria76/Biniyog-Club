@@ -8,6 +8,8 @@ import '../../../services/auth_service.dart';
 import '../../../services/cloudinary_service.dart';
 import '../../../services/database_service.dart';
 import '../../../services/language_service.dart';
+import '../dashboard/investor_dashboard_page.dart';
+import 'edit_profile_page.dart';
 
 class ProfilePage extends StatefulWidget {
   const ProfilePage({super.key});
@@ -59,6 +61,9 @@ class _ProfilePageState extends State<ProfilePage> {
   /// DB te ja ache tai — khali hole ''
   Map<String, String> _p = {};
 
+  /// Edit page e pathanor jonno getUserProfileFull er pura result
+  Map<String, dynamic> _profile = {};
+
   final ImagePicker _picker = ImagePicker();
 
   @override
@@ -100,6 +105,7 @@ class _ProfilePageState extends State<ProfilePage> {
         _loadFailed = true;
       } else {
         _loadFailed = false;
+        _profile = profile;
         _userId = profile['id']?.toString() ?? userId;
         _name = profile['name']?.toString() ?? '';
         _email = profile['email']?.toString() ?? '';
@@ -347,6 +353,21 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   // ═════════════════════════════════════════════════════════
+  // EDIT
+  // ═════════════════════════════════════════════════════════
+  Future<void> _openEdit() async {
+    if (_profile.isEmpty) return;
+    final saved = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(builder: (_) => EditProfilePage(profile: _profile)),
+    );
+    if (saved == true && mounted) {
+      InvestorDashboardPage.clearCache(); // dashboard e notun nam
+      _loadProfileData();
+    }
+  }
+
+  // ═════════════════════════════════════════════════════════
   // BUILD
   // ═════════════════════════════════════════════════════════
   @override
@@ -365,6 +386,18 @@ class _ProfilePageState extends State<ProfilePage> {
               LanguageService.tr('Profile', 'প্রোফাইল'),
               style: const TextStyle(color: ink, fontWeight: FontWeight.w700, fontSize: 18),
             ),
+            actions: [
+              if (!_isLoading && !_needsLogin && !_loadFailed)
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: TextButton.icon(
+                    onPressed: _openEdit,
+                    icon: const Icon(Icons.edit_outlined, size: 17, color: emerald),
+                    label: Text(LanguageService.tr('Edit', 'এডিট'),
+                        style: const TextStyle(color: emerald, fontWeight: FontWeight.w700)),
+                  ),
+                ),
+            ],
           ),
           body: _isLoading
               ? const Center(
@@ -405,17 +438,21 @@ class _ProfilePageState extends State<ProfilePage> {
               padding: const EdgeInsets.fromLTRB(18, 6, 18, 40),
               children: [
                 _buildHeroCard(),
+                if (_missingCount > 0) ...[
+                  const SizedBox(height: 14),
+                  _buildCompleteBanner(),
+                ],
                 const SizedBox(height: 24),
-                _sectionHeader(LanguageService.tr('Contact', 'যোগাযোগ')),
+                _sectionHeader(LanguageService.tr('Contact', 'যোগাযোগ'), onEdit: _openEdit),
                 const SizedBox(height: 12),
                 _buildContactCard(),
                 const SizedBox(height: 24),
-                _sectionHeader(LanguageService.tr('Personal Information', 'ব্যক্তিগত তথ্য')),
+                _sectionHeader(LanguageService.tr('Personal Information', 'ব্যক্তিগত তথ্য'), onEdit: _openEdit),
                 const SizedBox(height: 12),
                 _buildPersonalCard(),
                 const SizedBox(height: 24),
                 _sectionHeader(
-                    LanguageService.tr('Investor Profile', 'বিনিয়োগকারী প্রোফাইল')),
+                    LanguageService.tr('Investor Profile', 'বিনিয়োগকারী প্রোফাইল'), onEdit: _openEdit),
                 const SizedBox(height: 12),
                 _buildInvestorCard(),
               ],
@@ -427,7 +464,7 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   // ─── Shared pieces ────────────────────────────────────────
-  Widget _sectionHeader(String title) {
+  Widget _sectionHeader(String title, {VoidCallback? onEdit}) {
     return Row(
       children: [
         Transform.rotate(
@@ -441,16 +478,78 @@ class _ProfilePageState extends State<ProfilePage> {
           ),
         ),
         const SizedBox(width: 10),
-        Text(
-          title,
-          style: const TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.w700,
-            color: ink,
-            letterSpacing: -0.2,
+        Expanded(
+          child: Text(
+            title,
+            style: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+              color: ink,
+              letterSpacing: -0.2,
+            ),
           ),
         ),
+        if (onEdit != null)
+          InkWell(
+            onTap: onEdit,
+            borderRadius: BorderRadius.circular(20),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(color: emeraldSoft, borderRadius: BorderRadius.circular(20)),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.edit_outlined, size: 13, color: emerald),
+                  const SizedBox(width: 4),
+                  Text(LanguageService.tr('Edit', 'এডিট'),
+                      style: const TextStyle(fontSize: 12, color: emerald, fontWeight: FontWeight.w600)),
+                ],
+              ),
+            ),
+          ),
       ],
+    );
+  }
+
+  /// Koto gulo dorkari tottho ekhono deya hoyni
+  int get _missingCount => [
+    _email,
+    _v('dateOfBirth'),
+    _v('nationalId'),
+    _v('address'),
+    _v('nomineeNationalId'),
+  ].where((s) => s.isEmpty).length;
+
+  Widget _buildCompleteBanner() {
+    return Material(
+      color: goldSoft,
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        onTap: _openEdit,
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: gold.withAlpha(90)),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.assignment_ind_outlined, color: goldDeep, size: 22),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  LanguageService.tr(
+                      'Complete your profile — add your NID, address and nominee.',
+                      'প্রোফাইল সম্পূর্ণ করুন — এনআইডি, ঠিকানা ও নমিনী যোগ করুন।'),
+                  style: const TextStyle(fontSize: 12.5, color: ink, fontWeight: FontWeight.w600, height: 1.35),
+                ),
+              ),
+              const Icon(Icons.chevron_right_rounded, color: goldDeep),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
@@ -726,10 +825,11 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   Widget _buildPersonalCard() {
-    final nominee = _v('nomineeNationalId').isEmpty
-        ? ''
-        : '${_pretty(_v('nomineeRelation')).isEmpty ? '' : '${_pretty(_v('nomineeRelation'))} · '}'
-        'NID ${_mask(_v('nomineeNationalId'))}';
+    final nominee = [
+      _v('nomineeName'),
+      _pretty(_v('nomineeRelation')),
+      if (_v('nomineeNationalId').isNotEmpty) 'NID ${_mask(_v('nomineeNationalId'))}',
+    ].where((s) => s.isNotEmpty).join(' · ');
 
     return _card([
       _infoRow(Icons.cake_outlined, goldDeep, goldSoft,
