@@ -254,8 +254,6 @@ class _DocumentsPageState extends State<DocumentsPage> {
   // te sheta chupchap "Payment Receipt" hoye jeto, tai bad
   Map<String, String> get categoryDropdownOptions => {
     'PAYMENT_RECEIPT': LanguageService.tr('Payment Receipt', 'পেমেন্ট রিসিট'),
-    'INVESTMENT_AGREEMENT': LanguageService.tr('Investment Agreement', 'বিনিয়োগ চুক্তি'),
-    'PROJECT_DOCUMENT': LanguageService.tr('Other Document', 'অন্যান্য নথি'),
   };
 
   @override
@@ -702,8 +700,10 @@ class _DocumentsPageState extends State<DocumentsPage> {
   // ═════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
-    final int totalCount =
-    _categorizedDocs.values.fold(0, (sum, list) => sum + list.length);
+    // "Agreements & Other Documents" section nei — oigulo gona hoy na
+    final int totalCount = _categorizedDocs.entries
+        .where((e) => e.key != 'projectDocs')
+        .fold(0, (sum, e) => sum + e.value.length);
 
     return ValueListenableBuilder<String>(
       valueListenable: LanguageService.currentLanguage,
@@ -826,22 +826,6 @@ class _DocumentsPageState extends State<DocumentsPage> {
                   emptyMsg: LanguageService.tr('No harvest reports.',
                       'কোনো হারভেস্ট রিপোর্ট নেই।'),
                   rowBuilder: _buildFileRow,
-                ),
-                const SizedBox(height: 14),
-                // Agreement, project document — age upload
-                // korle kothao dekhato na
-                _buildSectionCard(
-                  icon: Icons.folder_open_rounded,
-                  color: _goldDeep,
-                  soft: _goldSoft,
-                  title: LanguageService.tr(
-                      'Agreements & Other Documents', 'চুক্তি ও অন্যান্য নথি'),
-                  items: _categorizedDocs['projectDocs'] ?? [],
-                  emptyMsg: LanguageService.tr('No other documents.',
-                      'অন্য কোনো নথি নেই।'),
-                  rowBuilder: _buildFileRow,
-                  maxVisible: 4,
-                  rowHeight: 72,
                 ),
 
                 const SizedBox(height: 20),

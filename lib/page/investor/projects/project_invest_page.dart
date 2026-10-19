@@ -354,6 +354,7 @@ class _ProjectInvestPageState extends State<ProjectInvestPage> {
       bankReceiptUrl: uploads[0],
       cashReceiver: _cashReceiver,
       chequeImageUrl: uploads[1],
+      defaultBankAccountId: _banks.isEmpty ? null : _banks.first['id']?.toString(),
     );
 
     if (!mounted) return;

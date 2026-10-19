@@ -15,6 +15,10 @@ class DatabaseService {
   static Connection? _connection;
   static String? _lastConnectionError;
 
+  /// Shesh je DB error hoyeche — onno query shuru hole MUCHE NA (shudhu
+  /// invest/payment er shuru te muchi), tai ashol karon ta dekhano jay
+  static String? _lastDbFailure;
+
   static const String websiteBaseUrl = 'https://biniyogclub.com';
 
   static const String _loginRequiredMsg = 'Please log in again to continue.';
@@ -65,6 +69,23 @@ class DatabaseService {
       _lastConnectionError != null
           ? 'Could not reach the server. Please check your internet connection.'
           : 'Something went wrong. Please try again.';
+
+  /// Save fail hole ashol karon shoho message (net na thakle net er kotha)
+  static String _saveFailMsg(String what) {
+    final e = _lastDbFailure ?? _lastConnectionError ?? '';
+    if (e.isEmpty) return '$what Please try again.';
+    final low = e.toLowerCase();
+    if (low.contains('socketexception') ||
+        low.contains('timeoutexception') ||
+        low.contains('failed host lookup') ||
+        low.contains('clientexception') ||
+        low.contains('connection refused') ||
+        low.contains('connection reset') ||
+        low.contains('connection closed')) {
+      return 'Could not reach the server. Please check your internet connection.';
+    }
+    return '$what (${_shortDbError()})';
+  }
 
   // Image URL Resolver for Cloudinary / Neon Postgres URLs
   static String formatImageUrl(String? rawUrl) {
@@ -127,11 +148,11 @@ class DatabaseService {
           return rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
         } else {
           debugPrint("Neon HTTP Query Error (attempt $attempt) Status ${response.statusCode}: ${response.body}");
-          _lastConnectionError = myError = "HTTP ${response.statusCode}: ${response.body}";
+          _lastConnectionError = myError = _lastDbFailure = "HTTP ${response.statusCode}: ${response.body}";
         }
       } catch (e) {
         debugPrint("Neon HTTP Query Exception (attempt $attempt): $e");
-        _lastConnectionError = myError = e.toString();
+        _lastConnectionError = myError = _lastDbFailure = e.toString();
         if (attempt == 1) {
           await Future.delayed(const Duration(milliseconds: 500));
         }
@@ -164,11 +185,11 @@ class DatabaseService {
           return true;
         } else {
           debugPrint("Neon HTTP Execute Error (attempt $attempt) Status ${response.statusCode}: ${response.body}");
-          _lastConnectionError = "HTTP ${response.statusCode}: ${response.body}";
+          _lastConnectionError = _lastDbFailure = "HTTP ${response.statusCode}: ${response.body}";
         }
       } catch (e) {
         debugPrint("Neon HTTP Execute Exception (attempt $attempt): $e");
-        _lastConnectionError = e.toString();
+        _lastConnectionError = _lastDbFailure = e.toString();
         if (attempt == 1) {
           await Future.delayed(const Duration(milliseconds: 500));
         }
@@ -1105,7 +1126,9 @@ class DatabaseService {
         ''', [profileId, userId, nowStr]);
         final again = await queryNeonHttp(
             'SELECT "id" FROM investor_profiles WHERE "userId" = \$1', [userId]);
-        if (again.isEmpty) return {'success': false, 'message': _connectionErrorMsg()};
+        if (again.isEmpty) {
+          return {'success': false, 'message': _saveFailMsg('Could not set up your investor profile.')};
+        }
         profileId = again.first['id'].toString();
       }
 
@@ -1196,7 +1219,10 @@ class DatabaseService {
         nowStr,
       ]);
 
-      if (ins.isEmpty) return {'success': false, 'message': _connectionErrorMsg()};
+      if (ins.isEmpty) {
+        debugPrint('createInvestment failed: $_lastDbFailure');
+        return {'success': false, 'message': _saveFailMsg('Could not create the investment.')};
+      }
 
       return {
         'success': true,
@@ -1221,11 +1247,12 @@ class DatabaseService {
     required String bankAccountId,
     required String proofFileUrl,
     String? notes,
+    String paymentMethod = 'BANK_TRANSFER',
+    Map<String, dynamic>? paymentDetails,
   }) async {
     if (userId.isEmpty) return {'success': false, 'message': _loginRequiredMsg};
 
     try {
-      // Investment ta ki ei user er, r ekhono payment er opekkhay ache?
       final check = await queryNeonHttp('''
         SELECT i."status"::text AS "status",
                EXISTS (
@@ -1255,6 +1282,7 @@ class DatabaseService {
       final submissionId = _generateUuid();
       final nowStr = _nowIso();
       final fileUrl = proofFileUrl.isEmpty ? 'receipt.png' : proofFileUrl;
+      final cleanBankId = (bankAccountId.isEmpty || bankAccountId == 'null') ? null : bankAccountId;
 
       final ins = await queryNeonHttp('''
         INSERT INTO manual_payment_submissions (
@@ -1263,8 +1291,8 @@ class DatabaseService {
           "proofMimeType", "notes", "createdAt", "updatedAt"
         ) VALUES (
           \$1, \$2, \$3, 'SUBMITTED'::"ManualPaymentStatus", \$4,
-          \$5, 'BANK_TRANSFER', \$6, \$7,
-          \$8, \$9, \$10, \$10
+          \$5, \$6, \$7, \$8,
+          \$9, \$10, \$11, \$11
         )
         ON CONFLICT ("id") DO UPDATE SET "updatedAt" = EXCLUDED."updatedAt"
         RETURNING "id"
@@ -1273,7 +1301,8 @@ class DatabaseService {
         investmentId,
         userId,
         amountBdt,
-        bankAccountId.isEmpty ? null : bankAccountId,
+        cleanBankId,
+        paymentMethod,
         transactionRef,
         fileUrl,
         _mimeFromDataUri(fileUrl),
@@ -1281,7 +1310,7 @@ class DatabaseService {
         nowStr,
       ]);
 
-      if (ins.isEmpty) return {'success': false, 'message': _connectionErrorMsg()};
+      if (ins.isEmpty) return {'success': false, 'message': _lastConnectionError != null ? _connectionErrorMsg() : 'Failed to submit payment submission.'};
 
       await executeNeonHttp('''
         UPDATE investments
@@ -1289,13 +1318,15 @@ class DatabaseService {
         WHERE "id" = \$2
       ''', [nowStr, investmentId]);
 
-      unawaited(EmailService.sendProjectPaymentSubmitted(submissionId));
-      unawaited(PushService.showLocal(
-        title: 'Payment Submitted',
-        body: 'Your payment of ${_fmtTk(amountBdt)} has been submitted. It will become active after admin approval.',
-        kind: 'PENDING',
-        group: false,
-      ));
+      try {
+        unawaited(EmailService.sendProjectPaymentSubmitted(submissionId));
+        unawaited(PushService.showLocal(
+          title: 'Payment Submitted',
+          body: 'Your payment of ${_fmtTk(amountBdt)} has been submitted. It will become active after admin approval.',
+          kind: 'PENDING',
+          group: false,
+        ));
+      } catch (_) {}
 
       return {
         'success': true,
@@ -1365,10 +1396,13 @@ class DatabaseService {
     String? bankReceiptUrl,
     String? cashReceiver,
     String? chequeImageUrl,
+    /// Cash/cheque hole-o bankAccountId column NOT NULL thakle project er account
+    String? defaultBankAccountId,
   }) async {
     if (userId.isEmpty) return {'success': false, 'message': _loginRequiredMsg};
     final m = methods.toSet();
     if (m.isEmpty) return {'success': false, 'message': 'Please choose a payment method.'};
+    _lastDbFailure = null;
 
     // App er check server eo — kichu miss gele investment-i hobe na
     if (m.contains('BANK') &&
@@ -1449,7 +1483,10 @@ class DatabaseService {
       final ref = m.contains('BANK')
           ? bankTransactionId!.trim()
           : (m.contains('CASH') ? 'CASH - ${cashReceiver!.trim()}' : 'CHEQUE');
-      final bankId = (m.contains('BANK') && (bankAccountId ?? '').isNotEmpty) ? bankAccountId : null;
+      String? bankId = (m.contains('BANK') && (bankAccountId ?? '').isNotEmpty) ? bankAccountId : null;
+      if (bankId == null && cols['bankAccountId'] == false && (defaultBankAccountId ?? '').isNotEmpty) {
+        bankId = defaultBankAccountId;
+      }
       final nowStr = _nowIso();
 
       String? orEmpty(String? v, String col) =>
@@ -1500,7 +1537,8 @@ class DatabaseService {
         'message': 'Investment submitted! It will be active after admin approval.',
       };
     } catch (e) {
-      return await undo('Could not save your payment details. Please try again.');
+      debugPrint('investWithPayment error: $e');
+      return await undo('Could not save your payment details. ($e)');
     }
   }
 
@@ -1815,6 +1853,52 @@ class DatabaseService {
   }
 
   // ═════════════════════════════════════════════════════════
+  // LANDING PAGE (login chara) — website er home page er data:
+  // public project (kon group er, sheta soho) + mot investor sonkha
+  // ═════════════════════════════════════════════════════════
+  static Future<Map<String, dynamic>> getLandingData() async {
+    try {
+      final results = await Future.wait([
+        queryNeonHttp('''
+          SELECT p."id", p."title", p."category"::text AS "category", p."description", p."fundingGoalBdt",
+                 p."fundedAmountBdt", p."minInvestmentBdt", p."expectedReturnPct",
+                 p."returnPctMin", p."returnPctMax", p."durationDays",
+                 p."coverImageUrl", p."status"::text AS "status", p."location", p."fundingDeadline",
+                 p."groupId", bg."name" AS "groupName", bg."slug"::text AS "groupSlug",
+                 (SELECT COUNT(DISTINCT i."investorProfileId") FROM investments i WHERE i."projectId" = p."id") AS "investorsCount"
+          FROM projects p
+          LEFT JOIN business_groups bg ON bg."id" = p."groupId"
+          WHERE p."deletedAt" IS NULL
+            AND p."status"::text IN $_publicProjectStatuses
+          ORDER BY (p."status"::text = 'FUNDRAISING') DESC, p."createdAt" DESC
+        '''),
+        // Website er motoi: ACTIVE investor account
+        queryNeonHttp('''
+          SELECT COUNT(*) AS "n" FROM users
+          WHERE "role"::text = 'INVESTOR' AND "deletedAt" IS NULL AND "status"::text = 'ACTIVE'
+        '''),
+      ]);
+
+      final projects = results[0].map((r) {
+        return <String, dynamic>{
+          ..._mapProjectCard(r),
+          'groupId': r['groupId']?.toString() ?? '',
+          'groupName': r['groupName']?.toString() ?? '',
+          'groupSlug': r['groupSlug']?.toString() ?? '',
+        };
+      }).toList();
+
+      return {
+        'projects': projects,
+        'totalInvestors': results[1].isEmpty ? 0 : _toInt(results[1].first['n']),
+      };
+    } catch (e) {
+      debugPrint("Get Landing Data Error: $e");
+      return {'projects': <Map<String, dynamic>>[], 'totalInvestors': 0};
+    }
+  }
+
+  // ═════════════════════════════════════════════════════════
   // USER PROFILE + DASHBOARD
   // ═════════════════════════════════════════════════════════
 
@@ -1937,7 +2021,7 @@ class DatabaseService {
         pSets.add('"dateOfBirth" = \$${pParams.length}');
       }
       final okProf =
-          await executeNeonHttp('UPDATE investor_profiles SET ${pSets.join(', ')} WHERE "userId" = \$1', pParams);
+      await executeNeonHttp('UPDATE investor_profiles SET ${pSets.join(', ')} WHERE "userId" = \$1', pParams);
       if (!okProf) return {'success': false, 'message': _connectionErrorMsg()};
 
       return {
@@ -3226,7 +3310,10 @@ class DatabaseService {
         nowStr,
       ]);
 
-      if (ins.isEmpty) return {'success': false, 'message': _connectionErrorMsg()};
+      if (ins.isEmpty) {
+        debugPrint('createGroupInvestment failed: $_lastDbFailure');
+        return {'success': false, 'message': _saveFailMsg('Could not create the investment.')};
+      }
 
       return {
         'success': true,
@@ -3395,7 +3482,7 @@ class DatabaseService {
     final metas = await Future.wait([_paymentMethodMeta(table), _columnsOf(table)]);
     final pm = metas[0] as ({String cast, Set<String> labels});
     final cols = metas[1] as Map<String, bool>;
-    if (cols.isEmpty) return {'success': false, 'message': _connectionErrorMsg()};
+    if (cols.isEmpty) return {'success': false, 'message': _saveFailMsg('Could not save your payment details.')};
 
     String pick(List<String> candidates, String fallback) {
       if (pm.labels.isEmpty) return candidates.first;
@@ -3512,6 +3599,7 @@ class DatabaseService {
   }) async {
     if (userId.isEmpty) return {'success': false, 'message': _loginRequiredMsg};
     final m = methods.toSet();
+    _lastDbFailure = null;
     final problem = _checkPaymentParts(
       m: m,
       amountBdt: amountBdt,
@@ -3571,7 +3659,8 @@ class DatabaseService {
         'message': 'Investment submitted! It will be active after admin approval.',
       };
     } catch (e) {
-      return await undo('Could not save your payment details. Please try again.');
+      debugPrint('groupInvestWithPayment error: $e');
+      return await undo('Could not save your payment details. ($e)');
     }
   }
 
@@ -3593,6 +3682,7 @@ class DatabaseService {
   }) async {
     if (userId.isEmpty) return {'success': false, 'message': _loginRequiredMsg};
     final m = methods.toSet();
+    _lastDbFailure = null;
     final problem = _checkPaymentParts(
       m: m,
       amountBdt: amountBdt,
@@ -3667,13 +3757,14 @@ class DatabaseService {
         'message': 'Payment submitted! It will be checked by admin.',
       };
     } catch (e) {
-      return {'success': false, 'message': 'Could not save your payment details. Please try again.'};
+      debugPrint('submitGroupPaymentMulti error: $e');
+      return {'success': false, 'message': 'Could not save your payment details. ($e)'};
     }
   }
 
   /// Neon er error body theke shudhu "message" ta
   static String _shortDbError() {
-    final e = _lastConnectionError ?? '';
+    final e = _lastDbFailure ?? _lastConnectionError ?? '';
     final m = RegExp(r'"message"\s*:\s*"([^"]+)"').firstMatch(e);
     final msg = m?.group(1) ?? e;
     if (msg.isEmpty) return 'unknown error';
@@ -3686,4 +3777,3 @@ class DatabaseService {
 
 
 }
-

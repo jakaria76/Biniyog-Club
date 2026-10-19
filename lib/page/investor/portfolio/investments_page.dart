@@ -254,15 +254,20 @@ class _InvestmentsPageState extends State<InvestmentsPage> {
     final results = await Future.wait<dynamic>([
       DatabaseService.getPortfolioData(userId, email: userEmail),
       DatabaseService.getGroupInvestmentsData(userId, email: userEmail),
+      DatabaseService.getGroupWebsiteCertificates(userId),
     ]);
 
     final pData = results[0] as Map<String, dynamic>;
     final gData = results[1] as List<Map<String, dynamic>>;
+    // Group er certificate (ACTIVE / COMPLETED) — investment id diye mili
+    final gCerts = {
+      for (final c in results[2] as List<Map<String, dynamic>>) c['id'].toString(): c,
+    };
 
     final items = <Map<String, dynamic>>[
       ...((pData['investments'] as List?) ?? [])
           .map((e) => _fromProject(Map<String, dynamic>.from(e as Map))),
-      ...gData.map(_fromGroup),
+      ...gData.map((g) => _fromGroup(g)..['groupCertificate'] = gCerts[g['id'].toString()]),
     ];
 
     items.sort((a, b) {
@@ -352,10 +357,11 @@ class _InvestmentsPageState extends State<InvestmentsPage> {
       .toList();
 
   // ═════════════════════════════════════════════════════════
-  // WEBSITE CERTIFICATE (shudhu project investment)
+  // WEBSITE CERTIFICATE (project + group)
   // ═════════════════════════════════════════════════════════
   Future<void> _openWebsiteCertificate(Map<String, dynamic> item) async {
-    final cert = item['websiteCertificate'] as Map<String, dynamic>?;
+    final isGroup = item['kind'] == 'GROUP';
+    final cert = (isGroup ? item['groupCertificate'] : item['websiteCertificate']) as Map<String, dynamic>?;
     if (cert == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -368,7 +374,9 @@ class _InvestmentsPageState extends State<InvestmentsPage> {
       return;
     }
     try {
-      final bytes = await PdfService.buildWebsiteCertificate(cert);
+      final bytes = isGroup
+          ? await PdfService.buildGroupWebsiteCertificate(cert)
+          : await PdfService.buildWebsiteCertificate(cert);
       if (!mounted) return;
       Navigator.push(
         context,
@@ -1621,7 +1629,7 @@ class _InvestmentsPageState extends State<InvestmentsPage> {
                       ),
                     ),
                   )
-                else if (activeLike && !isGroup)
+                else if (activeLike)
                   OutlinedButton.icon(
                     onPressed: () => _openWebsiteCertificate(item),
                     icon: const Icon(Icons.workspace_premium_outlined, size: 15),
@@ -1667,9 +1675,7 @@ class _InvestmentsPageState extends State<InvestmentsPage> {
           'একটিভ করতে পেমেন্ট প্রুফ দিন');
     }
     if (activeLike) {
-      return isGroup
-          ? LanguageService.tr('Group investment is active', 'গ্রুপ বিনিয়োগ চলমান')
-          : LanguageService.tr('Investment certificate available',
+      return LanguageService.tr('Investment certificate available',
           'ইনভেস্টমেন্ট সার্টিফিকেট প্রস্তুত');
     }
     return LanguageService.tr('This investment was cancelled', 'এই বিনিয়োগ বাতিল হয়েছে');

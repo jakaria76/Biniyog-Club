@@ -8,8 +8,7 @@ import '../../services/database_service.dart';
 import '../../services/language_service.dart';
 import '../investor/settings/legal_web_page.dart';
 import 'login_page.dart';
-import 'widgets/auth_card.dart';
-import 'widgets/quote_banner.dart';
+import 'widgets/auth_shell.dart';
 
 /// Website er "Create your account" er motoi:
 /// Nam, mobile, email, jonmo tarikh, password (kompokkhe 6 okkhor), confirm.
@@ -55,6 +54,13 @@ class _RegistrationPageState extends State<RegistrationPage> {
     super.initState();
     _termsTap = TapGestureRecognizer()..onTap = () => _openLegal('Terms of Service', '/terms');
     _privacyTap = TapGestureRecognizer()..onTap = () => _openLegal('Privacy Policy', '/privacy');
+    // Password er pashe live tick dekhate
+    _passwordController.addListener(_refresh);
+    _confirmPasswordController.addListener(_refresh);
+  }
+
+  void _refresh() {
+    if (mounted) setState(() {});
   }
 
   @override
@@ -180,250 +186,232 @@ class _RegistrationPageState extends State<RegistrationPage> {
     return ValueListenableBuilder<String>(
       valueListenable: LanguageService.currentLanguage,
       builder: (context, lang, child) {
-        return Scaffold(
-          backgroundColor: ivory,
-          body: SafeArea(
-            child: SingleChildScrollView(
-              child: AuthCard(
-                title: LanguageService.tr('Create your account', 'অ্যাকাউন্ট খুলুন'),
-                description: LanguageService.tr(
-                    "Join Bangladesh's leading investment platform",
-                    'বাংলাদেশের শীর্ষস্থানীয় বিনিয়োগ প্ল্যাটফর্মে যুক্ত হোন'),
-                quoteBanner: const QuoteBanner(
-                  quote: 'Every taka you invest is tracked from your payment to your return.',
-                  quoteAuthor: 'Biniyog Club',
-                ),
-                footer: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      LanguageService.tr('Already have an account? ', 'আগেই অ্যাকাউন্ট আছে? '),
-                      style: const TextStyle(color: muted, fontSize: 13.5),
-                    ),
-                    GestureDetector(
-                      onTap: () => Navigator.pushReplacement(
-                        context,
-                        MaterialPageRoute(builder: (_) => const LoginPage()),
+        final pw = _passwordController.text;
+        final cpw = _confirmPasswordController.text;
+
+        return AuthShell(
+          eyebrow: 'Biniyog Club',
+          title: LanguageService.tr('Create your account', 'অ্যাকাউন্ট খুলুন'),
+          subtitle: LanguageService.tr(
+            'Free investor account — it takes less than a minute.',
+            'ফ্রি বিনিয়োগকারী অ্যাকাউন্ট — এক মিনিটও লাগবে না।',
+          ),
+          highlights: [
+            (Icons.timer_outlined, LanguageService.tr('Under 1 minute', '১ মিনিটের কম')),
+            (Icons.receipt_long_outlined, LanguageService.tr('Every taka tracked', 'প্রতিটি টাকার হিসাব')),
+          ],
+          footer: AuthShell.switchLink(
+            question: LanguageService.tr('Already have an account? ', 'আগেই অ্যাকাউন্ট আছে? '),
+            action: LanguageService.tr('Sign in', 'সাইন ইন'),
+            onTap: () => Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(builder: (_) => const LoginPage()),
+            ),
+          ),
+          child: Form(
+            key: _formKey,
+            autovalidateMode: AutovalidateMode.onUserInteraction,
+            child: AutofillGroup(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _sectionTitle(1, LanguageService.tr('Your details', 'আপনার তথ্য')),
+                  const SizedBox(height: 16),
+
+                  // ─── Full name ───
+                  AuthShell.label(LanguageService.tr('FULL NAME', 'পূর্ণ নাম'), isRequired: true),
+                  TextFormField(
+                    controller: _fullNameController,
+                    textCapitalization: TextCapitalization.words,
+                    textInputAction: TextInputAction.next,
+                    autofillHints: const [AutofillHints.name],
+                    decoration: AuthShell.dec('Mohammad Arif', Icons.person_outline),
+                    validator: (v) {
+                      final t = (v ?? '').trim();
+                      if (t.isEmpty) return _req;
+                      if (t.length < 3) return LanguageService.tr('Name is too short', 'নাম খুব ছোট');
+                      return null;
+                    },
+                  ),
+                  const SizedBox(height: 16),
+
+                  // ─── Phone ───
+                  AuthShell.label(LanguageService.tr('PHONE NUMBER', 'মোবাইল নম্বর'), isRequired: true),
+                  TextFormField(
+                    controller: _phoneController,
+                    keyboardType: TextInputType.phone,
+                    textInputAction: TextInputAction.next,
+                    autofillHints: const [AutofillHints.telephoneNumber],
+                    inputFormatters: [
+                      FilteringTextInputFormatter.allow(RegExp(r'[0-9+\s-]')),
+                      LengthLimitingTextInputFormatter(16),
+                    ],
+                    decoration: AuthShell.dec('01712345678', Icons.phone_outlined),
+                    validator: (v) {
+                      final t = _cleanPhone((v ?? '').trim());
+                      if (t.isEmpty) return _req;
+                      if (!RegExp(r'^01[3-9]\d{8}$').hasMatch(t)) {
+                        return LanguageService.tr('Enter a valid number (01XXXXXXXXX)', 'সঠিক নম্বর দিন (01XXXXXXXXX)');
+                      }
+                      return null;
+                    },
+                  ),
+                  const SizedBox(height: 16),
+
+                  // ─── Email (deya na-deya user er ichchha — kono "optional" lekha nei) ───
+                  AuthShell.label(LanguageService.tr('EMAIL', 'ইমেইল')),
+                  TextFormField(
+                    controller: _emailController,
+                    keyboardType: TextInputType.emailAddress,
+                    textInputAction: TextInputAction.next,
+                    autofillHints: const [AutofillHints.email],
+                    decoration: AuthShell.dec('investor@example.com', Icons.mail_outline_rounded),
+                    validator: (v) {
+                      final t = (v ?? '').trim();
+                      if (t.isEmpty) return null;
+                      if (!RegExp(r'^[\w.+-]+@([\w-]+\.)+[A-Za-z]{2,}$').hasMatch(t)) {
+                        return LanguageService.tr('Enter a valid email address', 'সঠিক ইমেইল দিন');
+                      }
+                      return null;
+                    },
+                  ),
+                  const SizedBox(height: 16),
+
+                  // ─── Date of birth ───
+                  AuthShell.label(LanguageService.tr('DATE OF BIRTH', 'জন্ম তারিখ'), isRequired: true),
+                  InkWell(
+                    borderRadius: BorderRadius.circular(14),
+                    onTap: _pickDob,
+                    child: InputDecorator(
+                      decoration: AuthShell.dec('', Icons.calendar_month_outlined).copyWith(
+                        suffixIcon: const Icon(Icons.expand_more_rounded, color: muted),
+                        errorText: _dobError
+                            ? (_dob == null
+                            ? _req
+                            : LanguageService.tr('You must be at least 18 years old', 'বয়স কমপক্ষে ১৮ বছর হতে হবে'))
+                            : null,
                       ),
                       child: Text(
-                        LanguageService.tr('Sign in', 'সাইন ইন'),
-                        style: const TextStyle(color: emerald, fontWeight: FontWeight.w700, fontSize: 14),
+                        _dob == null ? 'DD/MM/YYYY' : _fmtDob(_dob!),
+                        style: TextStyle(fontSize: 14, color: _dob == null ? muted.withAlpha(150) : ink),
                       ),
                     ),
-                  ],
-                ),
-                child: Form(
-                  key: _formKey,
-                  autovalidateMode: AutovalidateMode.onUserInteraction,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      // ─── Full name ───
-                      _label(LanguageService.tr('FULL NAME', 'পূর্ণ নাম'), isRequired: true),
-                      TextFormField(
-                        controller: _fullNameController,
-                        textCapitalization: TextCapitalization.words,
-                        textInputAction: TextInputAction.next,
-                        autofillHints: const [AutofillHints.name],
-                        decoration: _dec('Mohammad Arif', Icons.person_outline),
-                        validator: (v) {
-                          final t = (v ?? '').trim();
-                          if (t.isEmpty) return _req;
-                          if (t.length < 3) return LanguageService.tr('Name is too short', 'নাম খুব ছোট');
-                          return null;
-                        },
-                      ),
-                      const SizedBox(height: 16),
+                  ),
 
-                      // ─── Phone ───
-                      _label(LanguageService.tr('PHONE NUMBER', 'মোবাইল নম্বর'), isRequired: true),
-                      TextFormField(
-                        controller: _phoneController,
-                        keyboardType: TextInputType.phone,
-                        textInputAction: TextInputAction.next,
-                        autofillHints: const [AutofillHints.telephoneNumber],
-                        inputFormatters: [
-                          FilteringTextInputFormatter.allow(RegExp(r'[0-9+\s-]')),
-                          LengthLimitingTextInputFormatter(16),
-                        ],
-                        decoration: _dec('01712345678', Icons.phone_outlined),
-                        validator: (v) {
-                          final t = _cleanPhone((v ?? '').trim());
-                          if (t.isEmpty) return _req;
-                          if (!RegExp(r'^01[3-9]\d{8}$').hasMatch(t)) {
-                            return LanguageService.tr('Enter a valid number (01XXXXXXXXX)', 'সঠিক নম্বর দিন (01XXXXXXXXX)');
-                          }
-                          return null;
-                        },
-                      ),
-                      const SizedBox(height: 16),
+                  const SizedBox(height: 24),
+                  const Divider(height: 1, color: line),
+                  const SizedBox(height: 20),
+                  _sectionTitle(2, LanguageService.tr('Secure your account', 'অ্যাকাউন্ট সুরক্ষিত করুন')),
+                  const SizedBox(height: 16),
 
-                      // ─── Email (deya na-deya user er ichchha — kono "optional" lekha nei) ───
-                      _label(LanguageService.tr('EMAIL', 'ইমেইল')),
-                      TextFormField(
-                        controller: _emailController,
-                        keyboardType: TextInputType.emailAddress,
-                        textInputAction: TextInputAction.next,
-                        autofillHints: const [AutofillHints.email],
-                        decoration: _dec('investor@example.com', Icons.mail_outline_rounded),
-                        validator: (v) {
-                          final t = (v ?? '').trim();
-                          if (t.isEmpty) return null;
-                          if (!RegExp(r'^[\w.+-]+@([\w-]+\.)+[A-Za-z]{2,}$').hasMatch(t)) {
-                            return LanguageService.tr('Enter a valid email address', 'সঠিক ইমেইল দিন');
-                          }
-                          return null;
-                        },
+                  // ─── Password ───
+                  AuthShell.label(LanguageService.tr('CREATE PASSWORD', 'পাসওয়ার্ড তৈরি করুন'), isRequired: true),
+                  TextFormField(
+                    controller: _passwordController,
+                    obscureText: !_isPasswordVisible,
+                    textInputAction: TextInputAction.next,
+                    autofillHints: const [AutofillHints.newPassword],
+                    decoration: AuthShell.dec(LanguageService.tr('Min. 6 characters', 'কমপক্ষে ৬ অক্ষর'), Icons.lock_outline)
+                        .copyWith(
+                      suffixIcon: IconButton(
+                        icon: Icon(_isPasswordVisible ? Icons.visibility_outlined : Icons.visibility_off_outlined,
+                            color: muted, size: 20),
+                        onPressed: () => setState(() => _isPasswordVisible = !_isPasswordVisible),
                       ),
-                      const SizedBox(height: 16),
+                    ),
+                    validator: _passwordValidator,
+                  ),
+                  const SizedBox(height: 8),
+                  _hint(pw.length >= 6, LanguageService.tr('At least 6 characters', 'কমপক্ষে ৬ অক্ষর')),
+                  const SizedBox(height: 16),
 
-                      // ─── Date of birth ───
-                      _label(LanguageService.tr('DATE OF BIRTH', 'জন্ম তারিখ'), isRequired: true),
-                      InkWell(
-                        borderRadius: BorderRadius.circular(12),
-                        onTap: _pickDob,
-                        child: InputDecorator(
-                          decoration: _dec('', Icons.calendar_month_outlined).copyWith(
-                            errorText: _dobError
-                                ? (_dob == null
-                                ? _req
-                                : LanguageService.tr('You must be at least 18 years old', 'বয়স কমপক্ষে ১৮ বছর হতে হবে'))
-                                : null,
-                          ),
-                          child: Text(
-                            _dob == null ? 'DD/MM/YYYY' : _fmtDob(_dob!),
-                            style: TextStyle(fontSize: 14, color: _dob == null ? muted.withAlpha(150) : ink),
-                          ),
+                  // ─── Confirm ───
+                  AuthShell.label(LanguageService.tr('CONFIRM PASSWORD', 'পাসওয়ার্ড নিশ্চিত করুন'), isRequired: true),
+                  TextFormField(
+                    controller: _confirmPasswordController,
+                    obscureText: !_isConfirmPasswordVisible,
+                    textInputAction: TextInputAction.done,
+                    onFieldSubmitted: (_) => _isLoading ? null : _handleRegister(),
+                    decoration: AuthShell.dec(LanguageService.tr('Re-enter your password', 'আবার পাসওয়ার্ড লিখুন'),
+                        Icons.lock_outline)
+                        .copyWith(
+                      suffixIcon: IconButton(
+                        icon: Icon(
+                            _isConfirmPasswordVisible ? Icons.visibility_outlined : Icons.visibility_off_outlined,
+                            color: muted,
+                            size: 20),
+                        onPressed: () => setState(() => _isConfirmPasswordVisible = !_isConfirmPasswordVisible),
+                      ),
+                    ),
+                    validator: (v) {
+                      if ((v ?? '').isEmpty) return _req;
+                      if (v != _passwordController.text) {
+                        return LanguageService.tr('Passwords do not match', 'পাসওয়ার্ড মিলছে না');
+                      }
+                      return null;
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  _hint(cpw.isNotEmpty && cpw == pw, LanguageService.tr('Passwords match', 'পাসওয়ার্ড মিলেছে')),
+                  const SizedBox(height: 20),
+
+                  // ─── Note + terms (website er motoi, checkbox chara) ───
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: emeraldSoft.withAlpha(150),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Padding(
+                          padding: EdgeInsets.only(top: 1),
+                          child: Icon(Icons.info_outline_rounded, size: 17, color: emerald),
                         ),
-                      ),
-                      const SizedBox(height: 16),
-
-                      // ─── Password ───
-                      _label(LanguageService.tr('CREATE PASSWORD', 'পাসওয়ার্ড তৈরি করুন'), isRequired: true),
-                      TextFormField(
-                        controller: _passwordController,
-                        obscureText: !_isPasswordVisible,
-                        textInputAction: TextInputAction.next,
-                        autofillHints: const [AutofillHints.newPassword],
-                        decoration: _dec(LanguageService.tr('Min. 6 characters', 'কমপক্ষে ৬ অক্ষর'), Icons.lock_outline)
-                            .copyWith(
-                          suffixIcon: IconButton(
-                            icon: Icon(_isPasswordVisible ? Icons.visibility_outlined : Icons.visibility_off_outlined,
-                                color: muted, size: 20),
-                            onPressed: () => setState(() => _isPasswordVisible = !_isPasswordVisible),
-                          ),
-                        ),
-                        validator: _passwordValidator,
-                      ),
-                      const SizedBox(height: 16),
-
-                      // ─── Confirm ───
-                      _label(LanguageService.tr('CONFIRM PASSWORD', 'পাসওয়ার্ড নিশ্চিত করুন'), isRequired: true),
-                      TextFormField(
-                        controller: _confirmPasswordController,
-                        obscureText: !_isConfirmPasswordVisible,
-                        textInputAction: TextInputAction.done,
-                        onFieldSubmitted: (_) => _isLoading ? null : _handleRegister(),
-                        decoration: _dec(LanguageService.tr('Re-enter your password', 'আবার পাসওয়ার্ড লিখুন'),
-                            Icons.lock_outline)
-                            .copyWith(
-                          suffixIcon: IconButton(
-                            icon: Icon(
-                                _isConfirmPasswordVisible ? Icons.visibility_outlined : Icons.visibility_off_outlined,
-                                color: muted,
-                                size: 20),
-                            onPressed: () => setState(() => _isConfirmPasswordVisible = !_isConfirmPasswordVisible),
-                          ),
-                        ),
-                        validator: (v) {
-                          if ((v ?? '').isEmpty) return _req;
-                          if (v != _passwordController.text) {
-                            return LanguageService.tr('Passwords do not match', 'পাসওয়ার্ড মিলছে না');
-                          }
-                          return null;
-                        },
-                      ),
-                      const SizedBox(height: 18),
-
-                      // ─── Note + terms (website er motoi, checkbox chara) ───
-                      Text.rich(
-                        TextSpan(
-                          style: const TextStyle(fontSize: 12.5, color: muted, height: 1.6),
-                          children: [
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text.rich(
                             TextSpan(
-                                text: LanguageService.tr(
-                                    'You can add your NID, address and nominee later from your profile. By registering, you agree to Biniyog Club\'s ',
-                                    'এনআইডি, ঠিকানা ও নমিনী পরে প্রোফাইল থেকে যোগ করতে পারবেন। রেজিস্টার করে আপনি বিনিয়োগ ক্লাবের ')),
-                            TextSpan(
-                              text: LanguageService.tr('Terms of Service', 'শর্তাবলী'),
-                              style: const TextStyle(color: ink, fontWeight: FontWeight.w700),
-                              recognizer: _termsTap,
+                              style: const TextStyle(fontSize: 12, color: ink, height: 1.55),
+                              children: [
+                                TextSpan(
+                                    text: LanguageService.tr(
+                                        'You can add your NID, address and nominee later from your profile. By registering, you agree to Biniyog Club\'s ',
+                                        'এনআইডি, ঠিকানা ও নমিনী পরে প্রোফাইল থেকে যোগ করতে পারবেন। রেজিস্টার করে আপনি বিনিয়োগ ক্লাবের ')),
+                                TextSpan(
+                                  text: LanguageService.tr('Terms of Service', 'শর্তাবলী'),
+                                  style: const TextStyle(
+                                      color: emerald, fontWeight: FontWeight.w700, decoration: TextDecoration.underline),
+                                  recognizer: _termsTap,
+                                ),
+                                TextSpan(text: LanguageService.tr(' and ', ' ও ')),
+                                TextSpan(
+                                  text: LanguageService.tr('Privacy Policy', 'প্রাইভেসি পলিসি'),
+                                  style: const TextStyle(
+                                      color: emerald, fontWeight: FontWeight.w700, decoration: TextDecoration.underline),
+                                  recognizer: _privacyTap,
+                                ),
+                                TextSpan(text: LanguageService.tr('.', ' মেনে নিচ্ছেন।')),
+                              ],
                             ),
-                            TextSpan(text: LanguageService.tr(' and ', ' ও ')),
-                            TextSpan(
-                              text: LanguageService.tr('Privacy Policy', 'প্রাইভেসি পলিসি'),
-                              style: const TextStyle(color: ink, fontWeight: FontWeight.w700),
-                              recognizer: _privacyTap,
-                            ),
-                            TextSpan(text: LanguageService.tr('.', ' মেনে নিচ্ছেন।')),
-                          ],
-                        ),
-                      ),
-
-                      if (_formError != null) ...[
-                        const SizedBox(height: 14),
-                        Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFFBEAE8),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Icon(Icons.error_outline_rounded, size: 17, color: danger),
-                              const SizedBox(width: 8),
-                              Expanded(child: Text(_formError!, style: const TextStyle(fontSize: 12.5, color: danger))),
-                            ],
                           ),
                         ),
                       ],
-                      const SizedBox(height: 20),
-                      SizedBox(
-                        height: 54,
-                        child: FilledButton(
-                          onPressed: _isLoading ? null : _handleRegister,
-                          style: FilledButton.styleFrom(
-                            backgroundColor: emerald,
-                            foregroundColor: Colors.white,
-                            disabledBackgroundColor: emerald.withAlpha(120),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                          ),
-                          child: _isLoading
-                              ? const SizedBox(
-                            height: 20,
-                            width: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2.2, color: Colors.white),
-                          )
-                              : Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Flexible(
-                                child: Text(
-                                  LanguageService.tr('Create Free Investor Account', 'ফ্রি বিনিয়োগকারী অ্যাকাউন্ট খুলুন'),
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(fontSize: 15.5, fontWeight: FontWeight.w700),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              const Icon(Icons.arrow_forward_rounded, size: 19),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
+                    ),
                   ),
-                ),
+
+                  if (_formError != null) ...[
+                    const SizedBox(height: 14),
+                    AuthShell.errorBox(_formError!),
+                  ],
+                  const SizedBox(height: 20),
+                  AuthShell.primaryButton(
+                    text: LanguageService.tr('Create Free Investor Account', 'ফ্রি বিনিয়োগকারী অ্যাকাউন্ট খুলুন'),
+                    loading: _isLoading,
+                    onPressed: _handleRegister,
+                  ),
+                ],
               ),
             ),
           ),
@@ -433,36 +421,35 @@ class _RegistrationPageState extends State<RegistrationPage> {
   }
 
   // ─── Shared ───────────────────────────────────────────────
-  Widget _label(String text, {bool isRequired = false}) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 7, left: 2),
-      child: Text.rich(
-        TextSpan(
-          text: text,
-          style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w800, color: ink, letterSpacing: 0.9),
-          children: [
-            if (isRequired) const TextSpan(text: ' *', style: TextStyle(color: danger)),
-          ],
+  Widget _sectionTitle(int step, String text) {
+    return Row(
+      children: [
+        Container(
+          width: 26,
+          height: 26,
+          alignment: Alignment.center,
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(colors: [Color(0xFFD9BE8C), gold]),
+            shape: BoxShape.circle,
+          ),
+          child: Text('$step',
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: Colors.white)),
         ),
-      ),
+        const SizedBox(width: 10),
+        Text(text, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: ink)),
+      ],
     );
   }
 
-  InputDecoration _dec(String hint, IconData icon) {
-    return InputDecoration(
-      hintText: hint.isEmpty ? null : hint,
-      hintStyle: TextStyle(fontSize: 14, color: muted.withAlpha(150)),
-      prefixIcon: Icon(icon, color: muted, size: 20),
-      filled: true,
-      fillColor: Colors.white,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 15),
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: line)),
-      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: line)),
-      focusedBorder:
-      OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: emerald, width: 1.4)),
-      errorBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: danger)),
-      focusedErrorBorder:
-      OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: danger, width: 1.4)),
+  Widget _hint(bool ok, String text) {
+    return Row(
+      children: [
+        Icon(ok ? Icons.check_circle_rounded : Icons.radio_button_unchecked_rounded,
+            size: 15, color: ok ? emerald : muted.withAlpha(140)),
+        const SizedBox(width: 6),
+        Text(text,
+            style: TextStyle(fontSize: 11.5, color: ok ? emerald : muted, fontWeight: ok ? FontWeight.w700 : FontWeight.w500)),
+      ],
     );
   }
 }

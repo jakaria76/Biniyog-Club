@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
+
 import '../../screens/home_screen.dart';
 import '../../services/auth_service.dart';
+import '../../services/language_service.dart';
 import 'forgot_password_page.dart';
 import 'registration_page.dart';
-import 'widgets/auth_card.dart';
-import 'widgets/quote_banner.dart';
+import 'widgets/auth_shell.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -14,227 +15,205 @@ class LoginPage extends StatefulWidget {
 }
 
 class _LoginPageState extends State<LoginPage> {
+  static const Color emerald = AuthShell.emerald;
+  static const Color muted = AuthShell.muted;
+
   final _formKey = GlobalKey<FormState>();
-  final _emailController = TextEditingController();
+  final _idController = TextEditingController();
   final _passwordController = TextEditingController();
 
   bool _isPasswordVisible = false;
   bool _isLoading = false;
+  String? _formError;
+
+  @override
+  void initState() {
+    super.initState();
+    // Phone na email — lekhar shathe shathe icon bodlay
+    _idController.addListener(() => setState(() {}));
+  }
 
   @override
   void dispose() {
-    _emailController.dispose();
+    _idController.dispose();
     _passwordController.dispose();
     super.dispose();
   }
 
-  void _handleLogin() async {
-    if (_formKey.currentState!.validate()) {
-      setState(() => _isLoading = true);
+  bool get _looksLikeEmail => _idController.text.contains('@');
 
-      final result = await AuthService.login(
-        email: _emailController.text,
-        password: _passwordController.text,
-      );
-
-      if (!mounted) return;
-      setState(() => _isLoading = false);
-
-      if (result['success'] == true) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Successfully signed in!'),
-            backgroundColor: Colors.teal,
-          ),
-        );
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (context) => const HomeScreen()),
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(result['message'] ?? 'Login failed'),
-            backgroundColor: Colors.redAccent,
-          ),
-        );
+  String? _idValidator(String? v) {
+    final t = (v ?? '').trim();
+    if (t.isEmpty) {
+      return LanguageService.tr('Enter your phone number or email', 'মোবাইল নম্বর বা ইমেইল দিন');
+    }
+    if (t.contains('@')) {
+      if (!RegExp(r'^[\w.+-]+@([\w-]+\.)+[A-Za-z]{2,}$').hasMatch(t)) {
+        return LanguageService.tr('Enter a valid email address', 'সঠিক ইমেইল দিন');
       }
+      return null;
+    }
+    final digits = t.replaceAll(RegExp(r'[\s-]'), '');
+    if (!RegExp(r'^(\+?88)?01[3-9]\d{8}$').hasMatch(digits)) {
+      return LanguageService.tr('Enter a valid number (01XXXXXXXXX) or email', 'সঠিক নম্বর (01XXXXXXXXX) বা ইমেইল দিন');
+    }
+    return null;
+  }
+
+  Future<void> _handleLogin() async {
+    FocusScope.of(context).unfocus();
+    setState(() => _formError = null);
+    if (!_formKey.currentState!.validate()) return;
+
+    setState(() => _isLoading = true);
+    // AuthService phone ar email duitai nite pare
+    final result = await AuthService.login(
+      email: _idController.text.trim(),
+      password: _passwordController.text,
+    );
+    if (!mounted) return;
+    setState(() => _isLoading = false);
+
+    if (result['success'] == true) {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const HomeScreen()),
+      );
+    } else {
+      setState(() => _formError = result['message']?.toString() ??
+          LanguageService.tr('Login failed. Please try again.', 'লগইন হয়নি। আবার চেষ্টা করুন।'));
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFFF4F7F6),
-      body: SafeArea(
-        child: SingleChildScrollView(
-          child: AuthCard(
-            title: 'Welcome back',
-            description: 'Sign in to your Biniyog Club account',
-            quoteBanner: const QuoteBanner(
-              quote:
-                  'Real projects, real returns. Every investment opportunity is admin-reviewed, KYC-gated, and backed by a signed digital contract.',
-              quoteAuthor: 'Biniyog Club',
+    return ValueListenableBuilder<String>(
+      valueListenable: LanguageService.currentLanguage,
+      builder: (context, lang, child) {
+        return AuthShell(
+          eyebrow: 'Biniyog Club',
+          title: LanguageService.tr('Welcome back', 'আবার স্বাগতম'),
+          subtitle: LanguageService.tr(
+            'Sign in to track your investments, payments and returns.',
+            'আপনার বিনিয়োগ, পেমেন্ট ও লাভ দেখতে সাইন ইন করুন।',
+          ),
+          highlights: [
+            (Icons.verified_outlined, LanguageService.tr('Admin-reviewed projects', 'অ্যাডমিন যাচাইকৃত প্রজেক্ট')),
+            (Icons.receipt_long_outlined, LanguageService.tr('Every taka tracked', 'প্রতিটি টাকার হিসাব')),
+          ],
+          footer: AuthShell.switchLink(
+            question: LanguageService.tr("Don't have an account? ", 'অ্যাকাউন্ট নেই? '),
+            action: LanguageService.tr('Create one', 'খুলুন'),
+            onTap: () => Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(builder: (_) => const RegistrationPage()),
             ),
-            footer: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  "Don't have an account? ",
-                  style: TextStyle(color: Colors.grey[700], fontSize: 14),
-                ),
-                GestureDetector(
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const RegistrationPage(),
-                      ),
-                    );
-                  },
-                  child: const Text(
-                    'Create one',
-                    style: TextStyle(
-                      color: Colors.teal,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 14,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            child: Form(
-              key: _formKey,
+          ),
+          child: Form(
+            key: _formKey,
+            child: AutofillGroup(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // Email Input
-                  TextFormField(
-                    controller: _emailController,
-                    keyboardType: TextInputType.emailAddress,
-                    decoration: InputDecoration(
-                      labelText: 'Email Address',
-                      hintText: 'name@example.com',
-                      prefixIcon: const Icon(Icons.email_outlined, color: Colors.teal),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(color: Colors.teal, width: 2),
-                      ),
-                    ),
-                    validator: (value) {
-                      if (value == null || value.trim().isEmpty) {
-                        return 'Please enter your email';
-                      }
-                      if (!RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$').hasMatch(value.trim())) {
-                        return 'Please enter a valid email address';
-                      }
-                      return null;
-                    },
+                  Text(
+                    LanguageService.tr('Sign in', 'সাইন ইন'),
+                    style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w800, color: AuthShell.ink),
                   ),
-                  const SizedBox(height: 18),
+                  const SizedBox(height: 4),
+                  Text(
+                    LanguageService.tr('Use the phone number or email you registered with.',
+                        'যে মোবাইল নম্বর বা ইমেইল দিয়ে রেজিস্টার করেছেন সেটি দিন।'),
+                    style: const TextStyle(fontSize: 12.5, color: muted, height: 1.4),
+                  ),
+                  const SizedBox(height: 20),
 
-                  // Password Input
+                  // ─── Phone / email ───
+                  AuthShell.label(LanguageService.tr('PHONE OR EMAIL', 'মোবাইল বা ইমেইল')),
+                  TextFormField(
+                    controller: _idController,
+                    keyboardType: TextInputType.emailAddress,
+                    textInputAction: TextInputAction.next,
+                    autofillHints: const [AutofillHints.telephoneNumber, AutofillHints.email],
+                    decoration: AuthShell.dec(
+                      '01712345678',
+                      _looksLikeEmail ? Icons.mail_outline_rounded : Icons.phone_outlined,
+                    ),
+                    validator: _idValidator,
+                  ),
+                  const SizedBox(height: 16),
+
+                  // ─── Password ───
+                  Row(
+                    children: [
+                      Expanded(child: AuthShell.label(LanguageService.tr('PASSWORD', 'পাসওয়ার্ড'))),
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 7),
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(6),
+                          onTap: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(builder: (_) => const ForgotPasswordPage()),
+                          ),
+                          child: Text(
+                            LanguageService.tr('Forgot password?', 'পাসওয়ার্ড ভুলে গেছেন?'),
+                            style: const TextStyle(color: emerald, fontWeight: FontWeight.w700, fontSize: 12.5),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                   TextFormField(
                     controller: _passwordController,
                     obscureText: !_isPasswordVisible,
-                    decoration: InputDecoration(
-                      labelText: 'Password',
-                      hintText: '••••••••',
-                      prefixIcon: const Icon(Icons.lock_outline, color: Colors.teal),
+                    textInputAction: TextInputAction.done,
+                    autofillHints: const [AutofillHints.password],
+                    onFieldSubmitted: (_) => _isLoading ? null : _handleLogin(),
+                    decoration: AuthShell.dec('••••••••', Icons.lock_outline).copyWith(
                       suffixIcon: IconButton(
                         icon: Icon(
-                          _isPasswordVisible
-                              ? Icons.visibility_outlined
-                              : Icons.visibility_off_outlined,
-                          color: Colors.grey[600],
+                          _isPasswordVisible ? Icons.visibility_outlined : Icons.visibility_off_outlined,
+                          color: muted,
+                          size: 20,
                         ),
-                        onPressed: () {
-                          setState(() {
-                            _isPasswordVisible = !_isPasswordVisible;
-                          });
-                        },
-                      ),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(color: Colors.teal, width: 2),
+                        onPressed: () => setState(() => _isPasswordVisible = !_isPasswordVisible),
                       ),
                     ),
-                    validator: (value) {
-                      if (value == null || value.isEmpty) {
-                        return 'Please enter your password';
-                      }
-                      if (value.length < 6) {
-                        return 'Password must be at least 6 characters';
+                    validator: (v) {
+                      if ((v ?? '').isEmpty) {
+                        return LanguageService.tr('Please enter your password', 'পাসওয়ার্ড দিন');
                       }
                       return null;
                     },
                   ),
 
-                  // Forgot Password Link
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: TextButton(
-                      onPressed: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) => const ForgotPasswordPage(),
-                          ),
-                        );
-                      },
-                      child: const Text(
-                        'Forgot password?',
-                        style: TextStyle(
-                          color: Colors.teal,
-                          fontWeight: FontWeight.w600,
-                          fontSize: 13,
-                        ),
-                      ),
-                    ),
+                  if (_formError != null) ...[
+                    const SizedBox(height: 14),
+                    AuthShell.errorBox(_formError!),
+                  ],
+                  const SizedBox(height: 22),
+                  AuthShell.primaryButton(
+                    text: LanguageService.tr('Sign In', 'সাইন ইন'),
+                    loading: _isLoading,
+                    onPressed: _handleLogin,
                   ),
-                  const SizedBox(height: 12),
-
-                  // Submit Button
-                  ElevatedButton(
-                    onPressed: _isLoading ? null : _handleLogin,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.teal,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
+                  const SizedBox(height: 14),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(Icons.lock_rounded, size: 13, color: muted),
+                      const SizedBox(width: 6),
+                      Text(
+                        LanguageService.tr('Your password is encrypted', 'আপনার পাসওয়ার্ড এনক্রিপ্টেড'),
+                        style: const TextStyle(fontSize: 11.5, color: muted),
                       ),
-                      elevation: 1,
-                    ),
-                    child: _isLoading
-                        ? const SizedBox(
-                            height: 20,
-                            width: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                            ),
-                          )
-                        : const Text(
-                            'Sign In',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
+                    ],
                   ),
                 ],
               ),
             ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 }
