@@ -3,11 +3,15 @@ import '../../services/auth_service.dart';
 import 'login_page.dart';
 import 'otp_verification_page.dart';
 import 'widgets/auth_card.dart';
+import '../../theme/app_colors.dart';
 
-const _emerald = Color(0xFF0F4D3A);
-const _gold = Color(0xFFC9A24A);
-const _bg = Color(0xFFF6F1E7);
-const _danger = Color(0xFFB3261E);
+// ─── Palette — website er rong (lib/theme/app_colors.dart) ───
+const _emerald = BC.primary;
+const _emeraldSoft = BC.secondary;
+const _ink = BC.foreground;
+const _line = BC.border;
+const _bg = BC.background;
+const _danger = BC.destructive;
 
 class ForgotPasswordPage extends StatefulWidget {
   const ForgotPasswordPage({super.key});
@@ -69,7 +73,7 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
     border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
     enabledBorder: OutlineInputBorder(
       borderRadius: BorderRadius.circular(12),
-      borderSide: BorderSide(color: Colors.grey.shade300),
+      borderSide: const BorderSide(color: _line),
     ),
     focusedBorder: OutlineInputBorder(
       borderRadius: BorderRadius.circular(12),
@@ -102,7 +106,7 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
               ),
               child: const Text(
                 'Back to sign in',
-                style: TextStyle(color: _emerald, fontWeight: FontWeight.bold, fontSize: 14),
+                style: TextStyle(color: _emerald, fontWeight: FontWeight.bold, fontSize: 15),
               ),
             ),
             child: Form(
@@ -132,19 +136,19 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
                   Container(
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: _gold.withAlpha(30),
+                      color: _emeraldSoft,
                       borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: _gold.withAlpha(90)),
+                      border: Border.all(color: _emerald.withAlpha(60)),
                     ),
                     child: const Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Icon(Icons.info_outline_rounded, size: 18, color: Color(0xFF8A6A1F)),
+                        Icon(Icons.info_outline_rounded, size: 18, color: _emerald),
                         SizedBox(width: 8),
                         Expanded(
                           child: Text(
                             'The email comes from noreply@biniyogclub.com. If you do not see it in a minute, check your Spam / Promotions folder.',
-                            style: TextStyle(fontSize: 12, color: Color(0xFF5E4A17), height: 1.35),
+                            style: TextStyle(fontSize: 13, color: _ink, height: 1.35),
                           ),
                         ),
                       ],
@@ -167,7 +171,7 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
                       child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                     )
                         : const Text('Send Code',
-                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                        style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
                   ),
                 ],
               ),

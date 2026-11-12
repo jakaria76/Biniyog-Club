@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../screens/home_screen.dart';
 import '../../services/auth_service.dart';
+import '../../services/database_service.dart';
 import '../../services/language_service.dart';
 import 'forgot_password_page.dart';
 import 'registration_page.dart';
@@ -53,9 +54,16 @@ class _LoginPageState extends State<LoginPage> {
       }
       return null;
     }
-    final digits = t.replaceAll(RegExp(r'[\s-]'), '');
-    if (!RegExp(r'^(\+?88)?01[3-9]\d{8}$').hasMatch(digits)) {
-      return LanguageService.tr('Enter a valid number (01XXXXXXXXX) or email', 'সঠিক নম্বর (01XXXXXXXXX) বা ইমেইল দিন');
+    // Je kono desh: BD hole 01… cholbe, onno desh hole +code shoho (+44…, +971…)
+    if (!RegExp(r'^[+\d\s\-().]+$').hasMatch(t)) {
+      return LanguageService.tr('Enter a valid phone number or email', 'সঠিক মোবাইল নম্বর বা ইমেইল দিন');
+    }
+    final phone = DatabaseService.canonicalPhone(t);
+    if (!DatabaseService.isValidPhone(phone)) {
+      return phone.startsWith('+')
+          ? LanguageService.tr('Enter a valid phone number', 'সঠিক ফোন নম্বর দিন')
+          : LanguageService.tr('Outside Bangladesh? Add the country code, e.g. +44…',
+          'বাংলাদেশের বাইরের নম্বর হলে দেশের কোড দিন, যেমন +44…');
     }
     return null;
   }
@@ -117,13 +125,13 @@ class _LoginPageState extends State<LoginPage> {
                 children: [
                   Text(
                     LanguageService.tr('Sign in', 'সাইন ইন'),
-                    style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w800, color: AuthShell.ink),
+                    style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: AuthShell.ink),
                   ),
                   const SizedBox(height: 4),
                   Text(
                     LanguageService.tr('Use the phone number or email you registered with.',
                         'যে মোবাইল নম্বর বা ইমেইল দিয়ে রেজিস্টার করেছেন সেটি দিন।'),
-                    style: const TextStyle(fontSize: 12.5, color: muted, height: 1.4),
+                    style: const TextStyle(fontSize: 13.5, color: muted, height: 1.4),
                   ),
                   const SizedBox(height: 20),
 
@@ -133,10 +141,15 @@ class _LoginPageState extends State<LoginPage> {
                     controller: _idController,
                     keyboardType: TextInputType.emailAddress,
                     textInputAction: TextInputAction.next,
+                    autocorrect: false,
                     autofillHints: const [AutofillHints.telephoneNumber, AutofillHints.email],
                     decoration: AuthShell.dec(
-                      '01712345678',
+                      LanguageService.tr('01712345678 or email', '01712345678 বা ইমেইল'),
                       _looksLikeEmail ? Icons.mail_outline_rounded : Icons.phone_outlined,
+                    ).copyWith(
+                      helperText: LanguageService.tr('Outside Bangladesh? Start with +country code',
+                          'বাংলাদেশের বাইরের নম্বর হলে + দেশের কোড দিয়ে লিখুন'),
+                      helperStyle: const TextStyle(fontSize: 12.5, color: muted),
                     ),
                     validator: _idValidator,
                   ),
@@ -156,7 +169,7 @@ class _LoginPageState extends State<LoginPage> {
                           ),
                           child: Text(
                             LanguageService.tr('Forgot password?', 'পাসওয়ার্ড ভুলে গেছেন?'),
-                            style: const TextStyle(color: emerald, fontWeight: FontWeight.w700, fontSize: 12.5),
+                            style: const TextStyle(color: emerald, fontWeight: FontWeight.w700, fontSize: 13.5),
                           ),
                         ),
                       ),
@@ -167,7 +180,9 @@ class _LoginPageState extends State<LoginPage> {
                     obscureText: !_isPasswordVisible,
                     textInputAction: TextInputAction.done,
                     autofillHints: const [AutofillHints.password],
-                    onFieldSubmitted: (_) => _isLoading ? null : _handleLogin(),
+                    onFieldSubmitted: (_) {
+                      if (!_isLoading) _handleLogin();
+                    },
                     decoration: AuthShell.dec('••••••••', Icons.lock_outline).copyWith(
                       suffixIcon: IconButton(
                         icon: Icon(
@@ -204,7 +219,7 @@ class _LoginPageState extends State<LoginPage> {
                       const SizedBox(width: 6),
                       Text(
                         LanguageService.tr('Your password is encrypted', 'আপনার পাসওয়ার্ড এনক্রিপ্টেড'),
-                        style: const TextStyle(fontSize: 11.5, color: muted),
+                        style: const TextStyle(fontSize: 12.5, color: muted),
                       ),
                     ],
                   ),

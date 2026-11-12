@@ -10,6 +10,7 @@ import '../../../services/database_service.dart';
 import '../../../services/language_service.dart';
 import '../dashboard/investor_dashboard_page.dart';
 import 'edit_profile_page.dart';
+import '../../../theme/app_colors.dart';
 
 class ProfilePage extends StatefulWidget {
   const ProfilePage({super.key});
@@ -20,25 +21,25 @@ class ProfilePage extends StatefulWidget {
 
 class _ProfilePageState extends State<ProfilePage> {
   // ─── Palette (dashboard er moto) ───
-  static const Color emerald = Color(0xFF0E4A37);
-  static const Color emeraldDeep = Color(0xFF0A3327);
-  static const Color emeraldSoft = Color(0xFFE3F0E9);
-  static const Color gold = Color(0xFFB8935A);
-  static const Color goldDeep = Color(0xFF8A6A3A);
-  static const Color goldLight = Color(0xFFD9BE8C);
-  static const Color goldSoft = Color(0xFFF6EEDF);
-  static const Color turquoise = Color(0xFF167A80);
-  static const Color turquoiseSoft = Color(0xFFE0F1F1);
-  static const Color lapis = Color(0xFF26437A);
-  static const Color lapisSoft = Color(0xFFE5EAF4);
-  static const Color terracotta = Color(0xFFA5523A);
-  static const Color terracottaSoft = Color(0xFFF7E6DF);
-  static const Color ivory = Color(0xFFF7F4EE);
-  static const Color ink = Color(0xFF1C2421);
-  static const Color muted = Color(0xFF6E736F);
-  static const Color line = Color(0xFFE8E2D7);
-  static const Color danger = Color(0xFFB4413A);
-  static const Color dangerSoft = Color(0xFFFBEAE8);
+  static const Color emerald = BC.primary;
+  static const Color emeraldBright = BC.brand500;
+  static const Color emeraldSoft = BC.secondary;
+  // Sonali nei — "baki" bojhate website er chart-4
+  static const Color pendingTone = BC.chart4Deep;
+  static const Color turquoise = BC.chart4;
+  static const Color turquoiseSoft = BC.chart4Muted;
+  static const Color lapis = BC.finance600;
+  static const Color lapisSoft = BC.finance50;
+  static const Color terracotta = BC.destructive;
+  static const Color terracottaSoft = BC.destructiveMuted;
+  static const Color amethyst = BC.info;
+  static const Color amethystSoft = BC.infoMuted;
+  static const Color ivory = BC.background;
+  static const Color ink = BC.foreground;
+  static const Color muted = BC.mutedForeground;
+  static const Color line = BC.border;
+  static const Color danger = BC.destructive;
+  static const Color dangerSoft = BC.destructiveMuted;
 
   static const List<String> _months = [
     'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
@@ -155,15 +156,19 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   String get _fullAddress {
-    final parts = [_v('address'), _v('city')]
-        .where((s) => s.isNotEmpty)
-        .toList();
+    final parts = [_v('address'), _v('city')].where((s) => s.isNotEmpty).toList();
     // Address er bhitore district age theke thakle dui bar dekhabo na
     final unique = <String>[];
     for (final p in parts) {
       if (!unique.any((u) => u.toLowerCase().contains(p.toLowerCase()))) unique.add(p);
     }
     return unique.join(', ');
+  }
+
+  String _fmtDob(String raw) {
+    final d = DateTime.tryParse(raw.trim());
+    if (d == null) return '';
+    return _fmtDate(DateTime(d.year, d.month, d.day));
   }
 
   void _snack(String msg, {bool error = false}) {
@@ -173,42 +178,46 @@ class _ProfilePageState extends State<ProfilePage> {
     );
   }
 
+  /// Dorkari 5 ta tottho — kotogulo deya hoyeche (progress bar er jonno)
+  List<(String, bool)> get _checklist => [
+    (LanguageService.tr('Email', 'ইমেইল'), _email.isNotEmpty),
+    (LanguageService.tr('Date of birth', 'জন্ম তারিখ'), _v('dateOfBirth').isNotEmpty),
+    (LanguageService.tr('NID', 'এনআইডি'), _v('nationalId').isNotEmpty),
+    (LanguageService.tr('Address', 'ঠিকানা'), _v('address').isNotEmpty),
+    (LanguageService.tr('Nominee', 'নমিনী'), _v('nomineeNationalId').isNotEmpty),
+  ];
+
   // ═════════════════════════════════════════════════════════
   // PHOTO
   // ═════════════════════════════════════════════════════════
-  void _showPhotoSourceSheet() {
+  void _showPhotoSheet() {
+    final hasPhoto = _avatarUrl != null && _avatarUrl!.isNotEmpty;
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.white,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (sheetContext) {
-        Widget option(IconData icon, Color color, Color soft, String label, ImageSource source) {
+        Widget option(IconData icon, Color color, Color soft, String label, VoidCallback onTap) {
           return InkWell(
-            borderRadius: BorderRadius.circular(14),
+            borderRadius: BorderRadius.circular(12),
             onTap: () {
               Navigator.pop(sheetContext);
-              _processImagePick(source);
+              onTap();
             },
             child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 6),
+              padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 4),
               child: Row(
                 children: [
                   Container(
-                    width: 42,
-                    height: 42,
-                    decoration: BoxDecoration(
-                      color: soft,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Icon(icon, color: color, size: 21),
+                    width: 34,
+                    height: 34,
+                    decoration: BoxDecoration(color: soft, borderRadius: BorderRadius.circular(10)),
+                    child: Icon(icon, color: color, size: 17),
                   ),
-                  const SizedBox(width: 14),
-                  Text(
-                    label,
-                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: ink),
-                  ),
+                  const SizedBox(width: 12),
+                  Text(label, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: color == danger ? danger : ink)),
                 ],
               ),
             ),
@@ -217,20 +226,32 @@ class _ProfilePageState extends State<ProfilePage> {
 
         return SafeArea(
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
+            padding: const EdgeInsets.fromLTRB(18, 10, 18, 10),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  LanguageService.tr('Profile Photo', 'প্রোফাইল ছবি'),
-                  style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: ink),
+                Center(
+                  child: Container(
+                    width: 36,
+                    height: 4,
+                    decoration: BoxDecoration(color: line, borderRadius: BorderRadius.circular(2)),
+                  ),
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 12),
+                Text(
+                  LanguageService.tr('Profile photo', 'প্রোফাইল ছবি'),
+                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: ink),
+                ),
+                const SizedBox(height: 6),
                 option(Icons.camera_alt_outlined, emerald, emeraldSoft,
-                    LanguageService.tr('Take a photo', 'ক্যামেরা দিয়ে ছবি তুলুন'), ImageSource.camera),
-                option(Icons.photo_library_outlined, lapis, lapisSoft,
-                    LanguageService.tr('Choose from gallery', 'গ্যালারি থেকে বেছে নিন'), ImageSource.gallery),
+                    LanguageService.tr('Take a photo', 'ক্যামেরা দিয়ে ছবি তুলুন'), () => _processImagePick(ImageSource.camera)),
+                option(Icons.photo_library_outlined, emerald, emeraldSoft,
+                    LanguageService.tr('Choose from gallery', 'গ্যালারি থেকে বেছে নিন'),
+                        () => _processImagePick(ImageSource.gallery)),
+                if (hasPhoto)
+                  option(Icons.delete_outline_rounded, danger, dangerSoft,
+                      LanguageService.tr('Remove photo', 'ছবি সরান'), _confirmDeletePhoto),
               ],
             ),
           ),
@@ -274,10 +295,10 @@ class _ProfilePageState extends State<ProfilePage> {
           userData['avatarUrl'] = _avatarUrl;
           await AuthService.saveUserData(userData);
         }
+        InvestorDashboardPage.clearCache(); // dashboard er chobi o notun
         _snack(LanguageService.tr('Profile photo updated.', 'প্রোফাইল ছবি আপডেট হয়েছে।'));
       } else {
-        _snack(res['message']?.toString() ??
-            LanguageService.tr('Could not save photo.', 'ছবি সেভ করা যায়নি।'),
+        _snack(res['message']?.toString() ?? LanguageService.tr('Could not save photo.', 'ছবি সেভ করা যায়নি।'),
             error: true);
       }
     } catch (e) {
@@ -298,15 +319,14 @@ class _ProfilePageState extends State<ProfilePage> {
       builder: (dialogContext) => AlertDialog(
         backgroundColor: Colors.white,
         surfaceTintColor: Colors.transparent,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
         title: Text(
           LanguageService.tr('Remove photo', 'ছবি সরান'),
           style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: ink),
         ),
         content: Text(
-          LanguageService.tr('Are you sure you want to remove your profile photo?',
-              'আপনি কি প্রোফাইল ছবি সরাতে চান?'),
-          style: const TextStyle(fontSize: 13.5, color: muted, height: 1.45),
+          LanguageService.tr('Are you sure you want to remove your profile photo?', 'আপনি কি প্রোফাইল ছবি সরাতে চান?'),
+          style: const TextStyle(fontSize: 14, color: muted, height: 1.45),
         ),
         actions: [
           TextButton(
@@ -322,7 +342,7 @@ class _ProfilePageState extends State<ProfilePage> {
             style: FilledButton.styleFrom(
               backgroundColor: danger,
               foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
             ),
             child: Text(LanguageService.tr('Remove', 'সরান')),
           ),
@@ -344,16 +364,16 @@ class _ProfilePageState extends State<ProfilePage> {
         userData['avatarUrl'] = null;
         await AuthService.saveUserData(userData);
       }
+      InvestorDashboardPage.clearCache();
       _snack(LanguageService.tr('Profile photo removed.', 'প্রোফাইল ছবি সরানো হয়েছে।'));
     } else {
-      _snack(res['message']?.toString() ??
-          LanguageService.tr('Could not remove photo.', 'ছবি সরানো যায়নি।'),
+      _snack(res['message']?.toString() ?? LanguageService.tr('Could not remove photo.', 'ছবি সরানো যায়নি।'),
           error: true);
     }
   }
 
   // ═════════════════════════════════════════════════════════
-  // EDIT
+  // EDIT — page e ekta-i edit button (app bar e)
   // ═════════════════════════════════════════════════════════
   Future<void> _openEdit() async {
     if (_profile.isEmpty) return;
@@ -375,26 +395,45 @@ class _ProfilePageState extends State<ProfilePage> {
     return ValueListenableBuilder<String>(
       valueListenable: LanguageService.currentLanguage,
       builder: (context, lang, child) {
+        final ready = !_isLoading && !_needsLogin && !_loadFailed;
         return Scaffold(
           backgroundColor: ivory,
           appBar: AppBar(
             backgroundColor: ivory,
             surfaceTintColor: Colors.transparent,
             elevation: 0,
+            toolbarHeight: 54,
             iconTheme: const IconThemeData(color: ink),
+            // Back button — page push kore khulle pichone jay; dashboard er tab hole
+            // dashboard er PopScope dhore Home tab e fire ashe
+            leading: IconButton(
+              tooltip: LanguageService.tr('Back', 'পিছনে'),
+              icon: const Icon(Icons.arrow_back_rounded, color: ink, size: 22),
+              onPressed: () => Navigator.maybePop(context),
+            ),
             title: Text(
-              LanguageService.tr('Profile', 'প্রোফাইল'),
-              style: const TextStyle(color: ink, fontWeight: FontWeight.w700, fontSize: 18),
+              LanguageService.tr('My Profile', 'আমার প্রোফাইল'),
+              style: const TextStyle(color: ink, fontWeight: FontWeight.w700, fontSize: 17.5),
             ),
             actions: [
-              if (!_isLoading && !_needsLogin && !_loadFailed)
+              if (ready)
                 Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: TextButton.icon(
-                    onPressed: _openEdit,
-                    icon: const Icon(Icons.edit_outlined, size: 17, color: emerald),
-                    label: Text(LanguageService.tr('Edit', 'এডিট'),
-                        style: const TextStyle(color: emerald, fontWeight: FontWeight.w700)),
+                  padding: const EdgeInsets.only(right: 14),
+                  child: Material(
+                    color: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(11),
+                      side: const BorderSide(color: line),
+                    ),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(11),
+                      onTap: _openEdit,
+                      child: const SizedBox(
+                        width: 36,
+                        height: 36,
+                        child: Icon(Icons.edit_outlined, size: 17, color: emerald),
+                      ),
+                    ),
                   ),
                 ),
             ],
@@ -402,16 +441,15 @@ class _ProfilePageState extends State<ProfilePage> {
           body: _isLoading
               ? const Center(
             child: SizedBox(
-              width: 28,
-              height: 28,
+              width: 26,
+              height: 26,
               child: CircularProgressIndicator(color: emerald, strokeWidth: 2.4),
             ),
           )
               : _needsLogin
               ? _buildMessage(
             Icons.lock_outline_rounded,
-            LanguageService.tr('Please log in to see your profile',
-                'প্রোফাইল দেখতে লগইন করুন'),
+            LanguageService.tr('Please log in to see your profile', 'প্রোফাইল দেখতে লগইন করুন'),
             LanguageService.tr('Log in', 'লগইন'),
                 () async {
               await AuthService.logout();
@@ -425,8 +463,7 @@ class _ProfilePageState extends State<ProfilePage> {
               : _loadFailed
               ? _buildMessage(
             Icons.wifi_off_rounded,
-            LanguageService.tr('Could not load your profile',
-                'প্রোফাইল লোড করা যায়নি'),
+            LanguageService.tr('Could not load your profile', 'প্রোফাইল লোড করা যায়নি'),
             LanguageService.tr('Try again', 'আবার চেষ্টা করুন'),
             _loadProfileData,
           )
@@ -435,25 +472,20 @@ class _ProfilePageState extends State<ProfilePage> {
             color: emerald,
             child: ListView(
               physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.fromLTRB(18, 6, 18, 40),
+              // dashboard er curved navbar er jonno niche jayga
+              padding: const EdgeInsets.fromLTRB(16, 2, 16, 104),
               children: [
                 _buildHeroCard(),
-                if (_missingCount > 0) ...[
-                  const SizedBox(height: 14),
-                  _buildCompleteBanner(),
-                ],
-                const SizedBox(height: 24),
-                _sectionHeader(LanguageService.tr('Contact', 'যোগাযোগ'), onEdit: _openEdit),
                 const SizedBox(height: 12),
+                _buildCompletionCard(),
+                const SizedBox(height: 18),
+                _sectionLabel(LanguageService.tr('CONTACT', 'যোগাযোগ')),
                 _buildContactCard(),
-                const SizedBox(height: 24),
-                _sectionHeader(LanguageService.tr('Personal Information', 'ব্যক্তিগত তথ্য'), onEdit: _openEdit),
-                const SizedBox(height: 12),
+                const SizedBox(height: 16),
+                _sectionLabel(LanguageService.tr('PERSONAL INFORMATION', 'ব্যক্তিগত তথ্য')),
                 _buildPersonalCard(),
-                const SizedBox(height: 24),
-                _sectionHeader(
-                    LanguageService.tr('Investor Profile', 'বিনিয়োগকারী প্রোফাইল'), onEdit: _openEdit),
-                const SizedBox(height: 12),
+                const SizedBox(height: 16),
+                _sectionLabel(LanguageService.tr('INVESTOR PROFILE', 'বিনিয়োগকারী প্রোফাইল')),
                 _buildInvestorCard(),
               ],
             ),
@@ -463,92 +495,261 @@ class _ProfilePageState extends State<ProfilePage> {
     );
   }
 
-  // ─── Shared pieces ────────────────────────────────────────
-  Widget _sectionHeader(String title, {VoidCallback? onEdit}) {
-    return Row(
-      children: [
-        Transform.rotate(
-          angle: math.pi / 4,
-          child: Container(
-            width: 8,
-            height: 8,
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(colors: [goldLight, gold]),
-            ),
-          ),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Text(
-            title,
-            style: const TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w700,
-              color: ink,
-              letterSpacing: -0.2,
-            ),
-          ),
-        ),
-        if (onEdit != null)
-          InkWell(
-            onTap: onEdit,
-            borderRadius: BorderRadius.circular(20),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-              decoration: BoxDecoration(color: emeraldSoft, borderRadius: BorderRadius.circular(20)),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.edit_outlined, size: 13, color: emerald),
-                  const SizedBox(width: 4),
-                  Text(LanguageService.tr('Edit', 'এডিট'),
-                      style: const TextStyle(fontSize: 12, color: emerald, fontWeight: FontWeight.w600)),
-                ],
-              ),
-            ),
-          ),
-      ],
+  // ─── Hero: chobi + nam + member since ─────────────────────
+  Widget _buildHeroCard() {
+    final displayName = _name.isEmpty ? LanguageService.tr('Investor', 'বিনিয়োগকারী') : _name;
+    final initial = displayName[0].toUpperCase();
+    final hasPhoto = _avatarUrl != null && _avatarUrl!.isNotEmpty;
+    final busy = _isUploadingPhoto || _isDeletingPhoto;
+
+    Widget initialAvatar() => Container(
+      color: emerald,
+      alignment: Alignment.center,
+      child: Text(initial, style: const TextStyle(color: Colors.white, fontSize: 25, fontWeight: FontWeight.w700)),
     );
-  }
 
-  /// Koto gulo dorkari tottho ekhono deya hoyni
-  int get _missingCount => [
-    _email,
-    _v('dateOfBirth'),
-    _v('nationalId'),
-    _v('address'),
-    _v('nomineeNationalId'),
-  ].where((s) => s.isEmpty).length;
-
-  Widget _buildCompleteBanner() {
-    return Material(
-      color: goldSoft,
-      borderRadius: BorderRadius.circular(16),
-      child: InkWell(
-        onTap: _openEdit,
-        borderRadius: BorderRadius.circular(16),
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: [BoxShadow(color: emerald.withAlpha(55), blurRadius: 14, offset: const Offset(0, 6))],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(18),
         child: Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: gold.withAlpha(90)),
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              colors: [emeraldBright, emerald],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
           ),
-          child: Row(
+          child: Stack(
             children: [
-              const Icon(Icons.assignment_ind_outlined, color: goldDeep, size: 22),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  LanguageService.tr(
-                      'Complete your profile — add your NID, address and nominee.',
-                      'প্রোফাইল সম্পূর্ণ করুন — এনআইডি, ঠিকানা ও নমিনী যোগ করুন।'),
-                  style: const TextStyle(fontSize: 12.5, color: ink, fontWeight: FontWeight.w600, height: 1.35),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+                child: Row(
+                  children: [
+                    // Avatar — chaple chobi bodlano / sorano
+                    GestureDetector(
+                      onTap: busy ? null : _showPhotoSheet,
+                      child: Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(2),
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              border: Border.all(color: Colors.white.withAlpha(200), width: 1.4),
+                            ),
+                            child: ClipOval(
+                              child: SizedBox(
+                                width: 58,
+                                height: 58,
+                                child: busy
+                                    ? Container(
+                                  color: emerald,
+                                  alignment: Alignment.center,
+                                  child: const SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                                  ),
+                                )
+                                    : hasPhoto
+                                    ? Image.network(_avatarUrl!,
+                                    fit: BoxFit.cover, errorBuilder: (_, __, ___) => initialAvatar())
+                                    : initialAvatar(),
+                              ),
+                            ),
+                          ),
+                          Positioned(
+                            right: -2,
+                            bottom: -2,
+                            child: Container(
+                              width: 22,
+                              height: 22,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: Colors.white,
+                                border: Border.all(color: emerald, width: 1.6),
+                              ),
+                              child: const Icon(Icons.camera_alt_rounded, size: 12, color: emerald),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            displayName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 17.5,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: -0.2,
+                            ),
+                          ),
+                          const SizedBox(height: 3),
+                          if (_phone.isNotEmpty || _email.isNotEmpty)
+                            Text(
+                              _phone.isNotEmpty ? _phone : _email,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(color: Colors.white.withAlpha(190), fontSize: 12.5),
+                            ),
+                          const SizedBox(height: 7),
+                          Wrap(
+                            spacing: 6,
+                            runSpacing: 4,
+                            children: [
+                              _heroChip(Icons.verified_user_outlined, LanguageService.tr('Investor', 'বিনিয়োগকারী')),
+                              if (_memberSince != null)
+                                _heroChip(
+                                  Icons.event_available_outlined,
+                                  LanguageService.tr('Since ${_months[_memberSince!.month - 1]} ${_memberSince!.year}',
+                                      '${_months[_memberSince!.month - 1]} ${_memberSince!.year} থেকে'),
+                                ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              const Icon(Icons.chevron_right_rounded, color: goldDeep),
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _heroChip(IconData icon, String text) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: Colors.white.withAlpha(22),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.white.withAlpha(35)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: Colors.white),
+          const SizedBox(width: 4),
+          Text(text, style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: Colors.white)),
+        ],
+      ),
+    );
+  }
+
+  // ─── Profile completion — ki baki ache, ek nojore ─────────
+  Widget _buildCompletionCard() {
+    final items = _checklist;
+    final done = items.where((e) => e.$2).length;
+    final total = items.length;
+    final complete = done == total;
+    final color = complete ? emeraldBright : pendingTone;
+
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: complete ? null : _openEdit,
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 11),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: complete ? emeraldBright.withAlpha(70) : pendingTone.withAlpha(90)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(complete ? Icons.verified_rounded : Icons.assignment_ind_outlined, size: 16, color: color),
+                  const SizedBox(width: 7),
+                  Expanded(
+                    child: Text(
+                      complete
+                          ? LanguageService.tr('Profile complete', 'প্রোফাইল সম্পূর্ণ')
+                          : LanguageService.tr('Complete your profile', 'প্রোফাইল সম্পূর্ণ করুন'),
+                      style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700, color: ink),
+                    ),
+                  ),
+                  Text('$done/$total', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: color)),
+                ],
+              ),
+              const SizedBox(height: 8),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: LinearProgressIndicator(
+                  value: total == 0 ? 0 : done / total,
+                  minHeight: 5,
+                  backgroundColor: BC.muted,
+                  valueColor: AlwaysStoppedAnimation<Color>(color),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 5,
+                runSpacing: 5,
+                children: [
+                  for (final it in items)
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: it.$2 ? emeraldSoft : ivory,
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: it.$2 ? Colors.transparent : line),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(it.$2 ? Icons.check_rounded : Icons.add_rounded, size: 13, color: it.$2 ? emerald : muted),
+                          const SizedBox(width: 3),
+                          Text(it.$1,
+                              style: TextStyle(
+                                  fontSize: 11.5, fontWeight: FontWeight.w600, color: it.$2 ? emerald : muted)),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ─── Shared pieces ────────────────────────────────────────
+  Widget _sectionLabel(String text) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 0, 4, 7),
+      child: Row(
+        children: [
+          Transform.rotate(
+            angle: math.pi / 4,
+            child: Container(
+              width: 6,
+              height: 6,
+              decoration: const BoxDecoration(color: emerald),
+            ),
+          ),
+          const SizedBox(width: 7),
+          Text(
+            text,
+            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: emerald, letterSpacing: 1.1),
+          ),
+        ],
       ),
     );
   }
@@ -558,13 +759,13 @@ class _ProfilePageState extends State<ProfilePage> {
     for (int i = 0; i < rows.length; i++) {
       children.add(rows[i]);
       if (i != rows.length - 1) {
-        children.add(const Divider(height: 1, thickness: 1, color: line, indent: 66));
+        children.add(const Divider(height: 1, thickness: 1, color: line, indent: 56));
       }
     }
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(14),
         border: Border.all(color: line),
       ),
       child: Column(children: children),
@@ -574,42 +775,33 @@ class _ProfilePageState extends State<ProfilePage> {
   Widget _infoRow(IconData icon, Color color, Color soft, String label, String value) {
     final empty = value.isEmpty;
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              color: soft,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(icon, color: color, size: 19),
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(color: soft, borderRadius: BorderRadius.circular(10)),
+            child: Icon(icon, color: color, size: 17),
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 10),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  label.toUpperCase(),
-                  style: const TextStyle(
-                    fontSize: 9.5,
-                    fontWeight: FontWeight.w700,
-                    color: muted,
-                    letterSpacing: 0.6,
-                  ),
+                  label,
+                  style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: muted),
                 ),
-                const SizedBox(height: 3),
+                const SizedBox(height: 1),
                 Text(
                   empty ? _notProvided : value,
                   style: TextStyle(
                     fontSize: 13.5,
                     fontWeight: empty ? FontWeight.w500 : FontWeight.w600,
-                    color: empty ? muted : ink,
+                    color: empty ? muted.withAlpha(170) : ink,
                     fontStyle: empty ? FontStyle.italic : FontStyle.normal,
-                    height: 1.35,
+                    height: 1.3,
                   ),
                 ),
               ],
@@ -620,210 +812,15 @@ class _ProfilePageState extends State<ProfilePage> {
     );
   }
 
-  // ─── Hero ─────────────────────────────────────────────────
-  Widget _buildHeroCard() {
-    final displayName = _name.isEmpty ? LanguageService.tr('Investor', 'বিনিয়োগকারী') : _name;
-    final initial = displayName[0].toUpperCase();
-    final hasPhoto = _avatarUrl != null && _avatarUrl!.isNotEmpty;
-    final busy = _isUploadingPhoto || _isDeletingPhoto;
-
-    Widget initialAvatar() => Container(
-      color: emerald,
-      alignment: Alignment.center,
-      child: Text(
-        initial,
-        style: const TextStyle(color: Colors.white, fontSize: 34, fontWeight: FontWeight.w600),
-      ),
-    );
-
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(24),
-      child: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            colors: [Color(0xFF125A43), emeraldDeep, Color(0xFF0B2A3A)],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-        ),
-        child: Stack(
-          children: [
-            Positioned.fill(
-              child: CustomPaint(
-                painter: _IslamicPatternPainter(color: Colors.white.withAlpha(16), cell: 44),
-              ),
-            ),
-            Positioned.fill(
-              child: Container(
-                margin: const EdgeInsets.all(7),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(color: gold.withAlpha(80), width: 0.8),
-                ),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 24, 20, 20),
-              child: Column(
-                children: [
-                  // Avatar + camera badge
-                  Stack(
-                    clipBehavior: Clip.none,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(3),
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          border: Border.all(color: gold, width: 1.6),
-                        ),
-                        child: ClipOval(
-                          child: SizedBox(
-                            width: 88,
-                            height: 88,
-                            child: busy
-                                ? Container(
-                              color: emerald,
-                              alignment: Alignment.center,
-                              child: const SizedBox(
-                                width: 26,
-                                height: 26,
-                                child: CircularProgressIndicator(
-                                    color: goldLight, strokeWidth: 2.4),
-                              ),
-                            )
-                                : hasPhoto
-                                ? Image.network(
-                              _avatarUrl!,
-                              fit: BoxFit.cover,
-                              errorBuilder: (_, __, ___) => initialAvatar(),
-                            )
-                                : initialAvatar(),
-                          ),
-                        ),
-                      ),
-                      Positioned(
-                        right: -2,
-                        bottom: -2,
-                        child: GestureDetector(
-                          onTap: busy ? null : _showPhotoSourceSheet,
-                          child: Container(
-                            width: 32,
-                            height: 32,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              gradient: const LinearGradient(colors: [goldLight, gold]),
-                              border: Border.all(color: emeraldDeep, width: 2),
-                            ),
-                            child: const Icon(Icons.camera_alt_rounded, size: 15, color: emeraldDeep),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 14),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Flexible(
-                        child: Text(
-                          displayName,
-                          textAlign: TextAlign.center,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 20,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: -0.2,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  if (_memberSince != null) ...[
-                    const SizedBox(height: 4),
-                    Text(
-                      LanguageService.tr('Member since ${_fmtDate(_memberSince)}',
-                          'সদস্য হয়েছেন ${_fmtDate(_memberSince)}'),
-                      style: TextStyle(color: Colors.white.withAlpha(170), fontSize: 12),
-                    ),
-                  ],
-                  const SizedBox(height: 16),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      _heroButton(
-                        icon: Icons.add_a_photo_outlined,
-                        label: hasPhoto
-                            ? LanguageService.tr('Change Photo', 'ছবি বদলান')
-                            : LanguageService.tr('Add Photo', 'ছবি যোগ করুন'),
-                        onTap: busy ? null : _showPhotoSourceSheet,
-                      ),
-                      if (hasPhoto) ...[
-                        const SizedBox(width: 10),
-                        _heroButton(
-                          icon: Icons.delete_outline_rounded,
-                          label: LanguageService.tr('Remove', 'সরান'),
-                          onTap: busy ? null : _confirmDeletePhoto,
-                        ),
-                      ],
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _heroButton({required IconData icon, required String label, VoidCallback? onTap}) {
-    return Material(
-      color: Colors.white.withAlpha(22),
-      borderRadius: BorderRadius.circular(12),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.white.withAlpha(40)),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, size: 15, color: Colors.white),
-              const SizedBox(width: 6),
-              Text(
-                label,
-                style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
   // ─── Contact ──────────────────────────────────────────────
   Widget _buildContactCard() {
     return _card([
-      _infoRow(Icons.mail_outline_rounded, lapis, lapisSoft,
-          LanguageService.tr('Email', 'ইমেইল'), _email),
-      _infoRow(Icons.phone_outlined, emerald, emeraldSoft,
-          LanguageService.tr('Phone', 'ফোন'), _phone),
+      _infoRow(Icons.phone_outlined, emerald, emeraldSoft, LanguageService.tr('Phone', 'ফোন'), _phone),
+      _infoRow(Icons.mail_outline_rounded, emerald, emeraldSoft, LanguageService.tr('Email', 'ইমেইল'), _email),
     ]);
   }
 
-  // ─── Personal info (registration e ja diyeche) ───────────
-  String _fmtDob(String raw) {
-    final d = DateTime.tryParse(raw.trim());
-    if (d == null) return '';
-    return _fmtDate(DateTime(d.year, d.month, d.day));
-  }
-
+  // ─── Personal info ────────────────────────────────────────
   Widget _buildPersonalCard() {
     final nominee = [
       _v('nomineeName'),
@@ -832,52 +829,46 @@ class _ProfilePageState extends State<ProfilePage> {
     ].where((s) => s.isNotEmpty).join(' · ');
 
     return _card([
-      _infoRow(Icons.cake_outlined, goldDeep, goldSoft,
-          LanguageService.tr('Date of Birth', 'জন্ম তারিখ'), _fmtDob(_v('dateOfBirth'))),
-      _infoRow(Icons.badge_outlined, lapis, lapisSoft,
-          LanguageService.tr('National ID', 'জাতীয় পরিচয়পত্র'), _mask(_v('nationalId'))),
-      _infoRow(Icons.location_on_outlined, terracotta, terracottaSoft,
-          LanguageService.tr('Address', 'ঠিকানা'), _fullAddress),
-      _infoRow(Icons.supervisor_account_outlined, emerald, emeraldSoft,
-          LanguageService.tr('Nominee', 'নমিনি'), nominee),
+      _infoRow(Icons.cake_outlined, emerald, emeraldSoft, LanguageService.tr('Date of birth', 'জন্ম তারিখ'),
+          _fmtDob(_v('dateOfBirth'))),
+      _infoRow(Icons.badge_outlined, emerald, emeraldSoft, LanguageService.tr('National ID', 'জাতীয় পরিচয়পত্র'),
+          _mask(_v('nationalId'))),
+      _infoRow(Icons.location_on_outlined, emerald, emeraldSoft, LanguageService.tr('Address', 'ঠিকানা'),
+          _fullAddress),
+      _infoRow(Icons.family_restroom_outlined, emerald, emeraldSoft, LanguageService.tr('Nominee', 'নমিনী'), nominee),
     ]);
   }
 
-  // ─── Investor profile (DB te ja ache) ─────────────────────
+  // ─── Investor profile ─────────────────────────────────────
   Widget _buildInvestorCard() {
     final rows = [
-      (Icons.work_outline_rounded, terracotta, terracottaSoft,
-      LanguageService.tr('Occupation', 'পেশা'), _pretty(_v('occupation'))),
-      (Icons.location_city_rounded, emerald, emeraldSoft,
-      LanguageService.tr('City / District', 'শহর / জেলা'), _v('city')),
-      (Icons.public_rounded, lapis, lapisSoft,
-      LanguageService.tr('Country', 'দেশ'), _pretty(_v('country'))),
-      (Icons.account_balance_wallet_outlined, goldDeep, goldSoft,
-      LanguageService.tr('Annual Income Range', 'বার্ষিক আয়ের সীমা'), _pretty(_v('annualIncomeRange'))),
-      (Icons.trending_up_rounded, turquoise, turquoiseSoft,
-      LanguageService.tr('Investment Experience', 'বিনিয়োগের অভিজ্ঞতা'), _pretty(_v('investmentExperience'))),
-      (Icons.speed_rounded, terracotta, terracottaSoft,
-      LanguageService.tr('Risk Tolerance', 'ঝুঁকি সহনশীলতা'), _pretty(_v('riskTolerance'))),
+      (Icons.work_outline_rounded, emerald, emeraldSoft, LanguageService.tr('Occupation', 'পেশা'),
+      _pretty(_v('occupation'))),
+      (Icons.public_rounded, emerald, emeraldSoft, LanguageService.tr('Country', 'দেশ'), _pretty(_v('country'))),
+      (Icons.account_balance_wallet_outlined, emerald, emeraldSoft,
+      LanguageService.tr('Annual income', 'বার্ষিক আয়'), _pretty(_v('annualIncomeRange'))),
+      (Icons.trending_up_rounded, emerald, emeraldSoft,
+      LanguageService.tr('Investment experience', 'বিনিয়োগের অভিজ্ঞতা'), _pretty(_v('investmentExperience'))),
+      (Icons.speed_rounded, emerald, emeraldSoft, LanguageService.tr('Risk tolerance', 'ঝুঁকি সহনশীলতা'),
+      _pretty(_v('riskTolerance'))),
     ];
 
-    final allEmpty = rows.every((r) => r.$5.isEmpty);
-
-    if (allEmpty) {
+    if (rows.every((r) => r.$5.isEmpty)) {
       return Container(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(20),
+          borderRadius: BorderRadius.circular(14),
           border: Border.all(color: line),
         ),
         child: Row(
           children: [
-            const Icon(Icons.info_outline_rounded, color: muted, size: 20),
-            const SizedBox(width: 10),
+            const Icon(Icons.info_outline_rounded, color: muted, size: 16),
+            const SizedBox(width: 8),
             Expanded(
               child: Text(
-                LanguageService.tr('No investor profile details have been added yet.',
-                    'এখনো কোনো বিনিয়োগকারী প্রোফাইল তথ্য যোগ করা হয়নি।'),
+                LanguageService.tr('No investor profile details yet. Tap the edit icon to add them.',
+                    'এখনো কোনো তথ্য যোগ করা হয়নি। যোগ করতে উপরের এডিট আইকনে চাপুন।'),
                 style: const TextStyle(fontSize: 12.5, color: muted, height: 1.4),
               ),
             ),
@@ -897,20 +888,20 @@ class _ProfilePageState extends State<ProfilePage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 40, color: goldDeep),
-            const SizedBox(height: 12),
+            Icon(icon, size: 34, color: emerald),
+            const SizedBox(height: 10),
             Text(
               text,
               textAlign: TextAlign.center,
               style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: ink),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 14),
             FilledButton(
               onPressed: onTap,
               style: FilledButton.styleFrom(
                 backgroundColor: emerald,
                 foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
               ),
               child: Text(buttonLabel),
             ),
@@ -919,46 +910,4 @@ class _ProfilePageState extends State<ProfilePage> {
       ),
     );
   }
-}
-
-// ═══════════════════════════════════════════════════════════
-// Islamic geometric pattern (dashboard er moto 8-point star)
-// ═══════════════════════════════════════════════════════════
-class _IslamicPatternPainter extends CustomPainter {
-  final Color color;
-  final double cell;
-
-  _IslamicPatternPainter({required this.color, required this.cell});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 0.9;
-
-    final r = cell * 0.34;
-
-    for (double y = 0; y <= size.height + cell; y += cell) {
-      final offsetRow = ((y / cell).round() % 2) * cell / 2;
-      for (double x = -cell; x <= size.width + cell; x += cell) {
-        final c = Offset(x + offsetRow, y);
-        for (final start in [0.0, math.pi / 4]) {
-          final path = Path();
-          for (int i = 0; i < 4; i++) {
-            final a = start + i * math.pi / 2;
-            final p = Offset(c.dx + r * math.cos(a), c.dy + r * math.sin(a));
-            i == 0 ? path.moveTo(p.dx, p.dy) : path.lineTo(p.dx, p.dy);
-          }
-          path.close();
-          canvas.drawPath(path, paint);
-        }
-        canvas.drawCircle(c, r * 0.32, paint);
-      }
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _IslamicPatternPainter old) =>
-      old.color != color || old.cell != cell;
 }

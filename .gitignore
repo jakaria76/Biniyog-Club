@@ -50,3 +50,8 @@ app.*.map.json
 # Environment Variables Secrets
 .env
 *.env
+
+# Android App Signing Secrets
+**/key.properties
+*.jks
+*.keystore

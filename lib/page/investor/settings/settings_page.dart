@@ -12,6 +12,7 @@ import '../../../services/database_service.dart';
 import '../../../services/language_service.dart';
 import '../dashboard/investor_dashboard_page.dart';
 import 'legal_web_page.dart';
+import '../../../theme/app_colors.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -34,32 +35,22 @@ class _SettingsPageState extends State<SettingsPage> {
   static const bool _publishedOnPlayStore = false;
 
   // ─── Palette (dashboard er moto) ───
-  static const Color emerald = Color(0xFF0E4A37);
-  static const Color emeraldDeep = Color(0xFF0A3327);
-  static const Color emeraldSoft = Color(0xFFE3F0E9);
-  static const Color gold = Color(0xFFB8935A);
-  static const Color goldDeep = Color(0xFF8A6A3A);
-  static const Color goldLight = Color(0xFFD9BE8C);
-  static const Color goldSoft = Color(0xFFF6EEDF);
-  static const Color turquoise = Color(0xFF167A80);
-  static const Color turquoiseSoft = Color(0xFFE0F1F1);
-  static const Color lapis = Color(0xFF26437A);
-  static const Color lapisSoft = Color(0xFFE5EAF4);
-  static const Color terracotta = Color(0xFFA5523A);
-  static const Color terracottaSoft = Color(0xFFF7E6DF);
-  static const Color ivory = Color(0xFFF7F4EE);
-  static const Color ink = Color(0xFF1C2421);
-  static const Color muted = Color(0xFF6E736F);
-  static const Color line = Color(0xFFE8E2D7);
-  static const Color danger = Color(0xFFB4413A);
-  static const Color dangerSoft = Color(0xFFFBEAE8);
+  static const Color emerald = BC.primary;
+  static const Color emeraldBright = BC.brand500; // home page er moto
+  static const Color emeraldSoft = BC.secondary;
+  static const Color ivory = BC.background;
+  static const Color ink = BC.foreground;
+  static const Color muted = BC.mutedForeground;
+  static const Color line = BC.border;
+  static const Color danger = BC.destructive;
+  static const Color dangerSoft = BC.destructiveMuted;
 
   bool _isLoading = true;
   bool _needsLogin = false;
   bool _checkingDelete = false;
 
   String _userId = '';
-  String _name = 'Investor';
+  String _name = '';
   String _email = '';
   String? _avatarUrl;
   String _phone = '';
@@ -123,7 +114,7 @@ class _SettingsPageState extends State<SettingsPage> {
     if (!mounted) return;
     setState(() {
       _userId = profile['id']?.toString() ?? userId;
-      _name = profile['name']?.toString() ?? userData?['name']?.toString() ?? 'Investor';
+      _name = profile['name']?.toString() ?? userData?['name']?.toString() ?? '';
       _email = profile['email']?.toString() ?? userEmail;
       _phone = profile['phone']?.toString() ?? userData?['phone']?.toString() ?? '';
       _avatarUrl = profile['avatarUrl']?.toString();
@@ -188,18 +179,21 @@ class _SettingsPageState extends State<SettingsPage> {
     filled: true,
     fillColor: ivory,
     labelStyle: const TextStyle(color: muted, fontSize: 13),
-    prefixIcon: const Icon(Icons.lock_outline_rounded, color: emerald, size: 20),
+    prefixIcon: const Icon(Icons.lock_outline_rounded, color: emerald, size: 19),
+    prefixIconConstraints: const BoxConstraints(minWidth: 38, minHeight: 38),
     suffixIcon: suffix,
+    isDense: true,
+    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
     border: OutlineInputBorder(
-      borderRadius: BorderRadius.circular(12),
+      borderRadius: BorderRadius.circular(10),
       borderSide: const BorderSide(color: line),
     ),
     enabledBorder: OutlineInputBorder(
-      borderRadius: BorderRadius.circular(12),
+      borderRadius: BorderRadius.circular(10),
       borderSide: const BorderSide(color: line),
     ),
     focusedBorder: OutlineInputBorder(
-      borderRadius: BorderRadius.circular(12),
+      borderRadius: BorderRadius.circular(10),
       borderSide: const BorderSide(color: emerald, width: 1.4),
     ),
   );
@@ -210,6 +204,7 @@ class _SettingsPageState extends State<SettingsPage> {
       color: muted,
       size: 20,
     ),
+    visualDensity: VisualDensity.compact,
     onPressed: onTap,
   );
 
@@ -229,7 +224,7 @@ class _SettingsPageState extends State<SettingsPage> {
       isScrollControlled: true,
       backgroundColor: Colors.white,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (sheetContext) {
         return StatefulBuilder(
@@ -242,27 +237,36 @@ class _SettingsPageState extends State<SettingsPage> {
 
             return Padding(
               padding: EdgeInsets.only(
-                top: 20,
-                left: 20,
-                right: 20,
-                bottom: MediaQuery.of(sheetContext).viewInsets.bottom + 24,
+                top: 10,
+                left: 16,
+                right: 16,
+                bottom: MediaQuery.of(sheetContext).viewInsets.bottom + 18,
               ),
               child: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    Center(
+                      child: Container(
+                        width: 36,
+                        height: 4,
+                        margin: const EdgeInsets.only(bottom: 6),
+                        decoration: BoxDecoration(color: line, borderRadius: BorderRadius.circular(4)),
+                      ),
+                    ),
                     Row(
                       children: [
                         Expanded(
                           child: Text(
                             LanguageService.tr('Change Password', 'পাসওয়ার্ড পরিবর্তন'),
                             style: const TextStyle(
-                                fontSize: 18, fontWeight: FontWeight.w700, color: ink),
+                                fontSize: 16, fontWeight: FontWeight.w700, color: ink),
                           ),
                         ),
                         IconButton(
-                          icon: const Icon(Icons.close_rounded),
+                          icon: const Icon(Icons.close_rounded, size: 20),
+                          visualDensity: VisualDensity.compact,
                           onPressed: () => Navigator.pop(sheetContext),
                         ),
                       ],
@@ -270,9 +274,9 @@ class _SettingsPageState extends State<SettingsPage> {
                     Text(
                       LanguageService.tr('Use at least 8 characters.',
                           'কমপক্ষে ৮ অক্ষরের পাসওয়ার্ড দিন।'),
-                      style: const TextStyle(fontSize: 12, color: muted),
+                      style: const TextStyle(fontSize: 12.5, color: muted),
                     ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 12),
                     TextField(
                       controller: currentCtrl,
                       obscureText: !showCurrent,
@@ -282,7 +286,7 @@ class _SettingsPageState extends State<SettingsPage> {
                                 () => setModalState(() => showCurrent = !showCurrent)),
                       ),
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 8),
                     TextField(
                       controller: newCtrl,
                       obscureText: !showNew,
@@ -291,7 +295,7 @@ class _SettingsPageState extends State<SettingsPage> {
                         suffix: _eye(showNew, () => setModalState(() => showNew = !showNew)),
                       ),
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 8),
                     TextField(
                       controller: confirmCtrl,
                       obscureText: !showConfirm,
@@ -301,7 +305,7 @@ class _SettingsPageState extends State<SettingsPage> {
                                 () => setModalState(() => showConfirm = !showConfirm)),
                       ),
                     ),
-                    const SizedBox(height: 20),
+                    const SizedBox(height: 14),
                     FilledButton(
                       onPressed: saving
                           ? null
@@ -362,18 +366,18 @@ class _SettingsPageState extends State<SettingsPage> {
                       style: FilledButton.styleFrom(
                         backgroundColor: emerald,
                         foregroundColor: Colors.white,
-                        minimumSize: const Size(double.infinity, 52),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                        minimumSize: const Size(double.infinity, 44),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       ),
                       child: saving
                           ? const SizedBox(
-                        width: 20,
-                        height: 20,
+                        width: 18,
+                        height: 18,
                         child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
                       )
                           : Text(
                         LanguageService.tr('Update Password', 'পাসওয়ার্ড আপডেট করুন'),
-                        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+                        style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700),
                       ),
                     ),
                   ],
@@ -415,16 +419,16 @@ class _SettingsPageState extends State<SettingsPage> {
       builder: (dialogContext) => AlertDialog(
         backgroundColor: Colors.white,
         surfaceTintColor: Colors.transparent,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: Text(
           LanguageService.tr('Sign out', 'সাইন আউট'),
-          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: ink),
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: ink),
         ),
         content: Text(
           LanguageService.tr(
               'Are you sure you want to sign out of your Biniyog Club account?',
               'আপনি কি নিশ্চিত যে অ্যাকাউন্ট থেকে সাইন আউট করতে চান?'),
-          style: const TextStyle(fontSize: 13.5, color: muted, height: 1.45),
+          style: const TextStyle(fontSize: 13, color: muted, height: 1.45),
         ),
         actions: [
           TextButton(
@@ -482,15 +486,15 @@ class _SettingsPageState extends State<SettingsPage> {
       builder: (dialogContext) => AlertDialog(
         backgroundColor: Colors.white,
         surfaceTintColor: Colors.transparent,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: Row(
           children: [
-            const Icon(Icons.info_outline_rounded, color: goldDeep, size: 22),
+            const Icon(Icons.info_outline_rounded, color: BC.chart4Deep, size: 22),
             const SizedBox(width: 8),
             Expanded(
               child: Text(
                 LanguageService.tr('Account can’t be deleted yet', 'এখন অ্যাকাউন্ট ডিলিট করা যাবে না'),
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: ink),
+                style: const TextStyle(fontSize: 15.5, fontWeight: FontWeight.w700, color: ink),
               ),
             ),
           ],
@@ -510,7 +514,7 @@ class _SettingsPageState extends State<SettingsPage> {
               width: double.infinity,
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: goldSoft,
+                color: BC.chart4Muted,
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Column(
@@ -520,13 +524,13 @@ class _SettingsPageState extends State<SettingsPage> {
                     Text(
                       LanguageService.tr('Project investments: $projectOpen',
                           'প্রজেক্ট বিনিয়োগ: $projectOpen টি'),
-                      style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: goldDeep),
+                      style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: BC.chart4Deep),
                     ),
                   if (groupOpen > 0)
                     Text(
                       LanguageService.tr('Group investments: $groupOpen',
                           'গ্রুপ বিনিয়োগ: $groupOpen টি'),
-                      style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: goldDeep),
+                      style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: BC.chart4Deep),
                     ),
                 ],
               ),
@@ -544,7 +548,7 @@ class _SettingsPageState extends State<SettingsPage> {
               Navigator.pop(dialogContext);
               _open(_hotlineTel);
             },
-            icon: const Icon(Icons.call_rounded, size: 18),
+            icon: const Icon(Icons.call_rounded, size: 20),
             label: Text(LanguageService.tr('Call support', 'সাপোর্টে কল করুন')),
             style: FilledButton.styleFrom(
               backgroundColor: emerald,
@@ -571,7 +575,7 @@ class _SettingsPageState extends State<SettingsPage> {
             return AlertDialog(
               backgroundColor: Colors.white,
               surfaceTintColor: Colors.transparent,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
               title: Row(
                 children: [
                   const Icon(Icons.warning_amber_rounded, color: danger, size: 22),
@@ -579,7 +583,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   Expanded(
                     child: Text(
                       LanguageService.tr('Delete Account', 'অ্যাকাউন্ট ডিলিট করুন'),
-                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: danger),
+                      style: const TextStyle(fontSize: 15.5, fontWeight: FontWeight.w700, color: danger),
                     ),
                   ),
                 ],
@@ -599,15 +603,15 @@ class _SettingsPageState extends State<SettingsPage> {
                     Container(
                       padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(
-                        color: goldSoft,
+                        color: emeraldSoft,
                         borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: gold.withAlpha(90)),
+                        border: Border.all(color: emerald.withAlpha(60)),
                       ),
                       child: Text(
                         LanguageService.tr(
                             'Logging in within 30 days will cancel the deletion and restore your account.',
                             '৩০ দিনের মধ্যে লগইন করলে ডিলিট বাতিল হবে এবং অ্যাকাউন্ট ফিরে পাবেন।'),
-                        style: const TextStyle(fontSize: 11.5, color: goldDeep, height: 1.35),
+                        style: const TextStyle(fontSize: 12.5, color: emerald, height: 1.35),
                       ),
                     ),
                     const SizedBox(height: 16),
@@ -695,17 +699,18 @@ class _SettingsPageState extends State<SettingsPage> {
             backgroundColor: ivory,
             surfaceTintColor: Colors.transparent,
             elevation: 0,
+            toolbarHeight: 54,
             iconTheme: const IconThemeData(color: ink),
             title: Text(
               LanguageService.tr('Settings', 'সেটিংস'),
-              style: const TextStyle(color: ink, fontWeight: FontWeight.w700, fontSize: 18),
+              style: const TextStyle(color: ink, fontWeight: FontWeight.w700, fontSize: 17.5),
             ),
           ),
           body: _isLoading
               ? const Center(
             child: SizedBox(
-              width: 28,
-              height: 28,
+              width: 26,
+              height: 26,
               child: CircularProgressIndicator(color: emerald, strokeWidth: 2.4),
             ),
           )
@@ -716,30 +721,30 @@ class _SettingsPageState extends State<SettingsPage> {
             color: emerald,
             child: ListView(
               physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.fromLTRB(18, 6, 18, 40),
+              padding: EdgeInsets.fromLTRB(16, 2, 16, 24 + MediaQuery.of(context).padding.bottom),
               children: [
                 _buildProfileCard(),
-                const SizedBox(height: 24),
+                const SizedBox(height: 16),
                 _sectionHeader(LanguageService.tr('Preferences', 'পছন্দসমূহ')),
-                const SizedBox(height: 12),
+                const SizedBox(height: 8),
                 _buildLanguageCard(),
-                const SizedBox(height: 24),
+                const SizedBox(height: 16),
                 _sectionHeader(LanguageService.tr('Security', 'নিরাপত্তা')),
-                const SizedBox(height: 12),
+                const SizedBox(height: 8),
                 _buildSecurityCard(),
-                const SizedBox(height: 24),
+                const SizedBox(height: 16),
                 _sectionHeader(LanguageService.tr('Help & Support', 'সাহায্য ও সাপোর্ট')),
-                const SizedBox(height: 12),
+                const SizedBox(height: 8),
                 _buildSupportCard(),
-                const SizedBox(height: 24),
+                const SizedBox(height: 16),
                 _sectionHeader(LanguageService.tr('Legal', 'আইনি তথ্য')),
-                const SizedBox(height: 12),
+                const SizedBox(height: 8),
                 _buildLegalCard(),
-                const SizedBox(height: 24),
+                const SizedBox(height: 16),
                 _buildSignOutButton(),
-                const SizedBox(height: 14),
+                const SizedBox(height: 10),
                 _buildDangerCard(),
-                const SizedBox(height: 24),
+                const SizedBox(height: 18),
                 _buildAppInfo(),
               ],
             ),
@@ -756,21 +761,21 @@ class _SettingsPageState extends State<SettingsPage> {
         Transform.rotate(
           angle: math.pi / 4,
           child: Container(
-            width: 8,
-            height: 8,
+            width: 6,
+            height: 6,
             decoration: const BoxDecoration(
-              gradient: LinearGradient(colors: [goldLight, gold]),
+              gradient: LinearGradient(colors: [emeraldBright, emerald]),
             ),
           ),
         ),
-        const SizedBox(width: 10),
+        const SizedBox(width: 8),
         Text(
-          title,
+          title.toUpperCase(),
           style: const TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.w700,
-            color: ink,
-            letterSpacing: -0.2,
+            fontSize: 12,
+            fontWeight: FontWeight.w800,
+            color: muted,
+            letterSpacing: 1,
           ),
         ),
       ],
@@ -781,7 +786,7 @@ class _SettingsPageState extends State<SettingsPage> {
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(color: line),
       ),
       clipBehavior: Clip.antiAlias,
@@ -789,7 +794,7 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
-  Widget _divider() => const Divider(height: 1, thickness: 1, color: line, indent: 66);
+  Widget _divider() => const Divider(height: 1, thickness: 1, color: line, indent: 54);
 
   Widget _tile({
     required IconData icon,
@@ -803,32 +808,32 @@ class _SettingsPageState extends State<SettingsPage> {
     return InkWell(
       onTap: onTap,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         child: Row(
           children: [
             Container(
-              width: 40,
-              height: 40,
+              width: 32,
+              height: 32,
               decoration: BoxDecoration(
                 color: soft,
-                borderRadius: BorderRadius.circular(12),
+                borderRadius: BorderRadius.circular(9),
               ),
-              child: Icon(icon, color: color, size: 20),
+              child: Icon(icon, color: color, size: 18),
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: 10),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
                     title,
-                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: ink),
+                    style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700, color: ink),
                   ),
                   if (subtitle != null && subtitle.isNotEmpty) ...[
-                    const SizedBox(height: 2),
+                    const SizedBox(height: 1),
                     Text(
                       subtitle,
-                      style: const TextStyle(fontSize: 11.5, color: muted, height: 1.3),
+                      style: const TextStyle(fontSize: 12, color: muted, height: 1.3),
                     ),
                   ],
                 ],
@@ -836,7 +841,7 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
             if (trailing != null) ...[const SizedBox(width: 8), trailing]
             else if (onTap != null)
-              Icon(Icons.chevron_right_rounded, color: muted.withAlpha(150), size: 22),
+              Icon(Icons.chevron_right_rounded, color: muted.withAlpha(150), size: 19),
           ],
         ),
       ),
@@ -845,92 +850,73 @@ class _SettingsPageState extends State<SettingsPage> {
 
   // ─── Profile card ─────────────────────────────────────────
   Widget _buildProfileCard() {
-    final initial = _name.isNotEmpty ? _name[0].toUpperCase() : 'I';
+    final initial = _name.trim().isNotEmpty ? _name.trim()[0].toUpperCase() : '';
+    final Widget fallback = initial.isEmpty
+        ? const Icon(Icons.person_rounded, color: Colors.white, size: 24)
+        : Text(initial,
+        style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w700));
     // Email optional — na thakle phone dekhai
     final contact = _email.isNotEmpty ? _email : _phone;
 
     return ClipRRect(
-      borderRadius: BorderRadius.circular(24),
+      borderRadius: BorderRadius.circular(16),
       child: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
-            colors: [Color(0xFF125A43), emeraldDeep, Color(0xFF0B2A3A)],
+            colors: [emeraldBright, emerald],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
           ),
         ),
         child: Stack(
           children: [
-            Positioned.fill(
-              child: CustomPaint(
-                painter: _IslamicPatternPainter(color: Colors.white.withAlpha(16), cell: 44),
-              ),
-            ),
-            Positioned.fill(
-              child: Container(
-                margin: const EdgeInsets.all(7),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(color: gold.withAlpha(80), width: 0.8),
-                ),
-              ),
-            ),
             Padding(
-              padding: const EdgeInsets.all(20),
+              padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
               child: Row(
                 children: [
                   Container(
                     padding: const EdgeInsets.all(2),
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      border: Border.all(color: gold, width: 1.4),
+                      border: Border.all(color: Colors.white.withAlpha(170), width: 1.4),
                     ),
                     child: CircleAvatar(
-                      radius: 28,
+                      radius: 22,
                       backgroundColor: emerald,
                       child: ClipOval(
                         child: (_avatarUrl != null && _avatarUrl!.isNotEmpty)
                             ? Image.network(
                           _avatarUrl!,
-                          width: 56,
-                          height: 56,
+                          width: 44,
+                          height: 44,
                           fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) => Text(
-                            initial,
-                            style: const TextStyle(
-                                color: Colors.white, fontSize: 22, fontWeight: FontWeight.w600),
-                          ),
+                          errorBuilder: (_, __, ___) => fallback,
                         )
-                            : Text(
-                          initial,
-                          style: const TextStyle(
-                              color: Colors.white, fontSize: 22, fontWeight: FontWeight.w600),
-                        ),
+                            : fallback,
                       ),
                     ),
                   ),
-                  const SizedBox(width: 14),
+                  const SizedBox(width: 12),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          _name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
+                          _name.isEmpty ? '—' : _name,
                           style: const TextStyle(
                             color: Colors.white,
-                            fontSize: 17,
-                            fontWeight: FontWeight.w700,
+                            fontSize: 15.5,
+                            fontWeight: FontWeight.w800,
+                            height: 1.25,
                           ),
                         ),
-                        const SizedBox(height: 2),
-                        Text(
-                          contact,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(color: Colors.white.withAlpha(170), fontSize: 12),
-                        ),
+                        if (contact.isNotEmpty) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            contact,
+                            style: TextStyle(color: Colors.white.withAlpha(170), fontSize: 12.5),
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -958,11 +944,11 @@ class _SettingsPageState extends State<SettingsPage> {
           },
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 180),
-            padding: const EdgeInsets.symmetric(vertical: 11),
+            padding: const EdgeInsets.symmetric(vertical: 7),
             alignment: Alignment.center,
             decoration: BoxDecoration(
               color: selected ? emerald : Colors.transparent,
-              borderRadius: BorderRadius.circular(11),
+              borderRadius: BorderRadius.circular(8),
             ),
             child: Text(
               label,
@@ -978,45 +964,44 @@ class _SettingsPageState extends State<SettingsPage> {
     }
 
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(color: line),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
         children: [
-          Row(
-            children: [
-              Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: lapisSoft,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: const Icon(Icons.translate_rounded, color: lapis, size: 20),
-              ),
-              const SizedBox(width: 12),
-              const Text(
-                'Language / ভাষা',
-                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: ink),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
           Container(
-            padding: const EdgeInsets.all(4),
+            width: 32,
+            height: 32,
             decoration: BoxDecoration(
-              color: ivory,
-              borderRadius: BorderRadius.circular(14),
+              color: emeraldSoft,
+              borderRadius: BorderRadius.circular(9),
             ),
-            child: Row(
-              children: [
-                option('English', !isBangla, 'en'),
-                option('বাংলা', isBangla, 'bn'),
-              ],
+            child: const Icon(Icons.translate_rounded, color: emerald, size: 18),
+          ),
+          const SizedBox(width: 10),
+          const Expanded(
+            child: Text(
+              'Language / ভাষা',
+              style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700, color: ink),
+            ),
+          ),
+          SizedBox(
+            width: 150,
+            child: Container(
+              padding: const EdgeInsets.all(3),
+              decoration: BoxDecoration(
+                color: ivory,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                children: [
+                  option('English', !isBangla, 'en'),
+                  option('বাংলা', isBangla, 'bn'),
+                ],
+              ),
             ),
           ),
         ],
@@ -1040,8 +1025,8 @@ class _SettingsPageState extends State<SettingsPage> {
         _divider(),
         _tile(
           icon: Icons.fingerprint_rounded,
-          color: turquoise,
-          soft: turquoiseSoft,
+          color: emerald,
+          soft: emeraldSoft,
           title: LanguageService.tr('App Lock', 'অ্যাপ লক'),
           subtitle: LanguageService.tr(
               'Ask for fingerprint, face or phone PIN when opening the app',
@@ -1061,20 +1046,20 @@ class _SettingsPageState extends State<SettingsPage> {
   Widget _buildSupportCard() {
     Widget row(IconData icon, Color color, Color soft, String label, String value) {
       return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 8),
+        padding: const EdgeInsets.symmetric(vertical: 6),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Container(
-              width: 36,
-              height: 36,
+              width: 30,
+              height: 30,
               decoration: BoxDecoration(
                 color: soft,
-                borderRadius: BorderRadius.circular(11),
+                borderRadius: BorderRadius.circular(9),
               ),
-              child: Icon(icon, color: color, size: 18),
+              child: Icon(icon, color: color, size: 17),
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: 10),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1082,18 +1067,18 @@ class _SettingsPageState extends State<SettingsPage> {
                   Text(
                     label.toUpperCase(),
                     style: const TextStyle(
-                      fontSize: 9.5,
-                      fontWeight: FontWeight.w700,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w800,
                       color: muted,
                       letterSpacing: 0.6,
                     ),
                   ),
-                  const SizedBox(height: 2),
+                  const SizedBox(height: 1),
                   // Long-press kore copy kora jay
                   SelectableText(
                     value,
                     style: const TextStyle(
-                      fontSize: 13.5,
+                      fontSize: 13,
                       fontWeight: FontWeight.w600,
                       color: ink,
                       height: 1.35,
@@ -1108,26 +1093,26 @@ class _SettingsPageState extends State<SettingsPage> {
     }
 
     return Container(
-      padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+      padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(color: line),
       ),
       child: Column(
         children: [
           row(Icons.call_rounded, emerald, emeraldSoft,
               LanguageService.tr('Hotline', 'হটলাইন'), _hotlineDisplay),
-          row(Icons.mail_outline_rounded, lapis, lapisSoft,
+          row(Icons.mail_outline_rounded, emerald, emeraldSoft,
               LanguageService.tr('Email', 'ইমেইল'), _supportEmail),
-          row(Icons.schedule_rounded, goldDeep, goldSoft,
+          row(Icons.schedule_rounded, emerald, emeraldSoft,
               LanguageService.tr('Office Hours', 'অফিস সময়'),
               LanguageService.tr('Saturday – Thursday, 9:00 AM – 6:00 PM',
                   'শনিবার – বৃহস্পতিবার, সকাল ৯টা – সন্ধ্যা ৬টা')),
-          row(Icons.location_on_outlined, terracotta, terracottaSoft,
+          row(Icons.location_on_outlined, emerald, emeraldSoft,
               LanguageService.tr('Office Address', 'অফিসের ঠিকানা'),
               '$_officeAddress, Bangladesh'),
-          row(Icons.language_rounded, turquoise, turquoiseSoft,
+          row(Icons.language_rounded, emerald, emeraldSoft,
               LanguageService.tr('Website', 'ওয়েবসাইট'), 'www.biniyogclub.com'),
         ],
       ),
@@ -1151,8 +1136,8 @@ class _SettingsPageState extends State<SettingsPage> {
       _divider(),
       _tile(
         icon: Icons.privacy_tip_outlined,
-        color: lapis,
-        soft: lapisSoft,
+        color: emerald,
+        soft: emeraldSoft,
         title: LanguageService.tr('Privacy Policy', 'গোপনীয়তা নীতি'),
         subtitle: LanguageService.tr('How your data is collected and used',
             'আপনার তথ্য কীভাবে সংগ্রহ ও ব্যবহার হয়'),
@@ -1162,8 +1147,8 @@ class _SettingsPageState extends State<SettingsPage> {
       _divider(),
       _tile(
         icon: Icons.gpp_maybe_outlined,
-        color: terracotta,
-        soft: terracottaSoft,
+        color: emerald,
+        soft: emeraldSoft,
         title: LanguageService.tr('About & Risk Disclosures', 'আমাদের সম্পর্কে ও ঝুঁকি'),
         subtitle: LanguageService.tr('Investment risks you should know',
             'বিনিয়োগের ঝুঁকি সম্পর্কে জানুন'),
@@ -1173,8 +1158,8 @@ class _SettingsPageState extends State<SettingsPage> {
       _divider(),
       _tile(
         icon: Icons.verified_user_outlined,
-        color: goldDeep,
-        soft: goldSoft,
+        color: emerald,
+        soft: emeraldSoft,
         title: LanguageService.tr('FAQ', 'সাধারণ প্রশ্নোত্তর'),
         subtitle: LanguageService.tr('Security and common questions',
             'নিরাপত্তা ও সাধারণ প্রশ্ন'),
@@ -1194,9 +1179,9 @@ class _SettingsPageState extends State<SettingsPage> {
         foregroundColor: ink,
         side: const BorderSide(color: line),
         backgroundColor: Colors.white,
-        minimumSize: const Size(double.infinity, 50),
-        textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        minimumSize: const Size(double.infinity, 44),
+        textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
     );
   }
@@ -1205,7 +1190,7 @@ class _SettingsPageState extends State<SettingsPage> {
     return Container(
       decoration: BoxDecoration(
         color: dangerSoft,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(color: danger.withAlpha(60)),
       ),
       clipBehavior: Clip.antiAlias,
@@ -1219,11 +1204,11 @@ class _SettingsPageState extends State<SettingsPage> {
             'চলমান বা অপেক্ষমান বিনিয়োগ না থাকলেই সম্ভব। ৩০ দিনের মধ্যে ফেরত আনা যাবে।'),
         trailing: _checkingDelete
             ? const SizedBox(
-          width: 18,
-          height: 18,
+          width: 16,
+          height: 16,
           child: CircularProgressIndicator(color: danger, strokeWidth: 2),
         )
-            : const Icon(Icons.chevron_right_rounded, color: danger, size: 22),
+            : const Icon(Icons.chevron_right_rounded, color: danger, size: 19),
         onTap: _checkingDelete ? null : _startDeleteFlow,
       ),
     );
@@ -1237,17 +1222,17 @@ class _SettingsPageState extends State<SettingsPage> {
       children: [
         Image.asset(
           'assets/images/logo_full.png',
-          height: 30,
+          height: 24,
           errorBuilder: (_, __, ___) => const Text(
             'Biniyog Club',
-            style: TextStyle(color: emerald, fontSize: 17, fontWeight: FontWeight.w700),
+            style: TextStyle(color: emerald, fontSize: 16, fontWeight: FontWeight.w700),
           ),
         ),
         if (_version.isNotEmpty) ...[
           const SizedBox(height: 6),
           Text(
             '${LanguageService.tr('Version', 'ভার্সন')} $_version ($_buildNumber)',
-            style: const TextStyle(fontSize: 11.5, color: muted),
+            style: const TextStyle(fontSize: 12, color: muted),
           ),
         ],
         if (showStoreButton) ...[
@@ -1257,7 +1242,7 @@ class _SettingsPageState extends State<SettingsPage> {
               'https://play.google.com/store/apps/details?id=$_packageName',
               mode: LaunchMode.externalApplication,
             ),
-            icon: const Icon(Icons.system_update_alt_rounded, size: 18, color: emerald),
+            icon: const Icon(Icons.system_update_alt_rounded, size: 20, color: emerald),
             label: Text(
               LanguageService.tr('Check for updates on Play Store', 'প্লে স্টোরে আপডেট দেখুন'),
               style: const TextStyle(color: emerald, fontWeight: FontWeight.w600),
@@ -1275,15 +1260,15 @@ class _SettingsPageState extends State<SettingsPage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.lock_outline_rounded, size: 40, color: goldDeep),
-            const SizedBox(height: 12),
+            const Icon(Icons.lock_outline_rounded, size: 34, color: emerald),
+            const SizedBox(height: 10),
             Text(
               LanguageService.tr('Please log in to see your settings',
                   'সেটিংস দেখতে লগইন করুন'),
               textAlign: TextAlign.center,
               style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: ink),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 14),
             FilledButton(
               onPressed: _goToLogin,
               style: FilledButton.styleFrom(
@@ -1298,46 +1283,4 @@ class _SettingsPageState extends State<SettingsPage> {
       ),
     );
   }
-}
-
-// ═══════════════════════════════════════════════════════════
-// Islamic geometric pattern (dashboard er moto 8-point star)
-// ═══════════════════════════════════════════════════════════
-class _IslamicPatternPainter extends CustomPainter {
-  final Color color;
-  final double cell;
-
-  _IslamicPatternPainter({required this.color, required this.cell});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 0.9;
-
-    final r = cell * 0.34;
-
-    for (double y = 0; y <= size.height + cell; y += cell) {
-      final offsetRow = ((y / cell).round() % 2) * cell / 2;
-      for (double x = -cell; x <= size.width + cell; x += cell) {
-        final c = Offset(x + offsetRow, y);
-        for (final start in [0.0, math.pi / 4]) {
-          final path = Path();
-          for (int i = 0; i < 4; i++) {
-            final a = start + i * math.pi / 2;
-            final p = Offset(c.dx + r * math.cos(a), c.dy + r * math.sin(a));
-            i == 0 ? path.moveTo(p.dx, p.dy) : path.lineTo(p.dx, p.dy);
-          }
-          path.close();
-          canvas.drawPath(path, paint);
-        }
-        canvas.drawCircle(c, r * 0.32, paint);
-      }
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _IslamicPatternPainter old) =>
-      old.color != color || old.cell != cell;
 }

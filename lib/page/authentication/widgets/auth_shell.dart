@@ -3,18 +3,21 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../../theme/app_colors.dart';
+
 /// Login / Registration er common design:
-/// upore emerald header (Islamic pattern), niche shada card e form.
+/// upore dashboard er moto sobuj header (kono pattern / sonali nei), niche shada card e form.
 class AuthShell extends StatelessWidget {
-  static const Color emerald = Color(0xFF0E4A37);
-  static const Color emeraldDeep = Color(0xFF0A3327);
-  static const Color gold = Color(0xFFB8935A);
-  static const Color goldLight = Color(0xFFD9BE8C);
-  static const Color ivory = Color(0xFFF7F4EE);
-  static const Color ink = Color(0xFF1C2421);
-  static const Color muted = Color(0xFF6E736F);
-  static const Color line = Color(0xFFE8E2D7);
-  static const Color danger = Color(0xFFB4413A);
+  // ─── Palette — website er rong (lib/theme/app_colors.dart), dashboard er moto ───
+  static const Color emerald = BC.primary;
+  static const Color emeraldBright = BC.brand500;
+  static const Color emeraldDeep = BC.brand800;
+  static const Color ivory = BC.background;
+  static const Color ink = BC.foreground;
+  static const Color muted = BC.mutedForeground;
+  static const Color line = BC.border;
+  static const Color danger = BC.destructive;
+  static const Color dangerSoft = BC.destructiveMuted;
 
   final String eyebrow;
   final String title;
@@ -56,18 +59,13 @@ class AuthShell extends StatelessWidget {
                     width: double.infinity,
                     decoration: const BoxDecoration(
                       gradient: LinearGradient(
-                        colors: [Color(0xFF125A43), emeraldDeep, Color(0xFF0B2A3A)],
+                        colors: [emeraldBright, emerald],
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
                       ),
                     ),
                     child: Stack(
                       children: [
-                        Positioned.fill(
-                          child: CustomPaint(
-                            painter: AuthPatternPainter(color: Colors.white.withAlpha(16), cell: 46),
-                          ),
-                        ),
                         Padding(
                           padding: EdgeInsets.fromLTRB(22, topPad + (canPop ? 4 : 28), 22, 64),
                           child: Column(
@@ -89,14 +87,14 @@ class AuthShell extends StatelessWidget {
                                 children: [
                                   Transform.rotate(
                                     angle: math.pi / 4,
-                                    child: Container(width: 8, height: 8, color: goldLight),
+                                    child: Container(width: 8, height: 8, color: Colors.white),
                                   ),
                                   const SizedBox(width: 10),
                                   Text(
                                     eyebrow.toUpperCase(),
-                                    style: const TextStyle(
-                                      color: goldLight,
-                                      fontSize: 11.5,
+                                    style: TextStyle(
+                                      color: Colors.white.withAlpha(215),
+                                      fontSize: 12.5,
                                       fontWeight: FontWeight.w700,
                                       letterSpacing: 1.6,
                                     ),
@@ -116,7 +114,7 @@ class AuthShell extends StatelessWidget {
                               const SizedBox(height: 8),
                               Text(
                                 subtitle,
-                                style: TextStyle(color: Colors.white.withAlpha(195), fontSize: 14, height: 1.45),
+                                style: TextStyle(color: Colors.white.withAlpha(195), fontSize: 15, height: 1.45),
                               ),
                               if (highlights.isNotEmpty) ...[
                                 const SizedBox(height: 18),
@@ -130,17 +128,17 @@ class AuthShell extends StatelessWidget {
                                         decoration: BoxDecoration(
                                           color: Colors.white.withAlpha(20),
                                           borderRadius: BorderRadius.circular(20),
-                                          border: Border.all(color: goldLight.withAlpha(70)),
+                                          border: Border.all(color: Colors.white.withAlpha(60)),
                                         ),
                                         child: Row(
                                           mainAxisSize: MainAxisSize.min,
                                           children: [
-                                            Icon(h.$1, size: 14, color: goldLight),
+                                            Icon(h.$1, size: 15, color: Colors.white),
                                             const SizedBox(width: 6),
                                             Text(
                                               h.$2,
                                               style: const TextStyle(
-                                                  color: Colors.white, fontSize: 11.5, fontWeight: FontWeight.w600),
+                                                  color: Colors.white, fontSize: 12.5, fontWeight: FontWeight.w600),
                                             ),
                                           ],
                                         ),
@@ -203,7 +201,7 @@ class AuthShell extends StatelessWidget {
       child: Text.rich(
         TextSpan(
           text: text,
-          style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w800, color: ink, letterSpacing: 0.9),
+          style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w800, color: ink, letterSpacing: 0.9),
           children: [
             if (isRequired) const TextSpan(text: ' *', style: TextStyle(color: danger)),
           ],
@@ -215,7 +213,7 @@ class AuthShell extends StatelessWidget {
   static InputDecoration dec(String hint, IconData icon) {
     return InputDecoration(
       hintText: hint.isEmpty ? null : hint,
-      hintStyle: TextStyle(fontSize: 14, color: muted.withAlpha(150)),
+      hintStyle: TextStyle(fontSize: 15, color: muted.withAlpha(150)),
       prefixIcon: Icon(icon, color: muted, size: 20),
       filled: true,
       fillColor: ivory,
@@ -235,13 +233,13 @@ class AuthShell extends StatelessWidget {
   static Widget errorBox(String text) {
     return Container(
       padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(color: const Color(0xFFFBEAE8), borderRadius: BorderRadius.circular(12)),
+      decoration: BoxDecoration(color: dangerSoft, borderRadius: BorderRadius.circular(12)),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Icon(Icons.error_outline_rounded, size: 17, color: danger),
           const SizedBox(width: 8),
-          Expanded(child: Text(text, style: const TextStyle(fontSize: 12.5, color: danger, height: 1.4))),
+          Expanded(child: Text(text, style: const TextStyle(fontSize: 13.5, color: danger, height: 1.4))),
         ],
       ),
     );
@@ -303,7 +301,7 @@ class AuthShell extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Flexible(
-            child: Text(question, style: const TextStyle(color: muted, fontSize: 13.5)),
+            child: Text(question, style: const TextStyle(color: muted, fontSize: 14.5)),
           ),
           InkWell(
             onTap: onTap,
@@ -312,7 +310,7 @@ class AuthShell extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
               child: Text(
                 action,
-                style: const TextStyle(color: emerald, fontWeight: FontWeight.w800, fontSize: 14),
+                style: const TextStyle(color: emerald, fontWeight: FontWeight.w800, fontSize: 15),
               ),
             ),
           ),
@@ -320,42 +318,4 @@ class AuthShell extends StatelessWidget {
       ),
     );
   }
-}
-
-/// Dashboard er moto 8-point star pattern
-class AuthPatternPainter extends CustomPainter {
-  final Color color;
-  final double cell;
-
-  AuthPatternPainter({required this.color, required this.cell});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 0.9;
-    final r = cell * 0.34;
-
-    for (double y = 0; y <= size.height + cell; y += cell) {
-      final offsetRow = ((y / cell).round() % 2) * cell / 2;
-      for (double x = -cell; x <= size.width + cell; x += cell) {
-        final c = Offset(x + offsetRow, y);
-        for (final start in [0.0, math.pi / 4]) {
-          final path = Path();
-          for (int i = 0; i < 4; i++) {
-            final a = start + i * math.pi / 2;
-            final p = Offset(c.dx + r * math.cos(a), c.dy + r * math.sin(a));
-            i == 0 ? path.moveTo(p.dx, p.dy) : path.lineTo(p.dx, p.dy);
-          }
-          path.close();
-          canvas.drawPath(path, paint);
-        }
-        canvas.drawCircle(c, r * 0.32, paint);
-      }
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant AuthPatternPainter old) => old.color != color || old.cell != cell;
 }

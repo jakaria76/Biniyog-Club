@@ -7,6 +7,25 @@
   "client": [
     {
       "client_info": {
+        "mobilesdk_app_id": "1:1001140430881:android:fc90ab61d7251fc1689b60",
+        "android_client_info": {
+          "package_name": "com.biniyogclub.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBeomejHMRBg_vwppG1c6vDS2jBTPL0vyc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
         "mobilesdk_app_id": "1:1001140430881:android:a1569a86703c38f5689b60",
         "android_client_info": {
           "package_name": "com.example.biniyog_club"

@@ -1,9 +1,14 @@
 import 'package:flutter/material.dart';
 
+/// Website er "quote" er motoi choto banner — emerald + gold
 class QuoteBanner extends StatelessWidget {
+  static const Color emerald = Color(0xFF0E4A37);
+  static const Color emeraldDeep = Color(0xFF0A3327);
+  static const Color goldLight = Color(0xFFD9BE8C);
+
   final String quote;
   final String quoteAuthor;
-  final String? imageUrl;
+  final String? imageUrl; // purono call gulo jate compile kore — ekhon use hoy na
 
   const QuoteBanner({
     super.key,
@@ -16,68 +21,39 @@ class QuoteBanner extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 18),
+      decoration: const BoxDecoration(
         gradient: LinearGradient(
-          colors: [
-            Colors.teal.shade800,
-            Colors.teal.shade600,
-          ],
+          colors: [Color(0xFF125A43), emeraldDeep],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(
-                Icons.format_quote_rounded,
-                color: Colors.white.withOpacity(0.8),
-                size: 28,
-              ),
-              const SizedBox(width: 8),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: const Text(
-                  'Verified Platform',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
+      child: IntrinsicHeight(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Website er moto bam pashe sonali dag
+            Container(width: 2, color: goldLight.withAlpha(170)),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '“$quote”',
+                    style: TextStyle(color: Colors.white.withAlpha(225), fontSize: 13.5, height: 1.45),
                   ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(
-            '"$quote"',
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 13.5,
-              fontStyle: FontStyle.italic,
-              height: 1.4,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Align(
-            alignment: Alignment.centerRight,
-            child: Text(
-              '— $quoteAuthor',
-              style: TextStyle(
-                color: Colors.teal.shade100,
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
+                  const SizedBox(height: 8),
+                  Text(
+                    '— $quoteAuthor',
+                    style: const TextStyle(color: goldLight, fontSize: 12, fontWeight: FontWeight.w700),
+                  ),
+                ],
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

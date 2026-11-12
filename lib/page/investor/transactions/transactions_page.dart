@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../../services/auth_service.dart';
 import '../../../services/database_service.dart';
+import '../../../theme/app_colors.dart';
 
 class TransactionsPage extends StatefulWidget {
   const TransactionsPage({super.key});
@@ -25,12 +26,12 @@ class _TransactionsPageState extends State<TransactionsPage> {
   };
 
   static const Map<String, Color> statusColors = {
-    'PENDING': Colors.amber,
-    'PROCESSING': Colors.blue,
-    'COMPLETED': Colors.green,
-    'FAILED': Colors.red,
-    'REFUNDED': Colors.grey,
-    'CANCELLED': Colors.grey,
+    'PENDING': BC.warning,
+    'PROCESSING': BC.info,
+    'COMPLETED': BC.success,
+    'FAILED': BC.destructive,
+    'REFUNDED': BC.neutral,
+    'CANCELLED': BC.neutral,
   };
 
   @override
@@ -57,9 +58,9 @@ class _TransactionsPageState extends State<TransactionsPage> {
 
   String _fmtBdt(double amount) {
     return '৳${amount.toStringAsFixed(0).replaceAllMapped(
-          RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'),
+      RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'),
           (Match m) => '${m[1]},',
-        )}';
+    )}';
   }
 
   List<Map<String, dynamic>> get _filteredTransactions {
@@ -80,184 +81,184 @@ class _TransactionsPageState extends State<TransactionsPage> {
     final filtered = _filteredTransactions;
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF4F7F6),
+      backgroundColor: BC.background,
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 0.5,
-        iconTheme: const IconThemeData(color: Colors.teal),
+        iconTheme: const IconThemeData(color: BC.primary),
         title: const Text(
           'Transactions',
           style: TextStyle(
-            color: Colors.black87,
+            color: BC.foreground,
             fontWeight: FontWeight.bold,
             fontSize: 18,
           ),
         ),
       ),
       body: _isLoading
-          ? const Center(child: CircularProgressIndicator(color: Colors.teal))
+          ? const Center(child: CircularProgressIndicator(color: BC.primary))
           : RefreshIndicator(
-              onRefresh: _loadTransactions,
-              color: Colors.teal,
-              child: SingleChildScrollView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      '${_allTransactions.length} total transactions',
-                      style: TextStyle(fontSize: 13, color: Colors.grey[600]),
-                    ),
-                    const SizedBox(height: 14),
+        onRefresh: _loadTransactions,
+        color: BC.primary,
+        child: SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '${_allTransactions.length} total transactions',
+                style: TextStyle(fontSize: 13, color: BC.mutedForeground),
+              ),
+              const SizedBox(height: 14),
 
-                    // Filter Chips
-                    Row(
+              // Filter Chips
+              Row(
+                children: [
+                  _buildFilterChip('ALL', 'All'),
+                  const SizedBox(width: 8),
+                  _buildFilterChip('INBOUND', 'Deposits'),
+                  const SizedBox(width: 8),
+                  _buildFilterChip('OUTBOUND', 'Withdrawals'),
+                ],
+              ),
+              const SizedBox(height: 16),
+
+              // Transactions List
+              filtered.isEmpty
+                  ? _buildEmptyState()
+                  : Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: BC.border),
+                ),
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: filtered.length,
+                  separatorBuilder: (context, index) =>
+                  const Divider(height: 24),
+                  itemBuilder: (context, index) {
+                    final tx = filtered[index];
+                    final bool isInbound = tx['direction'] == 'INBOUND';
+                    final String status = tx['status'] as String? ?? 'COMPLETED';
+                    final Color sColor =
+                        statusColors[status] ?? BC.neutral;
+
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        _buildFilterChip('ALL', 'All'),
-                        const SizedBox(width: 8),
-                        _buildFilterChip('INBOUND', 'Deposits'),
-                        const SizedBox(width: 8),
-                        _buildFilterChip('OUTBOUND', 'Withdrawals'),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-
-                    // Transactions List
-                    filtered.isEmpty
-                        ? _buildEmptyState()
-                        : Container(
-                            padding: const EdgeInsets.all(16),
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(16),
-                              border: Border.all(color: Colors.grey.shade200),
-                            ),
-                            child: ListView.separated(
-                              shrinkWrap: true,
-                              physics: const NeverScrollableScrollPhysics(),
-                              itemCount: filtered.length,
-                              separatorBuilder: (context, index) =>
-                                  const Divider(height: 24),
-                              itemBuilder: (context, index) {
-                                final tx = filtered[index];
-                                final bool isInbound = tx['direction'] == 'INBOUND';
-                                final String status = tx['status'] as String? ?? 'COMPLETED';
-                                final Color sColor =
-                                    statusColors[status] ?? Colors.grey;
-
-                                return Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.all(8),
+                                  decoration: BoxDecoration(
+                                    color: isInbound
+                                        ? BC.successMuted
+                                        : BC.destructiveMuted,
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: Icon(
+                                    isInbound
+                                        ? Icons.south_west_rounded
+                                        : Icons.north_east_rounded,
+                                    color: isInbound
+                                        ? BC.success
+                                        : BC.destructive,
+                                    size: 16,
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Column(
+                                  crossAxisAlignment:
+                                  CrossAxisAlignment.start,
                                   children: [
-                                    Row(
-                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                      children: [
-                                        Row(
-                                          children: [
-                                            Container(
-                                              padding: const EdgeInsets.all(8),
-                                              decoration: BoxDecoration(
-                                                color: isInbound
-                                                    ? Colors.green.shade50
-                                                    : Colors.red.shade50,
-                                                shape: BoxShape.circle,
-                                              ),
-                                              child: Icon(
-                                                isInbound
-                                                    ? Icons.south_west_rounded
-                                                    : Icons.north_east_rounded,
-                                                color: isInbound
-                                                    ? Colors.green.shade700
-                                                    : Colors.red.shade700,
-                                                size: 16,
-                                              ),
-                                            ),
-                                            const SizedBox(width: 10),
-                                            Column(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.start,
-                                              children: [
-                                                Text(
-                                                  isInbound ? 'Deposit' : 'Withdrawal',
-                                                  style: const TextStyle(
-                                                    fontSize: 13,
-                                                    fontWeight: FontWeight.bold,
-                                                  ),
-                                                ),
-                                                Text(
-                                                  tx['method'] as String? ?? 'BANK',
-                                                  style: TextStyle(
-                                                      fontSize: 10.5,
-                                                      color: Colors.grey[600]),
-                                                ),
-                                              ],
-                                            ),
-                                          ],
-                                        ),
-                                        Column(
-                                          crossAxisAlignment: CrossAxisAlignment.end,
-                                          children: [
-                                            Text(
-                                              '${isInbound ? "+" : "-"}${_fmtBdt(tx['amountBdt'] as double? ?? 0.0)}',
-                                              style: TextStyle(
-                                                fontSize: 14,
-                                                fontWeight: FontWeight.bold,
-                                                color: isInbound
-                                                    ? Colors.green.shade700
-                                                    : Colors.red.shade700,
-                                              ),
-                                            ),
-                                            Container(
-                                              padding: const EdgeInsets.symmetric(
-                                                  horizontal: 6, vertical: 2),
-                                              decoration: BoxDecoration(
-                                                color: sColor.withOpacity(0.12),
-                                                borderRadius: BorderRadius.circular(4),
-                                              ),
-                                              child: Text(
-                                                statusLabels[status] ?? status,
-                                                style: TextStyle(
-                                                  fontSize: 9.5,
-                                                  fontWeight: FontWeight.bold,
-                                                  color: sColor,
-                                                ),
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 8),
-                                    Row(
-                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                      children: [
-                                        Expanded(
-                                          child: Text(
-                                            tx['description'] as String? ?? '',
-                                            style: TextStyle(
-                                                fontSize: 11, color: Colors.grey[700]),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    if ((tx['feeBdt'] as double? ?? 0.0) > 0) ...[
-                                      const SizedBox(height: 2),
-                                      Text(
-                                        'Fee: ${_fmtBdt(tx['feeBdt'] as double)}',
-                                        style: TextStyle(
-                                            fontSize: 10, color: Colors.grey[500]),
+                                    Text(
+                                      isInbound ? 'Deposit' : 'Withdrawal',
+                                      style: const TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.bold,
                                       ),
-                                    ],
+                                    ),
+                                    Text(
+                                      tx['method'] as String? ?? 'BANK',
+                                      style: TextStyle(
+                                          fontSize: 10.5,
+                                          color: BC.mutedForeground),
+                                    ),
                                   ],
-                                );
-                              },
+                                ),
+                              ],
                             ),
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                Text(
+                                  '${isInbound ? "+" : "-"}${_fmtBdt(tx['amountBdt'] as double? ?? 0.0)}',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.bold,
+                                    color: isInbound
+                                        ? BC.success
+                                        : BC.destructive,
+                                  ),
+                                ),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 6, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: sColor.withOpacity(0.12),
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: Text(
+                                    statusLabels[status] ?? status,
+                                    style: TextStyle(
+                                      fontSize: 9.5,
+                                      fontWeight: FontWeight.bold,
+                                      color: sColor,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Expanded(
+                              child: Text(
+                                tx['description'] as String? ?? '',
+                                style: TextStyle(
+                                    fontSize: 11, color: BC.mutedForeground),
+                              ),
+                            ),
+                          ],
+                        ),
+                        if ((tx['feeBdt'] as double? ?? 0.0) > 0) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            'Fee: ${_fmtBdt(tx['feeBdt'] as double)}',
+                            style: TextStyle(
+                                fontSize: 10, color: BC.mutedForeground),
                           ),
-                    const SizedBox(height: 24),
-                  ],
+                        ],
+                      ],
+                    );
+                  },
                 ),
               ),
-            ),
+              const SizedBox(height: 24),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
@@ -267,11 +268,11 @@ class _TransactionsPageState extends State<TransactionsPage> {
     return ChoiceChip(
       label: Text(label),
       selected: isSelected,
-      selectedColor: Colors.teal.shade100,
+      selectedColor: BC.secondary,
       labelStyle: TextStyle(
         fontSize: 12,
         fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-        color: isSelected ? Colors.teal.shade900 : Colors.grey[800],
+        color: isSelected ? BC.secondaryForeground : BC.foreground,
       ),
       onSelected: (selected) {
         if (selected) {
@@ -291,7 +292,7 @@ class _TransactionsPageState extends State<TransactionsPage> {
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: Colors.grey.shade200),
+          border: Border.all(color: BC.border),
         ),
         child: Column(
           children: [
@@ -304,7 +305,7 @@ class _TransactionsPageState extends State<TransactionsPage> {
             const SizedBox(height: 4),
             Text(
               'Your payment history will appear here.',
-              style: TextStyle(fontSize: 12.5, color: Colors.grey[600]),
+              style: TextStyle(fontSize: 12.5, color: BC.mutedForeground),
             ),
           ],
         ),

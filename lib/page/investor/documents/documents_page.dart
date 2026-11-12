@@ -12,23 +12,19 @@ import '../../../services/database_service.dart';
 import '../../../services/language_service.dart';
 import '../../../services/pdf_service.dart';
 import '../../authentication/login_page.dart';
+import '../../../theme/app_colors.dart';
 
-// ─── Palette ───
-const Color _emerald = Color(0xFF0E4A37);
-const Color _emeraldSoft = Color(0xFFE3F0E9);
-const Color _gold = Color(0xFFB8935A);
-const Color _goldDeep = Color(0xFF8A6A3A);
-const Color _goldSoft = Color(0xFFF6EEDF);
-const Color _turquoise = Color(0xFF167A80);
-const Color _turquoiseSoft = Color(0xFFE0F1F1);
-const Color _lapis = Color(0xFF26437A);
-const Color _lapisSoft = Color(0xFFE5EAF4);
-const Color _terracotta = Color(0xFFA5523A);
-const Color _ivory = Color(0xFFF7F4EE);
-const Color _ink = Color(0xFF1C2421);
-const Color _muted = Color(0xFF6E736F);
-const Color _line = Color(0xFFE8E2D7);
-const Color _danger = Color(0xFFB4413A);
+// ─── Palette — website er rong (lib/theme/app_colors.dart) ───
+const Color _emerald = BC.primary;
+const Color _emeraldBright = BC.brand500; // home page er moto
+const Color _emeraldSoft = BC.secondary;
+const Color _lapis = BC.finance600;
+const Color _terracotta = BC.destructive;
+const Color _ivory = BC.background;
+const Color _ink = BC.foreground;
+const Color _muted = BC.mutedForeground;
+const Color _line = BC.border;
+const Color _danger = BC.destructive;
 
 /// File save kore snackbar dekhay, "Open" button soho
 Future<void> _saveAndNotify(
@@ -47,7 +43,7 @@ Future<void> _saveAndNotify(
         duration: const Duration(seconds: 5),
         action: SnackBarAction(
           label: LanguageService.tr('Open', 'খুলুন'),
-          textColor: const Color(0xFFD9BE8C),
+          textColor: BC.brand200,
           onPressed: () => PdfService.openFile(path),
         ),
       ),
@@ -123,6 +119,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
           style: const TextStyle(
               color: _ink, fontSize: 16, fontWeight: FontWeight.w700),
         ),
+        toolbarHeight: 54,
         actions: [
           IconButton(
             tooltip: LanguageService.tr('Download', 'ডাউনলোড'),
@@ -145,7 +142,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
         ),
       )
           : _localPath == null
-          ? const Center(child: CircularProgressIndicator(color: _emerald))
+          ? const Center(child: SizedBox(width: 26, height: 26, child: CircularProgressIndicator(color: _emerald, strokeWidth: 2.4)))
           : PDFView(
         filePath: _localPath,
         enableSwipe: true,
@@ -301,8 +298,6 @@ class _DocumentsPageState extends State<DocumentsPage> {
   }
 
   Future<void> _goToLogin() async {
-    await AuthService.logout();
-    if (!mounted) return;
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const LoginPage()),
           (route) => false,
@@ -310,14 +305,15 @@ class _DocumentsPageState extends State<DocumentsPage> {
   }
 
   // ─── Helpers ──────────────────────────────────────────────
+  String _trim(double v, int digits) {
+    final s = v.toStringAsFixed(digits);
+    return s.contains('.') ? s.replaceAll(RegExp(r'0+$'), '').replaceAll(RegExp(r'\.$'), '') : s;
+  }
+
   String _fmtBdt(double amount) {
-    if (amount >= 10000000) {
-      return '৳${(amount / 10000000).toStringAsFixed(2)} Cr';
-    } else if (amount >= 100000) {
-      return '৳${(amount / 100000).toStringAsFixed(2)}L';
-    } else if (amount >= 1000) {
-      return '৳${(amount / 1000).toStringAsFixed(1)}K';
-    }
+    if (amount >= 10000000) return '৳${_trim(amount / 10000000, 2)} Cr';
+    if (amount >= 100000) return '৳${_trim(amount / 100000, 2)}L';
+    if (amount >= 1000) return '৳${_trim(amount / 1000, 1)}K';
     return '৳${amount.toStringAsFixed(0)}';
   }
 
@@ -353,6 +349,8 @@ class _DocumentsPageState extends State<DocumentsPage> {
         return LanguageService.tr('Under Review', 'পর্যালোচনায়');
       case 'REJECTED':
         return LanguageService.tr('Rejected', 'বাতিল');
+      case 'RECEIPT_PENDING':
+        return LanguageService.tr('Receipt pending', 'রসিদ বাকি');
       default:
       // Ojana status "Draft" bolbo na — ja ache tai dekhai
         if (st.isEmpty) return '—';
@@ -372,8 +370,9 @@ class _DocumentsPageState extends State<DocumentsPage> {
       case 'SUBMITTED':
       case 'PENDING':
       case 'UNDER_REVIEW':
-        return _goldDeep;
+        return BC.chart4Deep;
       case 'NOT_STARTED':
+      case 'RECEIPT_PENDING':
         return _muted;
       case 'COMPLETED':
       case 'MATURED':
@@ -432,7 +431,7 @@ class _DocumentsPageState extends State<DocumentsPage> {
         content: Text(LanguageService.tr(
             'Certificate will be available after your payment is approved.',
             'পেমেন্ট অনুমোদনের পর সার্টিফিকেট পাওয়া যাবে।')),
-        backgroundColor: _goldDeep,
+        backgroundColor: BC.chart4Deep,
       ),
     );
     return false;
@@ -528,13 +527,13 @@ class _DocumentsPageState extends State<DocumentsPage> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: Colors.white,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: Text(LanguageService.tr('Delete document?', 'ডকুমেন্ট মুছবেন?'),
-            style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: _ink)),
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _ink)),
         content: Text(
           LanguageService.tr('"$name" will be removed from your documents.',
               '"$name" আপনার ডকুমেন্ট থেকে সরানো হবে।'),
-          style: const TextStyle(fontSize: 13, color: _muted),
+          style: const TextStyle(fontSize: 13, color: _muted, height: 1.4),
         ),
         actions: [
           TextButton(
@@ -714,20 +713,24 @@ class _DocumentsPageState extends State<DocumentsPage> {
             backgroundColor: _ivory,
             surfaceTintColor: Colors.transparent,
             elevation: 0,
+            toolbarHeight: 54,
             iconTheme: const IconThemeData(color: _ink),
             title: Text(
               LanguageService.tr('Documents', 'ডকুমেন্টস'),
               style: const TextStyle(
                 color: _ink,
                 fontWeight: FontWeight.w700,
-                fontSize: 18,
+                fontSize: 17.5,
               ),
             ),
           ),
           body: _isLoading
               ? const Center(
-              child: CircularProgressIndicator(
-                  color: _emerald, strokeWidth: 2.4))
+              child: SizedBox(
+                width: 26,
+                height: 26,
+                child: CircularProgressIndicator(color: _emerald, strokeWidth: 2.4),
+              ))
               : _needsLogin
               ? _buildMessage(
             Icons.lock_outline_rounded,
@@ -752,18 +755,14 @@ class _DocumentsPageState extends State<DocumentsPage> {
             color: _emerald,
             child: ListView(
               physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 40),
+              padding: EdgeInsets.fromLTRB(16, 2, 16, 24 + MediaQuery.of(context).padding.bottom),
               children: [
-                Text(
-                  LanguageService.tr('$totalCount documents',
-                      'মোট $totalCount টি নথিপত্র'),
-                  style: const TextStyle(fontSize: 13, color: _muted),
-                ),
-                const SizedBox(height: 14),
+                _buildSummary(totalCount),
+                const SizedBox(height: 10),
                 _buildSectionCard(
                   icon: Icons.workspace_premium_outlined,
-                  color: _gold,
-                  soft: _goldSoft,
+                  color: _emerald,
+                  soft: _emeraldSoft,
                   title: LanguageService.tr(
                       'Investment Certificates', 'ইনভেস্টমেন্ট সার্টিফিকেট'),
                   items: _categorizedDocs['investmentReceipts'] ?? [],
@@ -772,13 +771,28 @@ class _DocumentsPageState extends State<DocumentsPage> {
                       'এখনো কোনো সার্টিফিকেট নেই। পেমেন্ট অনুমোদনের পর এখানে আসবে।'),
                   rowBuilder: _buildCertificateRow,
                   maxVisible: 2,
-                  rowHeight: 132,
+                  rowHeight: 104,
                 ),
-                const SizedBox(height: 14),
+                const SizedBox(height: 10),
+                // Website er deed (Investment Agreement) — admin approve korle website PDF banay
+                _buildSectionCard(
+                  icon: Icons.history_edu_rounded,
+                  color: _emerald,
+                  soft: _emeraldSoft,
+                  title: LanguageService.tr('Investment Deeds', 'বিনিয়োগ দলিল'),
+                  items: _categorizedDocs['contracts'] ?? [],
+                  emptyMsg: LanguageService.tr(
+                      'No deeds yet. Your deed appears here once your investment is approved and issued.',
+                      'এখনো কোনো দলিল নেই। বিনিয়োগ অনুমোদনের পর দলিল তৈরি হলে এখানে আসবে।'),
+                  rowBuilder: _buildFileRow,
+                  maxVisible: 3,
+                  rowHeight: 60,
+                ),
+                const SizedBox(height: 10),
                 _buildSectionCard(
                   icon: Icons.apartment_rounded,
-                  color: _turquoise,
-                  soft: _turquoiseSoft,
+                  color: _emerald,
+                  soft: _emeraldSoft,
                   title: LanguageService.tr(
                       'Group Investment Receipts', 'গ্রুপ ইনভেস্টমেন্ট রিসিট'),
                   items: _categorizedDocs['groupInvestmentReceipts'] ?? [],
@@ -787,13 +801,13 @@ class _DocumentsPageState extends State<DocumentsPage> {
                       'এখনো কোনো গ্রুপ ইনভেস্টমেন্ট রিসিট নেই।'),
                   rowBuilder: _buildCertificateRow,
                   maxVisible: 2,
-                  rowHeight: 132,
+                  rowHeight: 104,
                 ),
-                const SizedBox(height: 14),
+                const SizedBox(height: 10),
                 _buildSectionCard(
                   icon: Icons.receipt_long_outlined,
-                  color: _lapis,
-                  soft: _lapisSoft,
+                  color: _emerald,
+                  soft: _emeraldSoft,
                   title: LanguageService.tr(
                       'Payment Receipts', 'পেমেন্ট রিসিট'),
                   items: _categorizedDocs['paymentReceipts'] ?? [],
@@ -801,9 +815,9 @@ class _DocumentsPageState extends State<DocumentsPage> {
                       'কোনো পেমেন্ট রিসিট নেই।'),
                   rowBuilder: _buildFileRow,
                   maxVisible: 4,
-                  rowHeight: 72,
+                  rowHeight: 60,
                 ),
-                const SizedBox(height: 14),
+                const SizedBox(height: 10),
                 _buildSectionCard(
                   icon: Icons.bar_chart_rounded,
                   color: _emerald,
@@ -814,27 +828,103 @@ class _DocumentsPageState extends State<DocumentsPage> {
                   emptyMsg: LanguageService.tr('No statements yet.',
                       'এখনো কোনো স্টেটমেন্ট নেই।'),
                   rowBuilder: _buildFileRow,
+                  rowHeight: 60,
                 ),
-                const SizedBox(height: 14),
+                const SizedBox(height: 10),
                 _buildSectionCard(
                   icon: Icons.eco_outlined,
-                  color: _turquoise,
-                  soft: _turquoiseSoft,
+                  color: _emerald,
+                  soft: _emeraldSoft,
                   title: LanguageService.tr(
                       'Harvest Reports', 'হারভেস্ট রিপোর্ট'),
                   items: _categorizedDocs['harvestReports'] ?? [],
                   emptyMsg: LanguageService.tr('No harvest reports.',
                       'কোনো হারভেস্ট রিপোর্ট নেই।'),
                   rowBuilder: _buildFileRow,
+                  rowHeight: 60,
                 ),
-
-                const SizedBox(height: 20),
+                const SizedBox(height: 12),
                 _buildUploadDocumentFormCard(),
               ],
             ),
           ),
         );
       },
+    );
+  }
+
+  // ─── Summary (upore) ─────────────────────────────────────
+  Widget _buildSummary(int totalCount) {
+    int n(String k) => _categorizedDocs[k]?.length ?? 0;
+    final certs = n('investmentReceipts') + n('groupInvestmentReceipts');
+    final ready = [...?_categorizedDocs['investmentReceipts'], ...?_categorizedDocs['groupInvestmentReceipts']]
+        .where((d) => _certificateReady(d['status']?.toString() ?? ''))
+        .length;
+
+    Widget cell(String label, String value, Color color) => Expanded(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(label, style: TextStyle(fontSize: 11, color: Colors.white.withAlpha(165))),
+          ),
+          const SizedBox(height: 2),
+          Text(value, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: color)),
+        ],
+      ),
+    );
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(16),
+        gradient: const LinearGradient(
+          colors: [_emeraldBright, _emerald],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text(
+                LanguageService.tr('MY DOCUMENTS', 'আমার নথিপত্র'),
+                style: const TextStyle(
+                    fontSize: 11, fontWeight: FontWeight.w800, color: Color(0xC8FFFFFF), letterSpacing: 1.3),
+              ),
+              const Spacer(),
+              Text(
+                LanguageService.tr('$totalCount total', 'মোট $totalCount টি'),
+                style: TextStyle(fontSize: 11.5, color: Colors.white.withAlpha(150)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 9),
+          Row(
+            children: [
+              cell(LanguageService.tr('Certificates', 'সার্টিফিকেট'), '$ready/$certs', Colors.white),
+              cell(LanguageService.tr('Deeds', 'দলিল'), '${n('contracts')}', BC.brand200),
+              cell(LanguageService.tr('Receipts', 'রিসিট'), '${n('paymentReceipts')}', BC.brand300),
+              cell(LanguageService.tr('Statements', 'স্টেটমেন্ট'), '${n('distributionStatements')}', Colors.white),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _iconBtn(IconData icon, Color color, String tip, VoidCallback onTap) {
+    return IconButton(
+      tooltip: tip,
+      onPressed: onTap,
+      icon: Icon(icon, color: color, size: 20),
+      visualDensity: VisualDensity.compact,
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
     );
   }
 
@@ -856,31 +946,32 @@ class _DocumentsPageState extends State<DocumentsPage> {
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(color: _line),
       ),
+      clipBehavior: Clip.antiAlias,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
             child: Row(
               children: [
                 Container(
-                  width: 34,
-                  height: 34,
+                  width: 28,
+                  height: 28,
                   decoration: BoxDecoration(
                     color: soft,
-                    borderRadius: BorderRadius.circular(10),
+                    borderRadius: BorderRadius.circular(8),
                   ),
-                  child: Icon(icon, color: color, size: 18),
+                  child: Icon(icon, color: color, size: 17),
                 ),
-                const SizedBox(width: 10),
+                const SizedBox(width: 9),
                 Expanded(
                   child: Text(
                     title,
                     style: const TextStyle(
-                      fontSize: 14.5,
+                      fontSize: 14,
                       fontWeight: FontWeight.w700,
                       color: _ink,
                     ),
@@ -888,7 +979,7 @@ class _DocumentsPageState extends State<DocumentsPage> {
                 ),
                 Container(
                   padding:
-                  const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                   decoration: BoxDecoration(
                     color: items.isEmpty ? _ivory : soft,
                     borderRadius: BorderRadius.circular(10),
@@ -896,8 +987,8 @@ class _DocumentsPageState extends State<DocumentsPage> {
                   child: Text(
                     '${items.length}',
                     style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w800,
                       color: items.isEmpty ? _muted : color,
                     ),
                   ),
@@ -907,10 +998,10 @@ class _DocumentsPageState extends State<DocumentsPage> {
           ),
           if (items.isEmpty)
             Padding(
-              padding: const EdgeInsets.fromLTRB(58, 0, 14, 14),
+              padding: const EdgeInsets.fromLTRB(49, 0, 12, 12),
               child: Text(
                 emptyMsg,
-                style: const TextStyle(fontSize: 12, color: _muted),
+                style: const TextStyle(fontSize: 12.5, color: _muted, height: 1.4),
               ),
             )
           else ...[
@@ -923,23 +1014,23 @@ class _DocumentsPageState extends State<DocumentsPage> {
               ),
               const Divider(height: 1, color: _line),
               Padding(
-                padding: const EdgeInsets.symmetric(vertical: 8),
+                padding: const EdgeInsets.symmetric(vertical: 6),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     const Icon(Icons.swipe_vertical_rounded, size: 14, color: _muted),
-                    const SizedBox(width: 6),
+                    const SizedBox(width: 5),
                     Text(
                       LanguageService.tr('Scroll to see all ${items.length}',
                           'সব ${items.length} টি দেখতে স্ক্রল করুন'),
-                      style: const TextStyle(fontSize: 11, color: _muted),
+                      style: const TextStyle(fontSize: 11.5, color: _muted),
                     ),
                   ],
                 ),
               ),
             ] else
               for (int i = 0; i < items.length; i++) ...[
-                if (i > 0) const Divider(height: 1, color: _line, indent: 14),
+                if (i > 0) const Divider(height: 1, color: _line, indent: 12),
                 rowBuilder(items[i]),
               ],
           ],
@@ -951,14 +1042,14 @@ class _DocumentsPageState extends State<DocumentsPage> {
   Widget _statusPill(String status) {
     final c = _statusColor(status);
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
       decoration: BoxDecoration(
         color: c.withAlpha(25),
         borderRadius: BorderRadius.circular(20),
       ),
       child: Text(
         _statusLabel(status),
-        style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: c),
+        style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w800, color: c),
       ),
     );
   }
@@ -972,8 +1063,8 @@ class _DocumentsPageState extends State<DocumentsPage> {
   }) {
     final child = busy
         ? SizedBox(
-      width: 14,
-      height: 14,
+      width: 13,
+      height: 13,
       child: CircularProgressIndicator(
         strokeWidth: 2,
         color: filled ? Colors.white : _emerald,
@@ -986,7 +1077,7 @@ class _DocumentsPageState extends State<DocumentsPage> {
         const SizedBox(width: 4),
         Text(label,
             style: const TextStyle(
-                fontSize: 11.5, fontWeight: FontWeight.w700)),
+                fontSize: 12.5, fontWeight: FontWeight.w700)),
       ],
     );
 
@@ -996,8 +1087,8 @@ class _DocumentsPageState extends State<DocumentsPage> {
       style: FilledButton.styleFrom(
         backgroundColor: _emerald,
         foregroundColor: Colors.white,
-        padding: const EdgeInsets.symmetric(horizontal: 12),
-        minimumSize: const Size(0, 34),
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        minimumSize: const Size(0, 30),
         visualDensity: VisualDensity.compact,
         shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(10)),
@@ -1009,8 +1100,8 @@ class _DocumentsPageState extends State<DocumentsPage> {
       style: OutlinedButton.styleFrom(
         foregroundColor: _emerald,
         side: const BorderSide(color: _line),
-        padding: const EdgeInsets.symmetric(horizontal: 12),
-        minimumSize: const Size(0, 34),
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        minimumSize: const Size(0, 30),
         visualDensity: VisualDensity.compact,
         shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(10)),
@@ -1025,9 +1116,19 @@ class _DocumentsPageState extends State<DocumentsPage> {
     final ready = _certificateReady(status);
     final busy = _busy.contains('cert-${item['id']}');
     final amt = (item['amountInvested'] as num?)?.toDouble() ?? 0.0;
+    final certNo = item['certificateNo']?.toString() ?? '';
+    final issued = PdfService.formatDate(item['issuedDate']?.toString());
+    final title = (item['projectTitle']?.toString() ?? '').isNotEmpty
+        ? item['projectTitle'].toString()
+        : (item['name']?.toString() ?? '');
+    final meta = [
+      if (certNo.isNotEmpty) certNo,
+      if (amt > 0) _fmtBdt(amt),
+      if (issued.isNotEmpty) issued,
+    ].join(' · ');
 
     return Padding(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1035,38 +1136,37 @@ class _DocumentsPageState extends State<DocumentsPage> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Container(
-                width: 40,
-                height: 48,
+                width: 32,
+                height: 38,
                 decoration: BoxDecoration(
-                  color: _goldSoft,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: _gold.withAlpha(90)),
+                  color: _emeraldSoft,
+                  borderRadius: BorderRadius.circular(7),
+                  border: Border.all(color: _emerald.withAlpha(60)),
                 ),
-                child: const Icon(Icons.picture_as_pdf_rounded,
-                    color: _goldDeep, size: 22),
+                child: const Icon(Icons.workspace_premium_rounded,
+                    color: _emerald, size: 20),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 10),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      item['projectTitle']?.toString() ??
-                          item['name']?.toString() ??
-                          'Certificate',
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
+                      title.isEmpty ? '—' : title,
                       style: const TextStyle(
                         fontSize: 13.5,
                         fontWeight: FontWeight.w700,
                         color: _ink,
+                        height: 1.3,
                       ),
                     ),
-                    const SizedBox(height: 3),
-                    Text(
-                      '${item['certificateNo'] ?? ''} · ${_fmtBdt(amt)} · ${PdfService.formatDate(item['issuedDate']?.toString())}',
-                      style: const TextStyle(fontSize: 11, color: _muted),
-                    ),
+                    if (meta.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        meta,
+                        style: const TextStyle(fontSize: 11.5, color: _muted),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -1074,7 +1174,7 @@ class _DocumentsPageState extends State<DocumentsPage> {
               _statusPill(status),
             ],
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 8),
           if (ready)
             Row(
               mainAxisAlignment: MainAxisAlignment.end,
@@ -1098,22 +1198,25 @@ class _DocumentsPageState extends State<DocumentsPage> {
           else
             Container(
               width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               decoration: BoxDecoration(
                 color: _ivory,
-                borderRadius: BorderRadius.circular(10),
+                borderRadius: BorderRadius.circular(9),
               ),
               child: Row(
                 children: [
                   const Icon(Icons.lock_clock_outlined,
                       size: 15, color: _muted),
-                  const SizedBox(width: 6),
+                  const SizedBox(width: 5),
                   Expanded(
                     child: Text(
-                      LanguageService.tr(
+                      status == 'RECEIPT_PENDING'
+                          ? LanguageService.tr('Available once the receipt number is issued',
+                          'রসিদ নম্বর দেওয়া হলে পাওয়া যাবে')
+                          : LanguageService.tr(
                           'Available after payment approval',
                           'পেমেন্ট অনুমোদনের পর পাওয়া যাবে'),
-                      style: const TextStyle(fontSize: 11.5, color: _muted),
+                      style: const TextStyle(fontSize: 12, color: _muted),
                     ),
                   ),
                 ],
@@ -1138,85 +1241,71 @@ class _DocumentsPageState extends State<DocumentsPage> {
     return InkWell(
       onTap: busy ? null : () => _viewDoc(item),
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 12, 8, 12),
+        padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
         child: Row(
           children: [
             Container(
-              width: 38,
-              height: 38,
+              width: 32,
+              height: 32,
               decoration: BoxDecoration(
-                color: _ivory,
-                borderRadius: BorderRadius.circular(10),
+                color: isPdf ? BC.chart4Muted : _emeraldSoft,
+                borderRadius: BorderRadius.circular(9),
               ),
               child: Icon(
                 isPdf
                     ? Icons.picture_as_pdf_outlined
                     : Icons.image_outlined,
-                color: _emerald,
-                size: 19,
+                color: isPdf ? BC.chart4Deep : _emerald,
+                size: 18,
               ),
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: 10),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    item['name']?.toString() ?? 'Document',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                    (item['name']?.toString() ?? '').isEmpty ? '—' : item['name'].toString(),
                     style: const TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w700,
-                        color: _ink),
+                        color: _ink,
+                        height: 1.3),
                   ),
                   if (desc.isNotEmpty) ...[
-                    const SizedBox(height: 2),
+                    const SizedBox(height: 1),
                     Text(
                       desc,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 11, color: _ink),
+                      style: const TextStyle(fontSize: 12, color: _ink, height: 1.3),
                     ),
                   ],
-                  const SizedBox(height: 2),
-                  Text(
-                    [date, if (size.isNotEmpty) size].join(' · '),
-                    style: const TextStyle(fontSize: 11, color: _muted),
-                  ),
+                  if ([date, size].any((x) => x.isNotEmpty)) ...[
+                    const SizedBox(height: 1),
+                    Text(
+                      [if (date.isNotEmpty) date, if (size.isNotEmpty) size].join(' · '),
+                      style: const TextStyle(fontSize: 11.5, color: _muted),
+                    ),
+                  ],
                 ],
               ),
             ),
             if (busy)
               const Padding(
-                padding: EdgeInsets.all(12),
+                padding: EdgeInsets.all(10),
                 child: SizedBox(
-                  width: 18,
-                  height: 18,
+                  width: 16,
+                  height: 16,
                   child: CircularProgressIndicator(
                       strokeWidth: 2, color: _emerald),
                 ),
               )
             else ...[
-              IconButton(
-                tooltip: LanguageService.tr('View', 'দেখুন'),
-                icon: const Icon(Icons.visibility_outlined,
-                    color: _muted, size: 20),
-                onPressed: () => _viewDoc(item),
-              ),
-              IconButton(
-                tooltip: LanguageService.tr('Download', 'ডাউনলোড'),
-                icon: const Icon(Icons.download_rounded,
-                    color: _emerald, size: 21),
-                onPressed: () => _downloadDoc(item),
-              ),
+              _iconBtn(Icons.visibility_outlined, _muted, LanguageService.tr('View', 'দেখুন'), () => _viewDoc(item)),
+              _iconBtn(Icons.download_rounded, _emerald, LanguageService.tr('Download', 'ডাউনলোড'),
+                      () => _downloadDoc(item)),
               if (mine)
-                IconButton(
-                  tooltip: LanguageService.tr('Delete', 'মুছুন'),
-                  icon: const Icon(Icons.delete_outline_rounded,
-                      color: _danger, size: 20),
-                  onPressed: () => _confirmDelete(item),
-                ),
+                _iconBtn(Icons.delete_outline_rounded, _danger, LanguageService.tr('Delete', 'মুছুন'),
+                        () => _confirmDelete(item)),
             ],
           ],
         ),
@@ -1231,16 +1320,19 @@ class _DocumentsPageState extends State<DocumentsPage> {
     filled: true,
     fillColor: _ivory,
     labelStyle: const TextStyle(color: _muted, fontSize: 13),
+    hintStyle: const TextStyle(color: _muted, fontSize: 13),
+    isDense: true,
+    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
     border: OutlineInputBorder(
-      borderRadius: BorderRadius.circular(12),
+      borderRadius: BorderRadius.circular(10),
       borderSide: const BorderSide(color: _line),
     ),
     enabledBorder: OutlineInputBorder(
-      borderRadius: BorderRadius.circular(12),
+      borderRadius: BorderRadius.circular(10),
       borderSide: const BorderSide(color: _line),
     ),
     focusedBorder: OutlineInputBorder(
-      borderRadius: BorderRadius.circular(12),
+      borderRadius: BorderRadius.circular(10),
       borderSide: const BorderSide(color: _emerald, width: 1.4),
     ),
   );
@@ -1249,10 +1341,10 @@ class _DocumentsPageState extends State<DocumentsPage> {
     final hasFile = _selectedUploadFile != null;
 
     return Container(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(color: _line),
       ),
       child: Form(
@@ -1263,20 +1355,22 @@ class _DocumentsPageState extends State<DocumentsPage> {
             Row(
               children: [
                 Container(
-                  width: 34,
-                  height: 34,
+                  width: 28,
+                  height: 28,
                   decoration: BoxDecoration(
                     color: _emeraldSoft,
-                    borderRadius: BorderRadius.circular(10),
+                    borderRadius: BorderRadius.circular(8),
                   ),
                   child: const Icon(Icons.cloud_upload_outlined,
-                      color: _emerald, size: 18),
+                      color: _emerald, size: 17),
                 ),
-                const SizedBox(width: 10),
-                Text(
-                  LanguageService.tr('Upload a Document', 'ডকুমেন্ট আপলোড করুন'),
-                  style: const TextStyle(
-                      fontSize: 15.5, fontWeight: FontWeight.w700, color: _ink),
+                const SizedBox(width: 9),
+                Expanded(
+                  child: Text(
+                    LanguageService.tr('Upload a Document', 'ডকুমেন্ট আপলোড করুন'),
+                    style: const TextStyle(
+                        fontSize: 14, fontWeight: FontWeight.w700, color: _ink),
+                  ),
                 ),
               ],
             ),
@@ -1286,9 +1380,9 @@ class _DocumentsPageState extends State<DocumentsPage> {
                 'For investment payments, use "Submit Payment Proof" on the investment instead — that is what admin reviews.',
                 'বিনিয়োগের পেমেন্টের জন্য বিনিয়োগের "পেমেন্ট প্রুফ জমা দিন" ব্যবহার করুন — অ্যাডমিন সেটাই যাচাই করে।',
               ),
-              style: const TextStyle(fontSize: 11.5, color: _muted, height: 1.4),
+              style: const TextStyle(fontSize: 12, color: _muted, height: 1.4),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 12),
             DropdownButtonFormField<String>(
               initialValue: _selectedCategory,
               decoration: _inputDeco(
@@ -1296,22 +1390,22 @@ class _DocumentsPageState extends State<DocumentsPage> {
               items: categoryDropdownOptions.entries.map((e) {
                 return DropdownMenuItem<String>(
                   value: e.key,
-                  child: Text(e.value, style: const TextStyle(fontSize: 13)),
+                  child: Text(e.value, style: const TextStyle(fontSize: 13, color: _ink)),
                 );
               }).toList(),
               onChanged: (v) {
                 if (v != null) setState(() => _selectedCategory = v);
               },
             ),
-            const SizedBox(height: 14),
+            const SizedBox(height: 10),
             GestureDetector(
               onTap: _pickUploadFile,
               child: Container(
                 width: double.infinity,
-                padding: const EdgeInsets.symmetric(vertical: 22, horizontal: 16),
+                padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
                 decoration: BoxDecoration(
                   color: hasFile ? _emeraldSoft : _ivory,
-                  borderRadius: BorderRadius.circular(14),
+                  borderRadius: BorderRadius.circular(12),
                   border: Border.all(
                     color: hasFile ? _emerald : _line,
                     width: hasFile ? 1.4 : 1,
@@ -1324,14 +1418,14 @@ class _DocumentsPageState extends State<DocumentsPage> {
                         borderRadius: BorderRadius.circular(10),
                         child: Image.file(
                           _selectedUploadFile!,
-                          height: 90,
+                          height: 72,
                           fit: BoxFit.cover,
                         ),
                       )
                     else
                       const Icon(Icons.add_photo_alternate_outlined,
-                          size: 34, color: _emerald),
-                    const SizedBox(height: 10),
+                          size: 26, color: _emerald),
+                    const SizedBox(height: 6),
                     Text(
                       hasFile
                           ? LanguageService.tr(
@@ -1344,16 +1438,16 @@ class _DocumentsPageState extends State<DocumentsPage> {
                         color: _emerald,
                       ),
                     ),
-                    const SizedBox(height: 2),
+                    const SizedBox(height: 1),
                     const Text(
                       'JPEG, PNG · Max 10 MB',
-                      style: TextStyle(fontSize: 10.5, color: _muted),
+                      style: TextStyle(fontSize: 11, color: _muted),
                     ),
                   ],
                 ),
               ),
             ),
-            const SizedBox(height: 14),
+            const SizedBox(height: 10),
             TextFormField(
               controller: _docNameController,
               decoration: _inputDeco(
@@ -1364,7 +1458,7 @@ class _DocumentsPageState extends State<DocumentsPage> {
                   ? LanguageService.tr('Required field', 'আবশ্যক')
                   : null,
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
             TextFormField(
               controller: _docDescController,
               decoration: _inputDeco(
@@ -1373,22 +1467,22 @@ class _DocumentsPageState extends State<DocumentsPage> {
                 'Brief description',
               ),
             ),
-            const SizedBox(height: 18),
+            const SizedBox(height: 12),
             FilledButton(
               onPressed: _isUploadingDoc ? null : _handleUploadDocument,
               style: FilledButton.styleFrom(
                 backgroundColor: _emerald,
                 disabledBackgroundColor: _emerald.withAlpha(120),
                 foregroundColor: Colors.white,
-                minimumSize: const Size(double.infinity, 50),
+                minimumSize: const Size(double.infinity, 44),
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
+                  borderRadius: BorderRadius.circular(12),
                 ),
               ),
               child: _isUploadingDoc
                   ? const SizedBox(
-                width: 20,
-                height: 20,
+                width: 18,
+                height: 18,
                 child: CircularProgressIndicator(
                     strokeWidth: 2, color: Colors.white),
               )
@@ -1396,7 +1490,7 @@ class _DocumentsPageState extends State<DocumentsPage> {
                 LanguageService.tr(
                     'Upload Document', 'ডকুমেন্ট আপলোড করুন'),
                 style: const TextStyle(
-                    fontSize: 15, fontWeight: FontWeight.w700),
+                    fontSize: 14.5, fontWeight: FontWeight.w700),
               ),
             ),
           ],
@@ -1413,19 +1507,19 @@ class _DocumentsPageState extends State<DocumentsPage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 40, color: _goldDeep),
-            const SizedBox(height: 12),
+            Icon(icon, size: 34, color: _emerald),
+            const SizedBox(height: 10),
             Text(title,
                 textAlign: TextAlign.center,
                 style: const TextStyle(
                     fontSize: 15, fontWeight: FontWeight.w700, color: _ink)),
             if (subtitle != null) ...[
-              const SizedBox(height: 4),
+              const SizedBox(height: 3),
               Text(subtitle,
                   textAlign: TextAlign.center,
                   style: const TextStyle(fontSize: 12.5, color: _muted)),
             ],
-            const SizedBox(height: 16),
+            const SizedBox(height: 14),
             FilledButton(
               onPressed: onTap,
               style: FilledButton.styleFrom(
@@ -1486,7 +1580,7 @@ class _ScrollableSectionState extends State<_ScrollableSection> {
           padding: EdgeInsets.zero,
           itemCount: widget.itemCount,
           separatorBuilder: (_, __) =>
-          const Divider(height: 1, color: _line, indent: 14),
+          const Divider(height: 1, color: _line, indent: 12),
           itemBuilder: (_, i) => widget.itemBuilder(i),
         ),
       ),

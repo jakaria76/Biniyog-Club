@@ -1,60 +1,65 @@
 import 'dart:math' as math;
+import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 
 import '../../../services/database_service.dart';
 import '../../../services/language_service.dart';
 import 'project_detail_page.dart';
+import 'project_labels.dart';
+import '../../../theme/app_colors.dart';
 
+/// Website er /projects (All Projects) page — search, sort, category ar
+/// website er moto project card.
 class MyProjectsPage extends StatefulWidget {
-  const MyProjectsPage({super.key});
+  /// Dashboard er tab hishebe khulle back chaple ki hobe (jemon Home tab e jawa).
+  /// Alada page hishebe (push kore) khulle dorkar nei — tokhon pop hoy.
+  final VoidCallback? onBack;
+
+  const MyProjectsPage({super.key, this.onBack});
 
   @override
   State<MyProjectsPage> createState() => _MyProjectsPageState();
 }
 
 class _MyProjectsPageState extends State<MyProjectsPage> {
-  // ─── Palette ───
-  static const Color emerald = Color(0xFF0E4A37);
-  static const Color emeraldDeep = Color(0xFF0A3327);
-  static const Color emeraldSoft = Color(0xFFE3F0E9);
-  static const Color gold = Color(0xFFB8935A);
-  static const Color goldLight = Color(0xFFD9BE8C);
-  static const Color goldDeep = Color(0xFF8A6A3A);
-  static const Color goldSoft = Color(0xFFF6EEDF);
-  static const Color turquoise = Color(0xFF167A80);
-  static const Color lapis = Color(0xFF26437A);
-  static const Color terracotta = Color(0xFFA5523A);
-  static const Color ivory = Color(0xFFF7F4EE);
-  static const Color ink = Color(0xFF1C2421);
-  static const Color muted = Color(0xFF6E736F);
-  static const Color line = Color(0xFFE8E2D7);
+  // ─── Palette — website er rong (lib/theme/app_colors.dart) ───
+  static const Color emerald = BC.primary;
+  static const Color emeraldBright = BC.brand500; // home page er moto
+  static const Color emeraldSoft = BC.secondary;
+  static const Color ivory = BC.background;
+  static const Color ink = BC.foreground;
+  static const Color muted = BC.mutedForeground;
+  static const Color line = BC.border;
 
-  static const Map<String, String> categoryLabels = {
-    'REAL_ESTATE': 'Real Estate',
-    'TRADE_FINANCE': 'Trade Finance',
-    'SME': 'SME Business',
-    'TECHNOLOGY': 'Technology',
-    'INFRASTRUCTURE': 'Infrastructure',
-    'CROP_FARMING': 'Crop Farming',
-    'LIVESTOCK': 'Livestock',
-    'AQUACULTURE': 'Aquaculture',
-    'POULTRY': 'Poultry',
-    'DAIRY': 'Dairy',
-    'HORTICULTURE': 'Horticulture',
-    'AGRO_PROCESSING': 'Agro Processing',
-    'OTHER': 'Other',
-  };
+  /// Website er SORT_LABELS
+  static const List<(String, String, String)> _sorts = [
+    ('newest', 'Newest', 'নতুন'),
+    ('deadline', 'Deadline Soon', 'শেষ সময় আগে'),
+    ('funded_pct', 'Most Funded', 'সবচেয়ে বেশি সংগৃহীত'),
+    ('goal_asc', 'Smallest Goal', 'ছোট লক্ষ্য'),
+    ('goal_desc', 'Largest Goal', 'বড় লক্ষ্য'),
+  ];
 
   bool _isLoading = true;
   bool _loadFailed = false;
   List<Map<String, dynamic>> _projects = [];
-  String _filter = 'OPEN'; // OPEN = shudhu FUNDRAISING, ALL = shob prokashito
+
+  String _sort = 'newest';
+  String? _category; // null = All
+  String _search = '';
+  final TextEditingController _searchCtrl = TextEditingController();
 
   @override
   void initState() {
     super.initState();
     _loadProjectsData();
+  }
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
   }
 
   Future<void> _loadProjectsData() async {
@@ -83,56 +88,39 @@ class _MyProjectsPageState extends State<MyProjectsPage> {
     return double.tryParse(v?.toString() ?? '') ?? 0.0;
   }
 
-  String _trim(double v, int digits) {
-    final s = v.toStringAsFixed(digits);
-    return s.contains('.') ? s.replaceAll(RegExp(r'0+$'), '').replaceAll(RegExp(r'\.$'), '') : s;
+  DateTime _date(dynamic v) => ProjectLabels.parseDate(v) ?? DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+
+  /// Website er search: title, description, location
+  bool _matchesSearch(Map<String, dynamic> p) {
+    final q = _search.trim().toLowerCase();
+    if (q.isEmpty) return true;
+    return [p['title'], p['description'], p['location']]
+        .any((v) => (v?.toString() ?? '').toLowerCase().contains(q));
   }
 
-  String _fmtBdt(double amount) {
-    if (amount >= 10000000) return '৳${_trim(amount / 10000000, 2)} Cr';
-    if (amount >= 100000) return '৳${_trim(amount / 100000, 2)}L';
-    if (amount >= 1000) return '৳${_trim(amount / 1000, 1)}K';
-    return '৳${amount.toStringAsFixed(0)}';
-  }
+  /// Search mile emon project — category chip er count er jonno
+  List<Map<String, dynamic>> get _searched => _projects.where(_matchesSearch).toList();
 
-  String _pctRange(double lo, double hi) {
-    String p(double r) => _trim(r * 100, 1);
-    if (lo <= 0 && hi <= 0) return '—';
-    return lo == hi ? '${p(hi)}%' : '${p(lo)}–${p(hi)}%';
-  }
-
-  String _statusText(String s) {
-    switch (s) {
-      case 'FUNDRAISING':
-        return LanguageService.tr('Open', 'চলমান');
-      case 'FUNDED':
-        return LanguageService.tr('Fully Funded', 'সম্পূর্ণ অর্থায়িত');
-      case 'ACTIVE':
-        return LanguageService.tr('Running', 'চলছে');
-      case 'HARVESTING':
-        return LanguageService.tr('Harvesting', 'ফসল সংগ্রহ');
-      case 'COMPLETED':
-        return LanguageService.tr('Completed', 'সম্পন্ন');
+  List<Map<String, dynamic>> get _visible {
+    final list = _searched.where((p) => _category == null || p['category'] == _category).toList();
+    // Website er buildOrderBy
+    switch (_sort) {
+      case 'deadline':
+        list.sort((a, b) => _date(a['fundingDeadline']).compareTo(_date(b['fundingDeadline'])));
+        break;
+      case 'funded_pct':
+        list.sort((a, b) => _num(b['fundedAmountBdt']).compareTo(_num(a['fundedAmountBdt'])));
+        break;
+      case 'goal_asc':
+        list.sort((a, b) => _num(a['fundingGoalBdt']).compareTo(_num(b['fundingGoalBdt'])));
+        break;
+      case 'goal_desc':
+        list.sort((a, b) => _num(b['fundingGoalBdt']).compareTo(_num(a['fundingGoalBdt'])));
+        break;
       default:
-        return s;
+        list.sort((a, b) => _date(b['createdAt']).compareTo(_date(a['createdAt'])));
     }
-  }
-
-  Color _statusColor(String s) {
-    switch (s) {
-      case 'FUNDRAISING':
-        return emerald;
-      case 'FUNDED':
-        return lapis;
-      case 'ACTIVE':
-        return turquoise;
-      case 'HARVESTING':
-        return goldDeep;
-      case 'COMPLETED':
-        return muted;
-      default:
-        return terracotta;
-    }
+    return list;
   }
 
   // ═════════════════════════════════════════════════════════
@@ -143,10 +131,7 @@ class _MyProjectsPageState extends State<MyProjectsPage> {
     return ValueListenableBuilder<String>(
       valueListenable: LanguageService.currentLanguage,
       builder: (context, lang, child) {
-        final list = _filter == 'OPEN'
-            ? _projects.where((p) => p['status'] == 'FUNDRAISING').toList()
-            : _projects;
-        final openCount = _projects.where((p) => p['status'] == 'FUNDRAISING').length;
+        final list = _visible;
 
         return Scaffold(
           backgroundColor: ivory,
@@ -154,17 +139,35 @@ class _MyProjectsPageState extends State<MyProjectsPage> {
             backgroundColor: ivory,
             surfaceTintColor: Colors.transparent,
             elevation: 0,
+            toolbarHeight: 54,
             iconTheme: const IconThemeData(color: ink),
+            automaticallyImplyLeading: false,
+            // Onno page er moto back icon — shob shomoy dekhabe
+            leading: IconButton(
+              tooltip: LanguageService.tr('Back', 'পিছনে'),
+              icon: const BackButtonIcon(),
+              color: ink,
+              onPressed: () {
+                if (Navigator.of(context).canPop()) {
+                  Navigator.of(context).pop();
+                } else if (widget.onBack != null) {
+                  // Dashboard er tab — Home tab e fire jay
+                  widget.onBack!.call();
+                } else {
+                  Navigator.of(context).maybePop();
+                }
+              },
+            ),
             title: Text(
-              LanguageService.tr('Projects', 'প্রজেক্টসমূহ'),
-              style: const TextStyle(color: ink, fontWeight: FontWeight.w700, fontSize: 18),
+              LanguageService.tr('All Projects', 'সব প্রজেক্ট'),
+              style: const TextStyle(color: ink, fontWeight: FontWeight.w700, fontSize: 17.5),
             ),
           ),
           body: _isLoading
               ? const Center(
             child: SizedBox(
-              width: 28,
-              height: 28,
+              width: 26,
+              height: 26,
               child: CircularProgressIndicator(color: emerald, strokeWidth: 2.4),
             ),
           )
@@ -175,22 +178,23 @@ class _MyProjectsPageState extends State<MyProjectsPage> {
             color: emerald,
             child: ListView(
               physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 40),
+              // Dashboard tab hole curved navbar er jonno niche jayga
+              padding: EdgeInsets.fromLTRB(16, 2, 16, Navigator.of(context).canPop() ? 24 : 104),
               children: [
-                Row(
-                  children: [
-                    _chip('OPEN', LanguageService.tr('Open ($openCount)', 'চলমান ($openCount)')),
-                    const SizedBox(width: 8),
-                    _chip('ALL', LanguageService.tr('All (${_projects.length})', 'সব (${_projects.length})')),
-                  ],
-                ),
-                const SizedBox(height: 16),
+                _buildSummary(),
+                const SizedBox(height: 12),
+                _buildSearch(),
+                const SizedBox(height: 10),
+                _buildSortChips(),
+                const SizedBox(height: 8),
+                _buildCategoryChips(),
+                const SizedBox(height: 12),
                 if (list.isEmpty)
                   _buildEmptyState()
                 else
                   for (final p in list) ...[
                     _buildProjectCard(p),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 12),
                   ],
               ],
             ),
@@ -200,180 +204,68 @@ class _MyProjectsPageState extends State<MyProjectsPage> {
     );
   }
 
-  Widget _chip(String value, String label) {
-    final selected = _filter == value;
-    return GestureDetector(
-      onTap: () => setState(() => _filter = value),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 180),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-        decoration: BoxDecoration(
-          color: selected ? emerald : Colors.white,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: selected ? emerald : line),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: selected ? Colors.white : ink),
-        ),
+  /// Upore choto summary — website er "N verified projects" er moto, shob DB theke
+  Widget _buildSummary() {
+    final open = _projects.where((p) => p['acceptingInvestment'] == true);
+    final seeking = open.fold<double>(
+        0, (s, p) => s + math.max(0.0, _num(p['fundingGoalBdt']) - _num(p['fundedAmountBdt'])));
+
+    Widget cell(String label, String value, Color color) => Expanded(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(label, style: TextStyle(fontSize: 11, color: Colors.white.withAlpha(165))),
+          ),
+          const SizedBox(height: 2),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(value, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: color)),
+          ),
+        ],
       ),
     );
-  }
 
-  Widget _buildProjectCard(Map<String, dynamic> p) {
-    final goal = _num(p['fundingGoalBdt']);
-    final progress = _num(p['progress']).clamp(0.0, 1.0);
-    final status = p['status']?.toString() ?? '';
-    final sc = _statusColor(status);
-    final cat = p['category']?.toString() ?? '';
-    final catLabel = categoryLabels[cat] ?? cat;
-    final coverUrl = p['coverImageUrl']?.toString() ?? '';
-    final location = p['location']?.toString() ?? '';
-    final description = p['description']?.toString() ?? '';
-    final daysLeft = (p['daysLeft'] as num?)?.toInt() ?? 0;
-    final hasDeadline = p['hasDeadline'] == true;
-    final duration = (p['durationDays'] as num?)?.toInt() ?? 0;
-    final investors = (p['investorsCount'] as num?)?.toInt() ?? 0;
-    final minInv = _num(p['minInvestmentBdt']);
-    final returnText = _pctRange(_num(p['returnMin']), _num(p['returnMax']));
-
-    // Badge e shudhu shotti tottho: deadline thakle din, na thakle status
-    final String badge;
-    if (status == 'FUNDRAISING' && hasDeadline) {
-      badge = daysLeft > 0
-          ? LanguageService.tr('$daysLeft days left', '$daysLeft দিন বাকি')
-          : LanguageService.tr('Closing today', 'আজ শেষ দিন');
-    } else {
-      badge = _statusText(status);
-    }
-
-    return GestureDetector(
-      onTap: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => ProjectDetailPage(projectIdOrSlug: p['id'].toString())),
-        );
-        if (mounted) _loadProjectsData();
-      },
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(16),
       child: Container(
-        clipBehavior: Clip.antiAlias,
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(22),
-          border: Border.all(color: line),
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            colors: [emeraldBright, emerald],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        child: Stack(
           children: [
-            Stack(
-              children: [
-                SizedBox(
-                  height: 160,
-                  width: double.infinity,
-                  child: coverUrl.isEmpty
-                      ? _coverPlaceholder()
-                      : Image.network(
-                    coverUrl,
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => _coverPlaceholder(),
-                  ),
-                ),
-                if (catLabel.isNotEmpty)
-                  Positioned(
-                    top: 10,
-                    left: 10,
-                    child: _overlayPill(catLabel, Colors.black.withAlpha(150)),
-                  ),
-                Positioned(
-                  top: 10,
-                  right: 10,
-                  child: _overlayPill(badge, sc.withAlpha(225),
-                      icon: status == 'FUNDRAISING' && hasDeadline ? Icons.access_time_rounded : null),
-                ),
-              ],
-            ),
             Padding(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    (p['title']?.toString() ?? '').isEmpty ? '—' : p['title'].toString(),
-                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: ink),
+                    LanguageService.tr('INVESTMENT PIPELINE', 'বিনিয়োগের সুযোগ'),
+                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: Colors.white.withAlpha(200), letterSpacing: 1.3),
                   ),
-                  if (location.isNotEmpty) ...[
-                    const SizedBox(height: 4),
-                    Row(
-                      children: [
-                        const Icon(Icons.location_on_outlined, size: 13, color: goldDeep),
-                        const SizedBox(width: 4),
-                        Expanded(
-                          child: Text(location, style: const TextStyle(fontSize: 11.5, color: muted)),
-                        ),
-                      ],
-                    ),
-                  ],
-                  if (description.isNotEmpty) ...[
-                    const SizedBox(height: 10),
-                    Text(
-                      description,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 12, color: muted, height: 1.4),
-                    ),
-                  ],
-                  const SizedBox(height: 14),
+                  const SizedBox(height: 3),
+                  Text(
+                    LanguageService.tr(
+                        '${_projects.length} verified ${_projects.length == 1 ? 'project' : 'projects'} for co-investment',
+                        '${_projects.length} টি যাচাইকৃত প্রজেক্ট'),
+                    style: TextStyle(fontSize: 12.5, color: Colors.white.withAlpha(200)),
+                  ),
+                  const SizedBox(height: 9),
                   Row(
                     children: [
-                      Text(
-                        LanguageService.tr('${(progress * 100).toStringAsFixed(0)}% funded',
-                            '${(progress * 100).toStringAsFixed(0)}% সংগৃহীত'),
-                        style: const TextStyle(fontSize: 11.5, color: ink, fontWeight: FontWeight.w700),
-                      ),
-                      const Spacer(),
-                      if (goal > 0)
-                        Text(
-                          LanguageService.tr('Goal ${_fmtBdt(goal)}', 'লক্ষ্য ${_fmtBdt(goal)}'),
-                          style: const TextStyle(fontSize: 11.5, color: muted),
-                        ),
+                      cell(LanguageService.tr('Open now', 'চলমান'), '${open.length}', Colors.white),
+                      cell(LanguageService.tr('Still to raise', 'সংগ্রহ বাকি'),
+                          seeking > 0 ? ProjectLabels.bdtCard(seeking) : '—', BC.brand200),
+                      cell(LanguageService.tr('Projects', 'প্রজেক্ট'), '${_projects.length}', BC.brand300),
                     ],
                   ),
-                  const SizedBox(height: 6),
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(4),
-                    child: LinearProgressIndicator(
-                      value: progress,
-                      minHeight: 6,
-                      backgroundColor: line,
-                      valueColor: const AlwaysStoppedAnimation<Color>(emerald),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  Row(
-                    children: [
-                      Expanded(child: _stat(LanguageService.tr('Return', 'রিটার্ন'), returnText, emerald, emeraldSoft)),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: _stat(
-                          LanguageService.tr('Duration', 'মেয়াদ'),
-                          duration > 0 ? LanguageService.tr('$duration days', '$duration দিন') : '—',
-                          goldDeep,
-                          goldSoft,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: _stat(LanguageService.tr('Investors', 'বিনিয়োগকারী'), '$investors', ink, ivory),
-                      ),
-                    ],
-                  ),
-                  if (minInv > 0) ...[
-                    const SizedBox(height: 12),
-                    Text(
-                      LanguageService.tr('Minimum ${_fmtBdt(minInv)}', 'সর্বনিম্ন ${_fmtBdt(minInv)}'),
-                      style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: ink),
-                    ),
-                  ],
                 ],
               ),
             ),
@@ -383,91 +275,606 @@ class _MyProjectsPageState extends State<MyProjectsPage> {
     );
   }
 
-  Widget _coverPlaceholder() {
-    return Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          colors: [Color(0xFF125A43), emeraldDeep, Color(0xFF0B2A3A)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
+  Widget _buildSearch() {
+    return TextField(
+      controller: _searchCtrl,
+      onChanged: (v) => setState(() => _search = v),
+      textInputAction: TextInputAction.search,
+      style: const TextStyle(fontSize: 14, color: ink),
+      decoration: InputDecoration(
+        hintText: LanguageService.tr('Search by title, sector, location...', 'নাম, খাত বা জায়গা দিয়ে খুঁজুন...'),
+        hintStyle: const TextStyle(fontSize: 13.5, color: muted),
+        prefixIcon: const Icon(Icons.search_rounded, size: 19, color: muted),
+        suffixIcon: _search.isEmpty
+            ? null
+            : IconButton(
+          icon: const Icon(Icons.close_rounded, size: 19, color: muted),
+          onPressed: () {
+            _searchCtrl.clear();
+            setState(() => _search = '');
+          },
+        ),
+        isDense: true,
+        filled: true,
+        fillColor: Colors.white,
+        contentPadding: const EdgeInsets.symmetric(vertical: 11),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: line)),
+        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: line)),
+        focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: emerald, width: 1.4)),
+      ),
+    );
+  }
+
+  Widget _chip({required String label, required bool selected, required VoidCallback onTap, IconData? icon}) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: selected ? emerald : Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: selected ? emerald : line),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (icon != null) ...[
+              Icon(icon, size: 15, color: selected ? Colors.white : muted),
+              const SizedBox(width: 4),
+            ],
+            Text(
+              label,
+              style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: selected ? Colors.white : ink),
+            ),
+          ],
         ),
       ),
-      child: Stack(
-        children: [
-          Positioned.fill(
-            child: CustomPaint(painter: _IslamicPatternPainter(color: Colors.white.withAlpha(18), cell: 40)),
+    );
+  }
+
+  Widget _chipRow(List<Widget> chips) {
+    return SizedBox(
+      height: 36,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: chips.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 6),
+        itemBuilder: (_, i) => Center(child: chips[i]),
+      ),
+    );
+  }
+
+  Widget _buildSortChips() {
+    return _chipRow([
+      for (final s in _sorts)
+        _chip(
+          label: LanguageService.tr(s.$2, s.$3),
+          icon: s.$1 == 'newest' ? Icons.tune_rounded : null,
+          selected: _sort == s.$1,
+          onTap: () => setState(() => _sort = s.$1),
+        ),
+    ]);
+  }
+
+  /// Website er moto: All (N) + je category te project ache shudhu sheigulo
+  Widget _buildCategoryChips() {
+    final searched = _searched;
+    final counts = <String, int>{};
+    for (final p in searched) {
+      final c = p['category']?.toString() ?? '';
+      counts[c] = (counts[c] ?? 0) + 1;
+    }
+    return _chipRow([
+      _chip(
+        label: LanguageService.tr('All (${searched.length})', 'সব (${searched.length})'),
+        selected: _category == null,
+        onTap: () => setState(() => _category = null),
+      ),
+      for (final cat in ProjectLabels.categoryLabels.keys)
+        if ((counts[cat] ?? 0) > 0)
+          _chip(
+            label: '${ProjectLabels.category(cat)} (${counts[cat]})',
+            selected: _category == cat,
+            onTap: () => setState(() => _category = cat),
           ),
-          const Center(child: Icon(Icons.eco_outlined, color: goldLight, size: 36)),
+    ]);
+  }
+
+  // ─── Project card (website er components/shared/project-card.tsx) ───
+  Widget _buildProjectCard(Map<String, dynamic> p) {
+    final goal = _num(p['fundingGoalBdt']);
+    final funded = _num(p['fundedAmountBdt']);
+    final pct = ProjectLabels.fundingPct(funded, goal);
+    final status = p['status']?.toString() ?? '';
+    final cat = p['category']?.toString() ?? '';
+    final catLabel = ProjectLabels.category(cat, p['customCategory']?.toString());
+    final location = p['location']?.toString() ?? '';
+    final groupName = p['groupName']?.toString() ?? '';
+    final groupLogo = ProjectLabels.groupLogoUrl(p['groupSlug']?.toString());
+    final cover = p['coverImageUrl']?.toString() ?? '';
+    final images = ((p['imageUrls'] as List?) ?? []).map((e) => e.toString()).toList();
+    final image = cover.isNotEmpty ? cover : (images.isNotEmpty ? images.first : '');
+    final description = ProjectLabels.plainText(p['description']?.toString() ?? '');
+    final returnLabel = ProjectLabels.returnLabel(_num(p['returnMin']), _num(p['returnMax']));
+    final duration = (p['durationDays'] as num?)?.toInt() ?? 0;
+    final minInv = _num(p['minInvestmentBdt']);
+    final deadlineDays = (p['deadlineDays'] as num?)?.toInt();
+
+    Future<void> openDetail() async {
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => ProjectDetailPage(projectIdOrSlug: p['id'].toString())),
+      );
+      if (mounted) _loadProjectsData();
+    }
+
+    return GestureDetector(
+      onTap: openDetail,
+      child: Container(
+        clipBehavior: Clip.antiAlias,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: line),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // ── Chobi + badge
+            SizedBox(
+              height: 170,
+              width: double.infinity,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  image.isEmpty ? _coverPlaceholder() : _blurredImage(image),
+                  Positioned(
+                    top: 10,
+                    left: 10,
+                    right: 10,
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: _overlayPill(
+                              text: catLabel.toUpperCase(),
+                              icon: ProjectLabels.categoryIcon(cat),
+                              bg: Colors.black.withAlpha(115),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        _statusBadge(status),
+                      ],
+                    ),
+                  ),
+                  Positioned(
+                    left: 10,
+                    right: 10,
+                    bottom: 10,
+                    child: Row(
+                      children: [
+                        if (groupName.isNotEmpty)
+                          Flexible(child: _groupPill(groupName, groupLogo))
+                        else if (location.isNotEmpty)
+                          Flexible(
+                            child: _overlayPill(
+                              text: location,
+                              icon: Icons.location_on_outlined,
+                              bg: Colors.black.withAlpha(128),
+                            ),
+                          ),
+                        const Spacer(),
+                        if (returnLabel != '—')
+                          _overlayPill(
+                            text: LanguageService.tr('$returnLabel ROI', '$returnLabel লাভ'),
+                            icon: Icons.trending_up_rounded,
+                            bg: const Color(0xFF022C22).withAlpha(217),
+                            fg: const Color(0xFF6EE7B7),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    (p['title']?.toString() ?? '').isEmpty ? '—' : p['title'].toString(),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: ink, height: 1.3),
+                  ),
+                  if (description.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      description,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 12.5, color: muted, height: 1.4),
+                    ),
+                  ],
+                  const SizedBox(height: 12),
+                  // ── Kotota uthlo
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text.rich(
+                          TextSpan(
+                            children: [
+                              TextSpan(
+                                text: ProjectLabels.bdtCard(funded),
+                                style: const TextStyle(fontWeight: FontWeight.w700, color: ink),
+                              ),
+                              TextSpan(
+                                text: LanguageService.tr(
+                                    ' raised of ${ProjectLabels.bdtCard(goal)}', ' উঠেছে, লক্ষ্য ${ProjectLabels.bdtCard(goal)}'),
+                                style: const TextStyle(color: muted),
+                              ),
+                            ],
+                          ),
+                          style: const TextStyle(fontSize: 12.5),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(color: emeraldSoft, borderRadius: BorderRadius.circular(6)),
+                        child: Text('$pct%',
+                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: emerald)),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: Container(
+                      height: 6,
+                      color: line,
+                      alignment: Alignment.centerLeft,
+                      child: FractionallySizedBox(
+                        widthFactor: pct / 100,
+                        child: Container(
+                          decoration: const BoxDecoration(
+                            gradient: LinearGradient(colors: [emerald, emeraldBright]),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  // ── 3 ta tottho (website er KPI bento)
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _kpi(
+                          returnLabel,
+                          p['returnType'] == 'FIXED_RETURN'
+                              ? LanguageService.tr('FIXED RETURN', 'নির্দিষ্ট রিটার্ন')
+                              : LanguageService.tr('EST. RETURN', 'আনুমানিক লাভ'),
+                          highlight: true,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(child: _kpi(ProjectLabels.term(duration), LanguageService.tr('TERM', 'মেয়াদ'))),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: _kpi(minInv > 0 ? ProjectLabels.bdtCard(minInv) : '—',
+                            LanguageService.tr('MIN. ENTRY', 'সর্বনিম্ন')),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  const Divider(height: 1, color: line),
+                  const SizedBox(height: 10),
+                  // ── Footer
+                  Row(
+                    children: [
+                      if (status == 'FUNDRAISING') ...[
+                        Icon(Icons.access_time_rounded,
+                            size: 16, color: (deadlineDays ?? 0) < 0 ? BC.destructive : emerald),
+                        const SizedBox(width: 4),
+                        Expanded(
+                          child: Text(
+                            ProjectLabels.countdown(deadlineDays),
+                            style: TextStyle(
+                                fontSize: 12.5, color: (deadlineDays ?? 0) < 0 ? BC.destructive : muted),
+                          ),
+                        ),
+                      ] else
+                        Expanded(
+                          child: Text(ProjectLabels.cardFooterStatus(status),
+                              style: const TextStyle(fontSize: 12.5, color: muted)),
+                        ),
+                      const SizedBox(width: 8),
+                      // Shob shomoy ekdom dane — project er bistarito / invest page e jay
+                      FilledButton(
+                        onPressed: openDetail,
+                        style: FilledButton.styleFrom(
+                          backgroundColor: emerald,
+                          foregroundColor: Colors.white,
+                          minimumSize: const Size(0, 38),
+                          padding: const EdgeInsets.fromLTRB(14, 0, 10, 0),
+                          visualDensity: VisualDensity.compact,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(9)),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              LanguageService.tr('Be an Investor', 'বিনিয়োগ করুন'),
+                              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+                            ),
+                            const SizedBox(width: 5),
+                            const Icon(Icons.arrow_forward_rounded, size: 18),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Website er status badge: Active (sobuj) · Funded / Matured (neel) · Completed (dhusor) · Inactive (lal)
+  Widget _statusBadge(String status) {
+    final Color dot;
+    final Color fg;
+    final Color bg;
+    switch (status) {
+      case 'FUNDRAISING':
+        dot = const Color(0xFF10B981);
+        fg = const Color(0xFF6EE7B7);
+        bg = const Color(0xFF022C22).withAlpha(217);
+        break;
+      case 'FUNDED':
+      case 'ACTIVE':
+        dot = const Color(0xFF60A5FA);
+        fg = const Color(0xFF93C5FD);
+        bg = const Color(0xFF172554).withAlpha(204);
+        break;
+      case 'COMPLETED':
+        dot = const Color(0xFF94A3B8);
+        fg = const Color(0xFFCBD5E1);
+        bg = const Color(0xFF0F172A).withAlpha(204);
+        break;
+      default:
+        dot = const Color(0xFFEF4444);
+        fg = const Color(0xFFFCA5A5);
+        bg = const Color(0xFF450A0A).withAlpha(204);
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: fg.withAlpha(80)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(width: 7, height: 7, decoration: BoxDecoration(color: dot, shape: BoxShape.circle)),
+          const SizedBox(width: 5),
+          Text(ProjectLabels.cardStatus(status),
+              style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: fg)),
         ],
       ),
     );
   }
 
-  Widget _overlayPill(String text, Color bg, {IconData? icon}) {
+  Widget _overlayPill({required String text, required Color bg, IconData? icon, Color fg = Colors.white}) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: Colors.white.withAlpha(45)),
+      ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           if (icon != null) ...[
-            Icon(icon, size: 12, color: Colors.white),
+            Icon(icon, size: 14, color: fg == Colors.white ? const Color(0xFF34D399) : fg),
             const SizedBox(width: 4),
           ],
-          Text(text, style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, color: Colors.white)),
+          Flexible(
+            child: Text(
+              text,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: fg, letterSpacing: 0.3),
+            ),
+          ),
         ],
       ),
     );
   }
 
-  Widget _stat(String label, String value, Color color, Color soft) {
+  Widget _groupPill(String name, String? logoUrl) {
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 6),
-      decoration: BoxDecoration(color: soft, borderRadius: BorderRadius.circular(12)),
+      padding: const EdgeInsets.fromLTRB(3, 3, 8, 3),
+      decoration: BoxDecoration(
+        color: Colors.black.withAlpha(128),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: Colors.white.withAlpha(40)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (logoUrl != null) ...[
+            Container(
+              width: 18,
+              height: 18,
+              padding: const EdgeInsets.all(1.5),
+              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(3)),
+              child: Image.network(
+                logoUrl,
+                fit: BoxFit.contain,
+                errorBuilder: (_, __, ___) => const Icon(Icons.apartment_rounded, size: 14, color: emerald),
+              ),
+            ),
+            const SizedBox(width: 5),
+          ] else ...[
+            const Icon(Icons.apartment_rounded, size: 14, color: Color(0xFF34D399)),
+            const SizedBox(width: 4),
+          ],
+          Flexible(
+            child: Text(
+              name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 11.5, color: Colors.white),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _kpi(String value, String label, {bool highlight = false}) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+      decoration: BoxDecoration(
+        color: highlight ? emeraldSoft : ivory,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: highlight ? emerald.withAlpha(40) : line),
+      ),
       child: Column(
         children: [
           FittedBox(
             fit: BoxFit.scaleDown,
-            child: Text(value, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: color)),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (highlight) ...[
+                  const Icon(Icons.trending_up_rounded, size: 14, color: emerald),
+                  const SizedBox(width: 2),
+                ],
+                Text(value,
+                    style: TextStyle(
+                        fontSize: 13.5, fontWeight: FontWeight.w800, color: highlight ? emerald : ink)),
+              ],
+            ),
           ),
           const SizedBox(height: 2),
-          Text(label, style: const TextStyle(fontSize: 9.5, color: muted)),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(label,
+                style: TextStyle(
+                    fontSize: 10,
+                    letterSpacing: 0.6,
+                    color: highlight ? emerald.withAlpha(200) : muted)),
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildEmptyState() {
+  /// Chobi pura dekhay (contain); faka jaygay oi chobir-i jhapsa (blur) boro
+  /// copy — kalo ar dekha jay na
+  Widget _blurredImage(String url) {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        ClipRect(
+          child: Transform.scale(
+            // Blur er kinara jeno faka na dekhay
+            scale: 1.25,
+            child: ImageFiltered(
+              imageFilter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+              child: Image.network(
+                url,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+              ),
+            ),
+          ),
+        ),
+        // Halka kalo porda — samner chobi ar badge gulo fute uthe
+        Container(color: Colors.black.withAlpha(45)),
+        Image.network(
+          url,
+          fit: BoxFit.contain,
+          errorBuilder: (_, __, ___) => _coverPlaceholder(),
+        ),
+      ],
+    );
+  }
+
+  Widget _coverPlaceholder() {
     return Container(
-      padding: const EdgeInsets.all(28),
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          colors: [emeraldBright, emerald],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+      ),
+      child: Center(child: Icon(Icons.trending_up_rounded, color: Colors.white.withAlpha(110), size: 40)),
+    );
+  }
+
+  Widget _buildEmptyState() {
+    final filtered = _search.isNotEmpty || _category != null;
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 22, horizontal: 20),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(color: line),
       ),
       child: Column(
         children: [
           Container(
-            width: 56,
-            height: 56,
-            decoration: BoxDecoration(color: emeraldSoft, borderRadius: BorderRadius.circular(18)),
-            child: const Icon(Icons.eco_outlined, color: emerald, size: 28),
+            width: 42,
+            height: 42,
+            decoration: const BoxDecoration(color: emeraldSoft, shape: BoxShape.circle),
+            child: const Icon(Icons.search_rounded, color: emerald, size: 20),
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 10),
           Text(
-            _filter == 'OPEN'
-                ? LanguageService.tr('No projects open right now', 'এই মুহূর্তে কোনো প্রজেক্ট খোলা নেই')
-                : LanguageService.tr('No projects yet', 'এখনো কোনো প্রজেক্ট নেই'),
+            LanguageService.tr('No projects found', 'কোনো প্রজেক্ট পাওয়া যায়নি'),
             textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 15.5, fontWeight: FontWeight.w700, color: ink),
+            style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700, color: ink),
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 3),
           Text(
-            LanguageService.tr('Check back later for new investment opportunities.',
-                'নতুন বিনিয়োগের সুযোগের জন্য পরে আবার দেখুন।'),
+            filtered
+                ? LanguageService.tr('Try adjusting your filters.', 'ফিল্টার বদলে দেখুন।')
+                : LanguageService.tr(
+                'New verified projects are currently undergoing due diligence and will launch soon.',
+                'নতুন প্রজেক্ট যাচাই চলছে, শীঘ্রই আসবে।'),
             textAlign: TextAlign.center,
             style: const TextStyle(fontSize: 12.5, color: muted),
           ),
+          if (filtered) ...[
+            const SizedBox(height: 10),
+            TextButton(
+              onPressed: () {
+                _searchCtrl.clear();
+                setState(() {
+                  _search = '';
+                  _category = null;
+                });
+              },
+              style: TextButton.styleFrom(foregroundColor: emerald),
+              child: Text(LanguageService.tr('View all projects', 'সব প্রজেক্ট দেখুন')),
+            ),
+          ],
         ],
       ),
     );
@@ -480,24 +887,24 @@ class _MyProjectsPageState extends State<MyProjectsPage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.wifi_off_rounded, size: 40, color: goldDeep),
-            const SizedBox(height: 12),
+            const Icon(Icons.wifi_off_rounded, size: 34, color: emerald),
+            const SizedBox(height: 10),
             Text(
               LanguageService.tr('Could not load projects', 'প্রজেক্ট লোড করা যায়নি'),
               style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: ink),
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: 3),
             Text(
               LanguageService.tr('Please check your internet connection.', 'ইন্টারনেট সংযোগ চেক করুন।'),
               style: const TextStyle(fontSize: 12.5, color: muted),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 14),
             FilledButton(
               onPressed: _loadProjectsData,
               style: FilledButton.styleFrom(
                 backgroundColor: emerald,
                 foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
               ),
               child: Text(LanguageService.tr('Try again', 'আবার চেষ্টা করুন')),
             ),
@@ -506,46 +913,4 @@ class _MyProjectsPageState extends State<MyProjectsPage> {
       ),
     );
   }
-}
-
-// ═══════════════════════════════════════════════════════════
-// Islamic geometric pattern (dashboard er moto 8-point star)
-// ═══════════════════════════════════════════════════════════
-class _IslamicPatternPainter extends CustomPainter {
-  final Color color;
-  final double cell;
-
-  _IslamicPatternPainter({required this.color, required this.cell});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 0.9;
-
-    final r = cell * 0.34;
-
-    for (double y = 0; y <= size.height + cell; y += cell) {
-      final offsetRow = ((y / cell).round() % 2) * cell / 2;
-      for (double x = -cell; x <= size.width + cell; x += cell) {
-        final c = Offset(x + offsetRow, y);
-        for (final start in [0.0, math.pi / 4]) {
-          final path = Path();
-          for (int i = 0; i < 4; i++) {
-            final a = start + i * math.pi / 2;
-            final p = Offset(c.dx + r * math.cos(a), c.dy + r * math.sin(a));
-            i == 0 ? path.moveTo(p.dx, p.dy) : path.lineTo(p.dx, p.dy);
-          }
-          path.close();
-          canvas.drawPath(path, paint);
-        }
-        canvas.drawCircle(c, r * 0.32, paint);
-      }
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _IslamicPatternPainter old) =>
-      old.color != color || old.cell != cell;
 }

@@ -9,9 +9,12 @@ import '../../services/language_service.dart';
 import '../investor/settings/legal_web_page.dart';
 import 'login_page.dart';
 import 'widgets/auth_shell.dart';
+import 'widgets/countries.dart';
+import '../../theme/app_colors.dart';
 
 /// Website er "Create your account" er motoi:
-/// Nam, mobile, email, jonmo tarikh, password (kompokkhe 6 okkhor), confirm.
+/// Nam *, mobile * (je kono desh — +880 default), email (optional),
+/// jonmo tarikh * (18+), password * (kompokkhe 6), confirm *.
 /// NID, thikana, nominee — pore Profile → Edit theke.
 class RegistrationPage extends StatefulWidget {
   const RegistrationPage({super.key});
@@ -21,16 +24,13 @@ class RegistrationPage extends StatefulWidget {
 }
 
 class _RegistrationPageState extends State<RegistrationPage> {
-  // ─── Palette (app er Islamic design) ───
-  static const Color emerald = Color(0xFF0E4A37);
-  static const Color emeraldSoft = Color(0xFFE3F0E9);
-  static const Color gold = Color(0xFFB8935A);
-  static const Color goldDeep = Color(0xFF8A6A3A);
-  static const Color ivory = Color(0xFFF7F4EE);
-  static const Color ink = Color(0xFF1C2421);
-  static const Color muted = Color(0xFF6E736F);
-  static const Color line = Color(0xFFE8E2D7);
-  static const Color danger = Color(0xFFB4413A);
+  // ─── Palette — website er rong (lib/theme/app_colors.dart) ───
+  static const Color emerald = BC.primary;
+  static const Color emeraldBright = BC.brand500;
+  static const Color emeraldSoft = BC.secondary;
+  static const Color ink = BC.foreground;
+  static const Color muted = BC.mutedForeground;
+  static const Color line = BC.border;
 
   final _formKey = GlobalKey<FormState>();
   final _fullNameController = TextEditingController();
@@ -39,6 +39,7 @@ class _RegistrationPageState extends State<RegistrationPage> {
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
 
+  Country _country = Country.bangladesh;
   DateTime? _dob;
   bool _dobError = false;
   bool _isPasswordVisible = false;
@@ -99,7 +100,27 @@ class _RegistrationPageState extends State<RegistrationPage> {
   // ═════════════════════════════════════════════════════════
   String get _req => LanguageService.tr('Required', 'আবশ্যক');
 
-  String _cleanPhone(String v) => DatabaseService.normalizeBdPhone(v);
+  /// Desh er code shoho pura number: +8801712345678
+  String get _fullPhone => DatabaseService.toE164(_country.dial, _phoneController.text);
+
+  bool get _isBd => _country.iso == 'BD';
+
+  // ─── Desh bachai (search shoho) ───
+  Future<void> _pickCountry() async {
+    FocusScope.of(context).unfocus();
+    final picked = await showModalBottomSheet<Country>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (_) => _CountrySheet(selected: _country),
+    );
+    if (picked != null && mounted) {
+      setState(() => _country = picked);
+      // Notun desh er niyome abar check
+      if (_phoneController.text.isNotEmpty) _formKey.currentState?.validate();
+    }
+  }
 
   String _fmtDob(DateTime d) =>
       '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
@@ -112,11 +133,20 @@ class _RegistrationPageState extends State<RegistrationPage> {
   Future<void> _pickDob() async {
     FocusScope.of(context).unfocus();
     final now = DateTime.now();
+    // 18 bochor er kom boyosh er tarikh calendar e-i ashbe na
+    final latest = DateTime(now.year - 18, now.month, now.day);
     final picked = await showDatePicker(
       context: context,
       initialDate: _dob ?? DateTime(now.year - 25, 1, 1),
       firstDate: DateTime(1920),
-      lastDate: now,
+      lastDate: latest,
+      initialEntryMode: DatePickerEntryMode.calendarOnly,
+      builder: (ctx, child) => Theme(
+        data: Theme.of(ctx).copyWith(
+          colorScheme: Theme.of(ctx).colorScheme.copyWith(primary: emerald, onPrimary: Colors.white),
+        ),
+        child: child!,
+      ),
       helpText: LanguageService.tr('Date of birth', 'জন্ম তারিখ'),
     );
     if (picked != null) {
@@ -144,15 +174,18 @@ class _RegistrationPageState extends State<RegistrationPage> {
     final result = await DatabaseService.registerUser(
       name: _fullNameController.text.trim(),
       email: _emailController.text.trim().toLowerCase(),
-      phone: _cleanPhone(_phoneController.text.trim()),
+      phone: _fullPhone,
       // Password e kono kata-chhata na — ja likheche hubohu tai
       password: _passwordController.text,
       dateOfBirth: _dob!,
     );
 
-    // Account hole session save — tarpor shorasori app e
+    // Account hole session save — login er motoi token o rakhi,
+    // na hole app bondho kore khulle abar login chaito
     if (result['success'] == true && result['data'] is Map) {
-      await AuthService.saveUserData(Map<String, dynamic>.from(result['data'] as Map));
+      final data = Map<String, dynamic>.from(result['data'] as Map);
+      await AuthService.saveToken('token_${data['id']}_${DateTime.now().millisecondsSinceEpoch}');
+      await AuthService.saveUserData(data);
     }
 
     if (!mounted) return;
@@ -193,11 +226,12 @@ class _RegistrationPageState extends State<RegistrationPage> {
           eyebrow: 'Biniyog Club',
           title: LanguageService.tr('Create your account', 'অ্যাকাউন্ট খুলুন'),
           subtitle: LanguageService.tr(
-            'Free investor account — it takes less than a minute.',
-            'ফ্রি বিনিয়োগকারী অ্যাকাউন্ট — এক মিনিটও লাগবে না।',
+            "Join Bangladesh's leading investment platform",
+            'বাংলাদেশের শীর্ষ বিনিয়োগ প্ল্যাটফর্মে যোগ দিন',
           ),
           highlights: [
-            (Icons.timer_outlined, LanguageService.tr('Under 1 minute', '১ মিনিটের কম')),
+            (Icons.verified_outlined, LanguageService.tr('Admin-vetted projects', 'যাচাই করা প্রজেক্ট')),
+            (Icons.history_edu_outlined, LanguageService.tr('Legal contract', 'আইনি চুক্তি')),
             (Icons.receipt_long_outlined, LanguageService.tr('Every taka tracked', 'প্রতিটি টাকার হিসাব')),
           ],
           footer: AuthShell.switchLink(
@@ -229,43 +263,84 @@ class _RegistrationPageState extends State<RegistrationPage> {
                     validator: (v) {
                       final t = (v ?? '').trim();
                       if (t.isEmpty) return _req;
-                      if (t.length < 3) return LanguageService.tr('Name is too short', 'নাম খুব ছোট');
+                      if (t.length < 2) return LanguageService.tr('Name is too short', 'নাম খুব ছোট');
                       return null;
                     },
                   ),
                   const SizedBox(height: 16),
 
-                  // ─── Phone ───
+                  // ─── Phone (je kono desh) ───
                   AuthShell.label(LanguageService.tr('PHONE NUMBER', 'মোবাইল নম্বর'), isRequired: true),
                   TextFormField(
                     controller: _phoneController,
                     keyboardType: TextInputType.phone,
                     textInputAction: TextInputAction.next,
-                    autofillHints: const [AutofillHints.telephoneNumber],
+                    autofillHints: const [AutofillHints.telephoneNumberNational],
                     inputFormatters: [
-                      FilteringTextInputFormatter.allow(RegExp(r'[0-9+\s-]')),
-                      LengthLimitingTextInputFormatter(16),
+                      FilteringTextInputFormatter.allow(RegExp(r'[0-9\s-]')),
+                      LengthLimitingTextInputFormatter(17),
                     ],
-                    decoration: AuthShell.dec('01712345678', Icons.phone_outlined),
+                    decoration: AuthShell.dec(_isBd ? '1712 345678' : LanguageService.tr('Phone number', 'ফোন নম্বর'),
+                        Icons.phone_outlined)
+                        .copyWith(
+                      prefixIcon: Padding(
+                        padding: const EdgeInsets.only(left: 6, right: 8),
+                        child: InkWell(
+                          onTap: _pickCountry,
+                          borderRadius: BorderRadius.circular(10),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                            decoration: const BoxDecoration(
+                              border: Border(right: BorderSide(color: line)),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(_country.flag, style: const TextStyle(fontSize: 19)),
+                                const SizedBox(width: 6),
+                                Text(
+                                  '+${_country.dial}',
+                                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: ink),
+                                ),
+                                const Icon(Icons.expand_more_rounded, size: 18, color: muted),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                      prefixIconConstraints: const BoxConstraints(minHeight: 48),
+                      helperText: _isBd
+                          ? null
+                          : LanguageService.tr('${_country.name} — enter the number without the country code',
+                          '${_country.name} — দেশের কোড ছাড়া নম্বর দিন'),
+                      helperStyle: const TextStyle(fontSize: 12.5, color: muted),
+                    ),
                     validator: (v) {
-                      final t = _cleanPhone((v ?? '').trim());
+                      final t = (v ?? '').replaceAll(RegExp(r'\D'), '');
                       if (t.isEmpty) return _req;
-                      if (!RegExp(r'^01[3-9]\d{8}$').hasMatch(t)) {
-                        return LanguageService.tr('Enter a valid number (01XXXXXXXXX)', 'সঠিক নম্বর দিন (01XXXXXXXXX)');
+                      if (!DatabaseService.isValidPhone(_fullPhone)) {
+                        return _isBd
+                            ? LanguageService.tr('Enter a valid number (1XXXXXXXXX)', 'সঠিক নম্বর দিন (1XXXXXXXXX)')
+                            : LanguageService.tr('Enter a valid phone number', 'সঠিক ফোন নম্বর দিন');
                       }
                       return null;
                     },
                   ),
                   const SizedBox(height: 16),
 
-                  // ─── Email (deya na-deya user er ichchha — kono "optional" lekha nei) ───
+                  // ─── Email (website er motoi optional) ───
                   AuthShell.label(LanguageService.tr('EMAIL', 'ইমেইল')),
                   TextFormField(
                     controller: _emailController,
                     keyboardType: TextInputType.emailAddress,
                     textInputAction: TextInputAction.next,
                     autofillHints: const [AutofillHints.email],
-                    decoration: AuthShell.dec('investor@example.com', Icons.mail_outline_rounded),
+                    decoration: AuthShell.dec('investor@example.com', Icons.mail_outline_rounded).copyWith(
+                      helperText: LanguageService.tr(
+                          'Add it to reset your password by email later.',
+                          'দিলে পরে ইমেইলে পাসওয়ার্ড রিসেট করতে পারবেন।'),
+                      helperStyle: const TextStyle(fontSize: 12.5, color: muted),
+                    ),
                     validator: (v) {
                       final t = (v ?? '').trim();
                       if (t.isEmpty) return null;
@@ -293,7 +368,7 @@ class _RegistrationPageState extends State<RegistrationPage> {
                       ),
                       child: Text(
                         _dob == null ? 'DD/MM/YYYY' : _fmtDob(_dob!),
-                        style: TextStyle(fontSize: 14, color: _dob == null ? muted.withAlpha(150) : ink),
+                        style: TextStyle(fontSize: 15, color: _dob == null ? muted.withAlpha(150) : ink),
                       ),
                     ),
                   ),
@@ -331,7 +406,9 @@ class _RegistrationPageState extends State<RegistrationPage> {
                     controller: _confirmPasswordController,
                     obscureText: !_isConfirmPasswordVisible,
                     textInputAction: TextInputAction.done,
-                    onFieldSubmitted: (_) => _isLoading ? null : _handleRegister(),
+                    onFieldSubmitted: (_) {
+                      if (!_isLoading) _handleRegister();
+                    },
                     decoration: AuthShell.dec(LanguageService.tr('Re-enter your password', 'আবার পাসওয়ার্ড লিখুন'),
                         Icons.lock_outline)
                         .copyWith(
@@ -373,7 +450,7 @@ class _RegistrationPageState extends State<RegistrationPage> {
                         Expanded(
                           child: Text.rich(
                             TextSpan(
-                              style: const TextStyle(fontSize: 12, color: ink, height: 1.55),
+                              style: const TextStyle(fontSize: 13, color: ink, height: 1.55),
                               children: [
                                 TextSpan(
                                     text: LanguageService.tr(
@@ -407,9 +484,26 @@ class _RegistrationPageState extends State<RegistrationPage> {
                   ],
                   const SizedBox(height: 20),
                   AuthShell.primaryButton(
-                    text: LanguageService.tr('Create Free Investor Account', 'ফ্রি বিনিয়োগকারী অ্যাকাউন্ট খুলুন'),
+                    text: LanguageService.tr('Create Account', 'অ্যাকাউন্ট খুলুন'),
                     loading: _isLoading,
                     onPressed: _handleRegister,
+                  ),
+                  const SizedBox(height: 14),
+                  // Website er mobile view er motoi
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(Icons.verified_user_outlined, size: 14, color: emerald),
+                      const SizedBox(width: 6),
+                      Flexible(
+                        child: Text(
+                          LanguageService.tr('Bank-grade encryption · Legal contract protection',
+                              'ব্যাংক-মানের এনক্রিপশন · আইনি চুক্তির সুরক্ষা'),
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(fontSize: 12.5, color: muted),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -429,14 +523,14 @@ class _RegistrationPageState extends State<RegistrationPage> {
           height: 26,
           alignment: Alignment.center,
           decoration: const BoxDecoration(
-            gradient: LinearGradient(colors: [Color(0xFFD9BE8C), gold]),
+            gradient: LinearGradient(colors: [emeraldBright, emerald]),
             shape: BoxShape.circle,
           ),
           child: Text('$step',
-              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: Colors.white)),
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: Colors.white)),
         ),
         const SizedBox(width: 10),
-        Text(text, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: ink)),
+        Text(text, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: ink)),
       ],
     );
   }
@@ -448,8 +542,118 @@ class _RegistrationPageState extends State<RegistrationPage> {
             size: 15, color: ok ? emerald : muted.withAlpha(140)),
         const SizedBox(width: 6),
         Text(text,
-            style: TextStyle(fontSize: 11.5, color: ok ? emerald : muted, fontWeight: ok ? FontWeight.w700 : FontWeight.w500)),
+            style: TextStyle(fontSize: 12.5, color: ok ? emerald : muted, fontWeight: ok ? FontWeight.w700 : FontWeight.w500)),
       ],
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Desh bachar bottom sheet — website er "Search country or code" er motoi
+// ═══════════════════════════════════════════════════════════
+class _CountrySheet extends StatefulWidget {
+  final Country selected;
+
+  const _CountrySheet({required this.selected});
+
+  @override
+  State<_CountrySheet> createState() => _CountrySheetState();
+}
+
+class _CountrySheetState extends State<_CountrySheet> {
+  static const Color emerald = BC.primary;
+  static const Color emeraldSoft = BC.secondary;
+  static const Color ivory = BC.background;
+  static const Color ink = BC.foreground;
+  static const Color muted = BC.mutedForeground;
+  static const Color line = BC.border;
+
+  String _q = '';
+
+  List<Country> get _list {
+    final q = _q.trim().toLowerCase().replaceFirst('+', '');
+    if (q.isEmpty) return Country.all;
+    return Country.all
+        .where((c) => c.name.toLowerCase().contains(q) || c.iso.toLowerCase() == q || c.dial.startsWith(q))
+        .toList();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final list = _list;
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      child: SizedBox(
+        height: MediaQuery.of(context).size.height * 0.75,
+        child: Column(
+          children: [
+            const SizedBox(height: 10),
+            Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(color: line, borderRadius: BorderRadius.circular(4)),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+              child: TextField(
+                autofocus: true,
+                onChanged: (v) => setState(() => _q = v),
+                decoration: InputDecoration(
+                  hintText: LanguageService.tr('Search country or code', 'দেশ বা কোড খুঁজুন'),
+                  hintStyle: TextStyle(fontSize: 15, color: muted.withAlpha(150)),
+                  prefixIcon: const Icon(Icons.search_rounded, color: muted),
+                  filled: true,
+                  fillColor: ivory,
+                  contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: line)),
+                  enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: line)),
+                  focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: emerald, width: 1.5)),
+                ),
+              ),
+            ),
+            Expanded(
+              child: list.isEmpty
+                  ? Center(
+                child: Text(LanguageService.tr('No country found', 'কোনো দেশ পাওয়া যায়নি'),
+                    style: const TextStyle(color: muted)),
+              )
+                  : ListView.builder(
+                padding: const EdgeInsets.fromLTRB(8, 0, 8, 16),
+                itemCount: list.length,
+                itemBuilder: (_, i) {
+                  final c = list[i];
+                  final on = c.iso == widget.selected.iso;
+                  return Material(
+                    color: on ? emeraldSoft : Colors.transparent,
+                    borderRadius: BorderRadius.circular(12),
+                    child: ListTile(
+                      dense: true,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      leading: Text(c.flag, style: const TextStyle(fontSize: 23)),
+                      title: Text(
+                        c.name,
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: on ? FontWeight.w700 : FontWeight.w500,
+                          color: on ? emerald : ink,
+                        ),
+                      ),
+                      trailing: Text(
+                        '+${c.dial}',
+                        style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700, color: on ? emerald : muted),
+                      ),
+                      onTap: () => Navigator.pop(context, c),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

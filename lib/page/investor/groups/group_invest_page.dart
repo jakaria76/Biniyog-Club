@@ -11,6 +11,7 @@ import '../../../services/auth_service.dart';
 import '../../../services/cloudinary_service.dart';
 import '../../../services/database_service.dart';
 import '../../../services/language_service.dart';
+import '../../../theme/app_colors.dart';
 
 /// Group tier e invest (ba age kora investment er payment): taka + payment er
 /// dhoron + proof — ek page e. Confirm korle "Pending", admin approve korle ACTIVE.
@@ -38,59 +39,67 @@ class GroupInvestPage extends StatefulWidget {
 }
 
 class _GroupInvestPageState extends State<GroupInvestPage> {
-  // ─── Palette ───
-  static const Color emerald = Color(0xFF0E4A37);
-  static const Color emeraldDeep = Color(0xFF0A3327);
-  static const Color emeraldSoft = Color(0xFFE3F0E9);
-  static const Color gold = Color(0xFFB8935A);
-  static const Color goldLight = Color(0xFFD9BE8C);
-  static const Color goldDeep = Color(0xFF8A6A3A);
-  static const Color goldSoft = Color(0xFFF6EEDF);
-  static const Color lapis = Color(0xFF26437A);
-  static const Color lapisSoft = Color(0xFFE5EAF4);
-  static const Color terracotta = Color(0xFFA5523A);
-  static const Color terracottaSoft = Color(0xFFF7E6DF);
-  static const Color ivory = Color(0xFFF7F4EE);
-  static const Color ink = Color(0xFF1C2421);
-  static const Color muted = Color(0xFF6E736F);
-  static const Color line = Color(0xFFE8E2D7);
-  static const Color danger = Color(0xFFB4413A);
-  static const Color dangerSoft = Color(0xFFFBEAE8);
+  // ─── Palette — website er rong (lib/theme/app_colors.dart) ───
+  static const Color emerald = BC.primary;
+  static const Color emeraldBright = BC.brand500; // home page er moto
+  static const Color emeraldDeep = BC.brand800;
+  static const Color emeraldSoft = BC.secondary;
+  static const Color gold = BC.harvest500;
+  static const Color goldLight = BC.harvest400;
+  static const Color goldDeep = BC.harvest600;
+  static const Color goldSoft = BC.accent;
+  static const Color lapis = BC.finance600;
+  static const Color lapisSoft = BC.finance50;
+  static const Color terracotta = BC.destructive;
+  static const Color terracottaSoft = BC.destructiveMuted;
+  static const Color ivory = BC.background;
+  static const Color ink = BC.foreground;
+  static const Color muted = BC.mutedForeground;
+  static const Color line = BC.border;
+  static const Color danger = BC.destructive;
+  static const Color dangerSoft = BC.destructiveMuted;
 
-  /// User er bola kroma onujayi 7 ta option
+  /// Website er split-payment.ts er 6 ta option (ek bar e shorbochcho 2 ta madhyom)
   static const List<(String, Set<String>)> _options = [
+    ('BANK', {'BANK'}),
+    ('CHEQUE', {'CHEQUE'}),
+    ('CASH', {'CASH'}),
     ('BANK_CASH', {'BANK', 'CASH'}),
     ('BANK_CHEQUE', {'BANK', 'CHEQUE'}),
     ('CHEQUE_CASH', {'CHEQUE', 'CASH'}),
-    ('BANK_CASH_CHEQUE', {'BANK', 'CASH', 'CHEQUE'}),
-    ('BANK', {'BANK'}),
-    ('CASH', {'CASH'}),
-    ('CHEQUE', {'CHEQUE'}),
   ];
 
-  /// Cash ke grohon korechen — ei char jon-er ekjon
-  static const List<(String, String)> _cashReceivers = [
-    ('MD Sir', 'এমডি স্যার'),
-    ('Chairman Sir', 'চেয়ারম্যান স্যার'),
-    ('CEO', 'সিইও'),
-    ('Finance', 'ফাইন্যান্স'),
+  /// Website er CASH_RECEIVERS — DB te value (CEO / MD / CHAIRMAN / FINANCE_TEAM)
+  static const List<(String, String, String)> _cashReceivers = [
+    ('CEO', 'CEO', 'সিইও'),
+    ('MD', 'Managing Director (MD)', 'ব্যবস্থাপনা পরিচালক (এমডি)'),
+    ('CHAIRMAN', 'Chairman', 'চেয়ারম্যান'),
+    ('FINANCE_TEAM', 'Finance Team', 'ফাইন্যান্স টিম'),
   ];
+
+  /// Protita madhyom e shorbochcho koyta proof (website MAX_PROOF_FILES)
+  static const int _maxProofs = 3;
+
+  /// Kistir shorbonimno taka (website MIN_INSTALLMENT_BDT), shesh kisti baad e
+  static const double _minInstallment = 1000;
 
   final _amountController = TextEditingController();
+  final _payNowController = TextEditingController();
   final _bankAmountController = TextEditingController();
   final _cashAmountController = TextEditingController();
   final _chequeAmountController = TextEditingController();
   final _trxController = TextEditingController();
+  final _chequeNoController = TextEditingController();
+  final _cashReceiptController = TextEditingController();
   final _picker = ImagePicker();
 
+  String _plan = 'FULL'; // FULL / INSTALLMENT
   String? _option; // _options er key
   int _bankIndex = 0;
   String? _cashReceiver;
 
-  Uint8List? _bankReceipt;
-  File? _bankReceiptFile;
-  Uint8List? _chequeImage;
-  File? _chequeImageFile;
+  /// Madhyom → proof chobi (bytes + file), protita te 3 ta porjonto
+  final Map<String, List<(Uint8List, File)>> _proofs = {'BANK': [], 'CHEQUE': [], 'CASH': []};
 
   bool _submitting = false;
   String _stage = '';
@@ -100,10 +109,13 @@ class _GroupInvestPageState extends State<GroupInvestPage> {
   void dispose() {
     for (final c in [
       _amountController,
+      _payNowController,
       _bankAmountController,
       _cashAmountController,
       _chequeAmountController,
       _trxController,
+      _chequeNoController,
+      _cashReceiptController,
     ]) {
       c.dispose();
     }
@@ -114,7 +126,10 @@ class _GroupInvestPageState extends State<GroupInvestPage> {
   void initState() {
     super.initState();
     if (_isExisting) {
-      _amountController.text = _num(widget.existing!['amountBdt']).toStringAsFixed(0);
+      final e = widget.existing!;
+      _plan = (e['paymentPlan']?.toString() ?? 'FULL').toUpperCase() == 'INSTALLMENT' ? 'INSTALLMENT' : 'FULL';
+      _amountController.text = _num(e['amountBdt']).toStringAsFixed(0);
+      _payNowController.text = _outstanding.toStringAsFixed(0);
     } else if (_minInv > 0) {
       _amountController.text = _minInv.toStringAsFixed(0);
     }
@@ -161,13 +176,28 @@ class _GroupInvestPageState extends State<GroupInvestPage> {
 
   double get _amount => double.tryParse(_amountController.text.trim()) ?? 0;
 
+  // ─── Payment er hishab (website er "Payment Progress") ───
+  double get _paidApproved => _isExisting ? _num(widget.existing!['paidApproved']) : 0;
+  double get _paidPending => _isExisting ? _num(widget.existing!['paidPending']) : 0;
+  double get _outstanding => _isExisting
+      ? (_num(widget.existing!['amountBdt']) - _paidApproved - _paidPending).clamp(0, double.infinity).toDouble()
+      : _amount;
+
+  bool get _installment => _plan == 'INSTALLMENT';
+
+  /// Ekhon joto taka dicchen — ekbare hole puro (ba puro baki), kistite user er lekha
+  double get _payNow {
+    if (!_installment) return _isExisting ? _outstanding : _amount;
+    return double.tryParse(_payNowController.text.trim()) ?? 0;
+  }
+
   Set<String> get _methods => _options.firstWhere((o) => o.$1 == _option, orElse: () => ('', <String>{})).$2;
 
   bool get _isSplit => _methods.length > 1;
 
   double _part(TextEditingController c) => double.tryParse(c.text.trim()) ?? 0;
 
-  double get _splitTotal =>
+  double get _splitTotalRaw =>
       (_methods.contains('BANK') ? _part(_bankAmountController) : 0) +
           (_methods.contains('CASH') ? _part(_cashAmountController) : 0) +
           (_methods.contains('CHEQUE') ? _part(_chequeAmountController) : 0);
@@ -188,8 +218,6 @@ class _GroupInvestPageState extends State<GroupInvestPage> {
         return LanguageService.tr('Bank + Cheque', 'ব্যাংক + চেক');
       case 'CHEQUE_CASH':
         return LanguageService.tr('Cheque + Cash', 'চেক + ক্যাশ');
-      case 'BANK_CASH_CHEQUE':
-        return LanguageService.tr('Bank + Cash + Cheque', 'ব্যাংক + ক্যাশ + চেক');
       case 'BANK':
         return LanguageService.tr('Bank', 'ব্যাংক');
       case 'CASH':
@@ -216,7 +244,11 @@ class _GroupInvestPageState extends State<GroupInvestPage> {
   // ═════════════════════════════════════════════════════════
   // IMAGES
   // ═════════════════════════════════════════════════════════
-  Future<void> _pick(bool cheque) async {
+  Future<void> _pick(String key) async {
+    if (_proofs[key]!.length >= _maxProofs) {
+      _toast(LanguageService.tr('Only $_maxProofs files allowed.', 'সর্বোচ্চ $_maxProofs টি ফাইল দেওয়া যাবে।'), error: true);
+      return;
+    }
     try {
       final picked = await _picker.pickImage(
         source: ImageSource.gallery,
@@ -232,13 +264,7 @@ class _GroupInvestPageState extends State<GroupInvestPage> {
       }
       setState(() {
         _error = null;
-        if (cheque) {
-          _chequeImage = bytes;
-          _chequeImageFile = File(picked.path);
-        } else {
-          _bankReceipt = bytes;
-          _bankReceiptFile = File(picked.path);
-        }
+        _proofs[key]!.add((bytes, File(picked.path)));
       });
     } catch (e) {
       _toast(LanguageService.tr('Could not open the image.', 'ছবি খোলা যায়নি।'), error: true);
@@ -261,13 +287,41 @@ class _GroupInvestPageState extends State<GroupInvestPage> {
   // SUBMIT
   // ═════════════════════════════════════════════════════════
   String? _validate() {
+    // Notun invest: tier er unit shesh hole bondho (server-o check kore)
+    if (!_isExisting) {
+      final u = widget.tier!['availableUnits'];
+      if (u is num && u <= 0) {
+        return LanguageService.tr('This tier is sold out.', 'এই টিয়ারের সব ইউনিট বিক্রি হয়ে গেছে।');
+      }
+    }
     final a = _amount;
     if (a <= 0) return LanguageService.tr('Please enter the amount.', 'পরিমাণ লিখুন।');
-    if (_minInv > 0 && a < _minInv) {
-      return LanguageService.tr('Minimum investment is ${_fmtFull(_minInv)}.', 'সর্বনিম্ন বিনিয়োগ ${_fmtFull(_minInv)}।');
+    if (!_isExisting) {
+      if (_minInv > 0 && a < _minInv) {
+        return LanguageService.tr('Minimum investment is ${_fmtFull(_minInv)}.', 'সর্বনিম্ন বিনিয়োগ ${_fmtFull(_minInv)}।');
+      }
+      if (_maxInv > 0 && a > _maxInv) {
+        return LanguageService.tr('Maximum for this tier is ${_fmtFull(_maxInv)}.', 'এই টিয়ারে সর্বোচ্চ ${_fmtFull(_maxInv)}।');
+      }
+    } else if (_outstanding <= 0.5) {
+      return LanguageService.tr('The full amount is already submitted and under review.',
+          'পুরো টাকা জমা হয়েছে, যাচাই চলছে।');
     }
-    if (_maxInv > 0 && a > _maxInv) {
-      return LanguageService.tr('Maximum for this tier is ${_fmtFull(_maxInv)}.', 'এই টিয়ারে সর্বোচ্চ ${_fmtFull(_maxInv)}।');
+    final pay = _payNow;
+    final maxNow = _isExisting ? _outstanding : a;
+    if (pay <= 0) {
+      return LanguageService.tr('Enter how much you are paying now.', 'এখন কত টাকা দিচ্ছেন লিখুন।');
+    }
+    if (pay > maxNow + 0.5) {
+      return LanguageService.tr('You can pay at most ${_fmtFull(maxNow)} now.', 'এখন সর্বোচ্চ ${_fmtFull(maxNow)} দেওয়া যাবে।');
+    }
+    // Website: kisti kompokkhe ৳1,000 (ba baki er cheye kom hole puro baki)
+    if (_installment) {
+      final minInst = maxNow < _minInstallment ? maxNow : _minInstallment;
+      if (pay + 0.5 < minInst) {
+        return LanguageService.tr('An installment must be at least ${_fmtFull(minInst)}.',
+            'প্রতি কিস্তি কমপক্ষে ${_fmtFull(minInst)} হতে হবে।');
+      }
     }
     if (_option == null) return LanguageService.tr('Please choose how you will pay.', 'পেমেন্টের ধরন বেছে নিন।');
 
@@ -282,9 +336,9 @@ class _GroupInvestPageState extends State<GroupInvestPage> {
           return LanguageService.tr('Enter the ${_optionLabel(key)} amount.', '${_optionLabel(key)} এর পরিমাণ লিখুন।');
         }
       }
-      if ((_splitTotal - a).abs() > 0.5) {
-        return LanguageService.tr('The parts add up to ${_fmtFull(_splitTotal)}, but the total is ${_fmtFull(a)}.',
-            'ভাগগুলোর যোগফল ${_fmtFull(_splitTotal)}, কিন্তু মোট ${_fmtFull(a)}।');
+      if ((_splitTotalRaw - pay).abs() > 0.5) {
+        return LanguageService.tr('The parts add up to ${_fmtFull(_splitTotalRaw)}, but you are paying ${_fmtFull(pay)}.',
+            'ভাগগুলোর যোগফল ${_fmtFull(_splitTotalRaw)}, কিন্তু দিচ্ছেন ${_fmtFull(pay)}।');
       }
     }
     if (m.contains('BANK')) {
@@ -292,18 +346,21 @@ class _GroupInvestPageState extends State<GroupInvestPage> {
         return LanguageService.tr('No bank account is set for this tier. Choose Cash or Cheque.',
             'এই টিয়ারে কোনো ব্যাংক অ্যাকাউন্ট নেই। ক্যাশ বা চেক বেছে নিন।');
       }
-      if (_trxController.text.trim().isEmpty) {
-        return LanguageService.tr('Enter the bank transaction number.', 'ব্যাংক ট্রানজেকশন নম্বর দিন।');
-      }
-      if (_bankReceipt == null) {
-        return LanguageService.tr('Upload the bank receipt image.', 'ব্যাংক রসিদের ছবি দিন।');
+      // TxID optional (website er motoi), receipt/screenshot lagbei
+      if (_proofs['BANK']!.isEmpty) {
+        return LanguageService.tr('Upload the transfer receipt or screenshot.', 'ট্রান্সফার রসিদ বা স্ক্রিনশট দিন।');
       }
     }
     if (m.contains('CASH') && _cashReceiver == null) {
       return LanguageService.tr('Select who received the cash.', 'ক্যাশ কে গ্রহণ করেছেন বেছে নিন।');
     }
-    if (m.contains('CHEQUE') && _chequeImage == null) {
-      return LanguageService.tr('Upload the cheque image.', 'চেকের ছবি দিন।');
+    if (m.contains('CHEQUE')) {
+      if (_chequeNoController.text.trim().isEmpty) {
+        return LanguageService.tr('Enter the cheque number.', 'চেক নম্বর দিন।');
+      }
+      if (_proofs['CHEQUE']!.isEmpty) {
+        return LanguageService.tr('Upload a photo of the cheque or deposit slip.', 'চেক বা ডিপোজিট স্লিপের ছবি দিন।');
+      }
     }
     return null;
   }
@@ -320,8 +377,6 @@ class _GroupInvestPageState extends State<GroupInvestPage> {
     final userId = userData?['id']?.toString() ?? '';
     if (!mounted) return;
     if (userId.isEmpty) {
-      await AuthService.logout();
-      if (!mounted) return;
       Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(builder: (_) => const LoginPage()),
             (route) => false,
@@ -336,13 +391,25 @@ class _GroupInvestPageState extends State<GroupInvestPage> {
       _stage = LanguageService.tr('Uploading images…', 'ছবি আপলোড হচ্ছে…');
     });
 
-    // Chobi gulo ek shathe upload
-    final uploads = await Future.wait<String?>([
-      m.contains('BANK') ? _upload(_bankReceipt!, 'payment_proofs') : Future.value(null),
-      m.contains('CHEQUE') ? _upload(_chequeImage!, 'payment_proofs') : Future.value(null),
-    ]);
+    // Je madhyom bacha hoyeche shudhu tar chobi — sob ek shathe upload
+    final keys = ['BANK', 'CHEQUE', 'CASH'].where(m.contains).toList();
+    final jobs = <(String, Future<String?>)>[
+      for (final k in keys)
+        for (final f in _proofs[k]!) (k, _upload(f.$1, 'payment_proofs')),
+    ];
+    final urls = await Future.wait(jobs.map((j) => j.$2));
     if (!mounted) return;
-    if ((m.contains('BANK') && uploads[0] == null) || (m.contains('CHEQUE') && uploads[1] == null)) {
+    final proofUrls = <String, List<String>>{'BANK': [], 'CHEQUE': [], 'CASH': []};
+    var uploadFailed = false;
+    for (var i = 0; i < jobs.length; i++) {
+      final u = urls[i];
+      if (u == null) {
+        uploadFailed = true;
+      } else {
+        proofUrls[jobs[i].$1]!.add(u);
+      }
+    }
+    if (uploadFailed) {
       setState(() {
         _submitting = false;
         _stage = '';
@@ -359,15 +426,16 @@ class _GroupInvestPageState extends State<GroupInvestPage> {
     final label = bank == null
         ? null
         : '${bank['bankName'] ?? ''}${acc.length > 4 ? ' (…${acc.substring(acc.length - 4)})' : ''}';
-    final bankAmt = _isSplit ? _part(_bankAmountController) : _amount;
-    final cashAmt = _isSplit ? _part(_cashAmountController) : _amount;
-    final chequeAmt = _isSplit ? _part(_chequeAmountController) : _amount;
+    final pay = _payNow;
+    final bankAmt = _isSplit ? _part(_bankAmountController) : pay;
+    final cashAmt = _isSplit ? _part(_cashAmountController) : pay;
+    final chequeAmt = _isSplit ? _part(_chequeAmountController) : pay;
 
     final res = _isExisting
         ? await DatabaseService.submitGroupPaymentMulti(
       groupInvestmentId: widget.existing!['id'].toString(),
       userId: userId,
-      amountBdt: _amount,
+      amountBdt: pay,
       methods: m.toList(),
       bankAmount: bankAmt,
       cashAmount: cashAmt,
@@ -375,14 +443,19 @@ class _GroupInvestPageState extends State<GroupInvestPage> {
       bankAccountId: bank?['id']?.toString(),
       bankAccountLabel: label,
       bankTransactionId: _trxController.text.trim(),
-      bankReceiptUrl: uploads[0],
+      bankProofUrls: proofUrls['BANK']!,
       cashReceiver: _cashReceiver,
-      chequeImageUrl: uploads[1],
+      cashReceiptNo: _cashReceiptController.text.trim(),
+      cashProofUrls: proofUrls['CASH']!,
+      chequeNumber: _chequeNoController.text.trim(),
+      chequeProofUrls: proofUrls['CHEQUE']!,
     )
         : await DatabaseService.groupInvestWithPayment(
       userId: userId,
       tierId: widget.tier!['id'].toString(),
       amountBdt: _amount,
+      payNowBdt: pay,
+      paymentPlan: _plan,
       methods: m.toList(),
       bankAmount: bankAmt,
       cashAmount: cashAmt,
@@ -390,9 +463,12 @@ class _GroupInvestPageState extends State<GroupInvestPage> {
       bankAccountId: bank?['id']?.toString(),
       bankAccountLabel: label,
       bankTransactionId: _trxController.text.trim(),
-      bankReceiptUrl: uploads[0],
+      bankProofUrls: proofUrls['BANK']!,
       cashReceiver: _cashReceiver,
-      chequeImageUrl: uploads[1],
+      cashReceiptNo: _cashReceiptController.text.trim(),
+      cashProofUrls: proofUrls['CASH']!,
+      chequeNumber: _chequeNoController.text.trim(),
+      chequeProofUrls: proofUrls['CHEQUE']!,
     );
 
     if (!mounted) return;
@@ -424,45 +500,50 @@ class _GroupInvestPageState extends State<GroupInvestPage> {
             backgroundColor: ivory,
             surfaceTintColor: Colors.transparent,
             elevation: 0,
+            toolbarHeight: 54,
             iconTheme: const IconThemeData(color: ink),
             title: Text(
               _isExisting
-                  ? LanguageService.tr('Submit Payment', 'পেমেন্ট জমা দিন')
+                  ? LanguageService.tr('Make a Payment', 'পেমেন্ট করুন')
                   : LanguageService.tr('Invest', 'বিনিয়োগ'),
-              style: const TextStyle(color: ink, fontWeight: FontWeight.w700, fontSize: 18),
+              style: const TextStyle(color: ink, fontWeight: FontWeight.w700, fontSize: 16.5),
             ),
           ),
           bottomNavigationBar: _buildBottomBar(),
           body: AbsorbPointer(
             absorbing: _submitting,
             child: ListView(
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+              padding: const EdgeInsets.fromLTRB(16, 2, 16, 20),
               children: [
                 _buildProjectHero(),
-                const SizedBox(height: 16),
+                const SizedBox(height: 10),
+                if (_isExisting) ...[
+                  _buildProgressCard(),
+                  const SizedBox(height: 10),
+                ],
                 _buildAmountCard(),
-                const SizedBox(height: 16),
+                const SizedBox(height: 10),
                 _buildBankDetailsCard(),
-                const SizedBox(height: 16),
+                const SizedBox(height: 10),
                 _buildMethodCard(),
                 if (_isSplit) ...[
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 10),
                   _buildSplitCard(),
                 ],
                 if (m.contains('BANK')) ...[
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 10),
                   _buildBankProofCard(),
                 ],
                 if (m.contains('CASH')) ...[
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 10),
                   _buildCashCard(),
                 ],
                 if (m.contains('CHEQUE')) ...[
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 10),
                   _buildChequeCard(),
                 ],
                 if (_error != null) ...[
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 10),
                   _errorBox(_error!),
                 ],
               ],
@@ -478,11 +559,11 @@ class _GroupInvestPageState extends State<GroupInvestPage> {
     final sameName = widget.entityName.isEmpty ||
         widget.entityName.toLowerCase() == widget.groupName.toLowerCase();
     return ClipRRect(
-      borderRadius: BorderRadius.circular(22),
+      borderRadius: BorderRadius.circular(16),
       child: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
-            colors: [Color(0xFF125A43), emeraldDeep, Color(0xFF0B2A3A)],
+            colors: [emeraldBright, emerald],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
           ),
@@ -490,23 +571,25 @@ class _GroupInvestPageState extends State<GroupInvestPage> {
         child: Stack(
           children: [
             Positioned.fill(
-              child: CustomPaint(painter: _IslamicPatternPainter(color: Colors.white.withAlpha(16), cell: 44)),
+              child: CustomPaint(painter: _IslamicPatternPainter(color: Colors.white.withAlpha(14), cell: 34)),
             ),
             Padding(
-              padding: const EdgeInsets.all(18),
+              padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
                     sameName ? widget.groupName : '${widget.groupName} — ${widget.entityName}',
-                    style: const TextStyle(color: goldLight, fontSize: 12, fontWeight: FontWeight.w600),
+                    style: const TextStyle(color: goldLight, fontSize: 10.5, fontWeight: FontWeight.w700, letterSpacing: 0.4),
                   ),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 2),
                   Text(
-                    _tierName,
-                    style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700),
+                    _tierName.isEmpty ? '—' : _tierName,
+                    style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w800),
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 10),
+                  Container(height: 1, color: Colors.white.withAlpha(25)),
+                  const SizedBox(height: 8),
                   Row(
                     children: [
                       Expanded(child: _heroStat(LanguageService.tr('Expected return', 'প্রত্যাশিত লাভ'), _pct(_returnPct))),
@@ -514,6 +597,16 @@ class _GroupInvestPageState extends State<GroupInvestPage> {
                         child: _heroStat(
                           LanguageService.tr('Term', 'মেয়াদ'),
                           _months > 0 ? LanguageService.tr('$_months months', '$_months মাস') : '—',
+                        ),
+                      ),
+                      Expanded(
+                        child: _heroStat(
+                          _isExisting
+                              ? LanguageService.tr('Commitment', 'মোট বিনিয়োগ')
+                              : LanguageService.tr('Minimum', 'সর্বনিম্ন'),
+                          _isExisting
+                              ? _fmtFull(_amount)
+                              : (_minInv > 0 ? _fmtFull(_minInv) : '—'),
                         ),
                       ),
                     ],
@@ -530,20 +623,154 @@ class _GroupInvestPageState extends State<GroupInvestPage> {
   Widget _heroStat(String label, String value) => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
-      Text(label, style: TextStyle(color: Colors.white.withAlpha(170), fontSize: 11)),
+      Text(label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(color: Colors.white.withAlpha(165), fontSize: 9.5)),
       const SizedBox(height: 2),
-      Text(value, style: const TextStyle(color: goldLight, fontSize: 15, fontWeight: FontWeight.w700)),
+      FittedBox(
+        fit: BoxFit.scaleDown,
+        alignment: Alignment.centerLeft,
+        child: Text(value, style: const TextStyle(color: goldLight, fontSize: 13, fontWeight: FontWeight.w800)),
+      ),
     ],
   );
 
-  // ─── Amount ───────────────────────────────────────────────
+  // ─── Payment progress (baki thaka investment) ────────────
+  Widget _buildProgressCard() {
+    final total = _amount;
+    double pct(double v) => total > 0 ? (v / total).clamp(0.0, 1.0).toDouble() : 0.0;
+    final aW = pct(_paidApproved);
+    final pW = pct(_paidPending);
+    return _card(
+      title: LanguageService.tr('Payment Progress', 'পেমেন্টের অগ্রগতি'),
+      subtitle: _installment
+          ? LanguageService.tr('Paying in installments', 'কিস্তিতে দিচ্ছেন')
+          : LanguageService.tr('Paying in full', 'একবারে দিচ্ছেন'),
+      icon: Icons.donut_large_rounded,
+      tint: emerald,
+      tintSoft: emeraldSoft,
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(6),
+          child: SizedBox(
+            height: 6,
+            child: LayoutBuilder(
+              builder: (_, c) => Stack(
+                children: [
+                  Container(color: line),
+                  Container(width: c.maxWidth * (aW + pW).clamp(0.0, 1.0), color: gold),
+                  Container(width: c.maxWidth * aW, color: emerald),
+                ],
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(child: _progStat(LanguageService.tr('Verified', 'যাচাই হয়েছে'), _paidApproved, emerald)),
+            Expanded(child: _progStat(LanguageService.tr('Under review', 'যাচাই চলছে'), _paidPending, gold)),
+            Expanded(child: _progStat(LanguageService.tr('Left to pay', 'বাকি'), _outstanding, ink)),
+          ],
+        ),
+        if (_paidPending > 0) ...[
+          const SizedBox(height: 10),
+          Text(
+            LanguageService.tr(
+                'Payments under review are held back from what you can pay now, so you never pay twice.',
+                'যাচাই চলা টাকা এখনকার পেমেন্ট থেকে বাদ রাখা হয়, যাতে দুবার না দেন।'),
+            style: const TextStyle(fontSize: 10.5, color: muted, height: 1.35),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _progStat(String label, double v, Color c) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Row(
+        children: [
+          Container(width: 6, height: 6, decoration: BoxDecoration(color: c, shape: BoxShape.circle)),
+          const SizedBox(width: 4),
+          Flexible(
+            child: Text(label,
+                overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 9.5, color: muted)),
+          ),
+        ],
+      ),
+      const SizedBox(height: 2),
+      FittedBox(
+        fit: BoxFit.scaleDown,
+        alignment: Alignment.centerLeft,
+        child: Text(_fmtFull(v), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: ink)),
+      ),
+    ],
+  );
+
+  // ─── Amount + payment plan ────────────────────────────────
   Widget _buildAmountCard() {
     final pct = _returnPct;
     final a = _amount;
+
+    Widget planChip(String key, String en, String bn, IconData icon) {
+      final on = _plan == key;
+      return Expanded(
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: () => setState(() {
+            _plan = key;
+            _error = null;
+            if (key == 'INSTALLMENT' && _payNowController.text.isEmpty && a > 0) {
+              _payNowController.text = a.toStringAsFixed(0);
+            }
+          }),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
+            decoration: BoxDecoration(
+              color: on ? emerald : ivory,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: on ? emerald : line),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(icon, size: 15, color: on ? goldLight : goldDeep),
+                const SizedBox(width: 5),
+                Flexible(
+                  child: Text(LanguageService.tr(en, bn),
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: on ? Colors.white : ink)),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    final payField = TextField(
+      controller: _payNowController,
+      readOnly: !_installment,
+      keyboardType: TextInputType.number,
+      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+      onChanged: (_) => setState(() => _error = null),
+      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: ink),
+      decoration: _dec(LanguageService.tr('Paying now (BDT)', 'এখন দিচ্ছেন (টাকা)'), Icons.savings_outlined).copyWith(
+        prefixText: '৳ ',
+        helperText: _isExisting
+            ? LanguageService.tr('Available to pay now: ${_fmtFull(_outstanding)}',
+            'এখন দেওয়া যাবে: ${_fmtFull(_outstanding)}')
+            : LanguageService.tr('Pay the rest later from Investments', 'বাকিটা পরে Investments থেকে দিন'),
+      ),
+    );
+
     return _card(
       step: 1,
       title: _isExisting
-          ? LanguageService.tr('Amount to pay', 'যত টাকা দিতে হবে')
+          ? LanguageService.tr('How much are you paying?', 'কত টাকা দিচ্ছেন?')
           : LanguageService.tr('How much do you want to invest?', 'কত টাকা বিনিয়োগ করবেন?'),
       children: [
         TextField(
@@ -552,11 +779,16 @@ class _GroupInvestPageState extends State<GroupInvestPage> {
           keyboardType: TextInputType.number,
           inputFormatters: [FilteringTextInputFormatter.digitsOnly],
           onChanged: (_) => setState(() => _error = null),
-          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: ink),
-          decoration: _dec(LanguageService.tr('Amount (BDT)', 'পরিমাণ (টাকা)'), Icons.payments_outlined).copyWith(
+          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: ink),
+          decoration: _dec(
+              _isExisting
+                  ? LanguageService.tr('Total commitment (BDT)', 'মোট বিনিয়োগ (টাকা)')
+                  : LanguageService.tr('Amount (BDT)', 'পরিমাণ (টাকা)'),
+              Icons.payments_outlined)
+              .copyWith(
             prefixText: '৳ ',
             helperText: _isExisting
-                ? LanguageService.tr('Fixed — this is your investment amount', 'নির্দিষ্ট — আপনার বিনিয়োগের পরিমাণ')
+                ? null
                 : [
               if (_minInv > 0) LanguageService.tr('Min ${_fmtFull(_minInv)}', 'সর্বনিম্ন ${_fmtFull(_minInv)}'),
               if (_maxInv > 0) LanguageService.tr('Max ${_fmtFull(_maxInv)}', 'সর্বোচ্চ ${_fmtFull(_maxInv)}'),
@@ -564,14 +796,42 @@ class _GroupInvestPageState extends State<GroupInvestPage> {
           ),
         ),
         if (a > 0 && pct > 0) ...[
-          const SizedBox(height: 10),
+          const SizedBox(height: 8),
           Text(
             LanguageService.tr(
               'Expected return at ${_pct(pct)}: ${_fmtFull(a * pct)} (estimate, not guaranteed)',
               '${_pct(pct)} হারে প্রত্যাশিত লাভ: ${_fmtFull(a * pct)} (আনুমানিক, নিশ্চিত নয়)',
             ),
-            style: const TextStyle(fontSize: 12, color: emerald, fontWeight: FontWeight.w600),
+            style: const TextStyle(fontSize: 11, color: emerald, fontWeight: FontWeight.w600),
           ),
+        ],
+        const SizedBox(height: 12),
+        if (!_isExisting) ...[
+          Text(LanguageService.tr('Payment preference', 'পেমেন্টের ধরন'),
+              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: ink)),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              planChip('FULL', 'Pay in full', 'একবারে', Icons.done_all_rounded),
+              const SizedBox(width: 8),
+              planChip('INSTALLMENT', 'Installments', 'কিস্তিতে', Icons.calendar_month_outlined),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            _installment
+                ? LanguageService.tr(
+                'Pay in parts on dates that suit you. Your investment activates and the deed is issued once the full amount is verified.',
+                'সুবিধামতো তারিখে ভাগে ভাগে দিন। পুরো টাকা যাচাই হলে বিনিয়োগ চালু হবে ও ডিড দেওয়া হবে।')
+                : LanguageService.tr('Pay the whole amount now. It activates once your payment is verified.',
+                'এখন পুরো টাকা দিন। যাচাইয়ের পর বিনিয়োগ চালু হবে।'),
+            style: const TextStyle(fontSize: 10.5, color: muted, height: 1.35),
+          ),
+        ],
+        if (_isExisting || _installment) ...[
+          const SizedBox(height: 10),
+          // Ekbare hole baki puro taka-i (initState e boshano, bodlano jay na)
+          payField,
         ],
       ],
     );
@@ -588,7 +848,7 @@ class _GroupInvestPageState extends State<GroupInvestPage> {
           Text(
             LanguageService.tr('No bank account has been added for this tier yet. You can pay by cash or cheque.',
                 'এই টিয়ারে এখনো কোনো ব্যাংক অ্যাকাউন্ট যোগ করা হয়নি। ক্যাশ বা চেকে দিতে পারেন।'),
-            style: const TextStyle(fontSize: 12.5, color: muted, height: 1.4),
+            style: const TextStyle(fontSize: 11.5, color: muted, height: 1.35),
           ),
         ],
       );
@@ -615,7 +875,7 @@ class _GroupInvestPageState extends State<GroupInvestPage> {
       children: [
         if (banks.length > 1) ...[
           SizedBox(
-            height: 34,
+            height: 30,
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
               itemCount: banks.length,
@@ -635,14 +895,14 @@ class _GroupInvestPageState extends State<GroupInvestPage> {
                     ),
                     child: Text(
                       name.isEmpty ? LanguageService.tr('Account ${i + 1}', 'অ্যাকাউন্ট ${i + 1}') : name,
-                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: on ? Colors.white : ink),
+                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: on ? Colors.white : ink),
                     ),
                   ),
                 );
               },
             ),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
         ],
         for (final r in rows) _copyRow(r.$1, r.$2, r.$3),
       ],
@@ -651,18 +911,18 @@ class _GroupInvestPageState extends State<GroupInvestPage> {
 
   Widget _copyRow(String label, String value, bool copyable) {
     return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(color: ivory, borderRadius: BorderRadius.circular(12)),
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+      decoration: BoxDecoration(color: ivory, borderRadius: BorderRadius.circular(10)),
       child: Row(
         children: [
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(label, style: const TextStyle(fontSize: 10.5, color: muted, fontWeight: FontWeight.w600)),
-                const SizedBox(height: 2),
-                Text(value, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: ink)),
+                Text(label, style: const TextStyle(fontSize: 9.5, color: muted, fontWeight: FontWeight.w600)),
+                const SizedBox(height: 1),
+                SelectableText(value, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: ink)),
               ],
             ),
           ),
@@ -674,9 +934,9 @@ class _GroupInvestPageState extends State<GroupInvestPage> {
                 _toast(LanguageService.tr('$label copied', '$label কপি হয়েছে'));
               },
               child: Container(
-                padding: const EdgeInsets.all(6),
-                decoration: BoxDecoration(color: goldSoft, borderRadius: BorderRadius.circular(8)),
-                child: const Icon(Icons.copy_rounded, size: 16, color: goldDeep),
+                padding: const EdgeInsets.all(5),
+                decoration: BoxDecoration(color: goldSoft, borderRadius: BorderRadius.circular(7)),
+                child: const Icon(Icons.copy_rounded, size: 14, color: goldDeep),
               ),
             ),
         ],
@@ -696,36 +956,36 @@ class _GroupInvestPageState extends State<GroupInvestPage> {
           itemCount: _options.length,
           gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
             crossAxisCount: 2,
-            crossAxisSpacing: 10,
-            mainAxisSpacing: 10,
-            childAspectRatio: 2.6,
+            crossAxisSpacing: 8,
+            mainAxisSpacing: 8,
+            mainAxisExtent: 42,
           ),
           itemBuilder: (_, i) {
             final key = _options[i].$1;
             final on = _option == key;
             return InkWell(
-              borderRadius: BorderRadius.circular(14),
+              borderRadius: BorderRadius.circular(10),
               onTap: () => setState(() {
                 _option = key;
                 _error = null;
               }),
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 180),
-                padding: const EdgeInsets.symmetric(horizontal: 12),
+                padding: const EdgeInsets.symmetric(horizontal: 10),
                 decoration: BoxDecoration(
                   color: on ? emerald : ivory,
-                  borderRadius: BorderRadius.circular(14),
+                  borderRadius: BorderRadius.circular(10),
                   border: Border.all(color: on ? emerald : line, width: on ? 1.4 : 1),
                 ),
                 child: Row(
                   children: [
-                    Icon(_optionIcon(key), size: 18, color: on ? goldLight : goldDeep),
-                    const SizedBox(width: 8),
+                    Icon(_optionIcon(key), size: 15, color: on ? goldLight : goldDeep),
+                    const SizedBox(width: 7),
                     Expanded(
                       child: Text(
                         _optionLabel(key),
                         maxLines: 2,
-                        style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: on ? Colors.white : ink),
+                        style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: on ? Colors.white : ink, height: 1.2),
                       ),
                     ),
                   ],
@@ -741,9 +1001,9 @@ class _GroupInvestPageState extends State<GroupInvestPage> {
   // ─── Split (ekadhik method hole) ──────────────────────────
   Widget _buildSplitCard() {
     final m = _methods;
-    final left = _amount - _splitTotal;
+    final left = _payNow - _splitTotalRaw;
     Widget field(String key, TextEditingController c) => Padding(
-      padding: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.only(bottom: 8),
       child: TextField(
         controller: c,
         keyboardType: TextInputType.number,
@@ -764,19 +1024,19 @@ class _GroupInvestPageState extends State<GroupInvestPage> {
         if (m.contains('CASH')) field('CASH', _cashAmountController),
         if (m.contains('CHEQUE')) field('CHEQUE', _chequeAmountController),
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
           decoration: BoxDecoration(
             color: left.abs() <= 0.5 ? emeraldSoft : goldSoft,
-            borderRadius: BorderRadius.circular(10),
+            borderRadius: BorderRadius.circular(9),
           ),
           child: Text(
             left.abs() <= 0.5
-                ? LanguageService.tr('Matches the total ${_fmtFull(_amount)}', 'মোট ${_fmtFull(_amount)} এর সাথে মিলেছে')
+                ? LanguageService.tr('Matches ${_fmtFull(_payNow)}', '${_fmtFull(_payNow)} এর সাথে মিলেছে')
                 : left > 0
                 ? LanguageService.tr('${_fmtFull(left)} still to assign', 'আরো ${_fmtFull(left)} ভাগ করা বাকি')
                 : LanguageService.tr('${_fmtFull(-left)} more than the total', 'মোটের চেয়ে ${_fmtFull(-left)} বেশি'),
             style: TextStyle(
-              fontSize: 12,
+              fontSize: 11,
               fontWeight: FontWeight.w700,
               color: left.abs() <= 0.5 ? emerald : goldDeep,
             ),
@@ -793,29 +1053,26 @@ class _GroupInvestPageState extends State<GroupInvestPage> {
     return _card(
       title: LanguageService.tr('Bank payment', 'ব্যাংক পেমেন্ট'),
       icon: Icons.account_balance_outlined,
-      tint: lapis,
-      tintSoft: lapisSoft,
+      tint: emerald,
+      tintSoft: emeraldSoft,
       children: [
         if (bank != null)
           Padding(
-            padding: const EdgeInsets.only(bottom: 10),
+            padding: const EdgeInsets.only(bottom: 8),
             child: Text(
               LanguageService.tr('Paid into: ${bank['bankName'] ?? ''} — change above if different',
                   'যে অ্যাকাউন্টে দিয়েছেন: ${bank['bankName'] ?? ''} — ভিন্ন হলে উপরে বদলান'),
-              style: const TextStyle(fontSize: 11.5, color: muted),
+              style: const TextStyle(fontSize: 10.5, color: muted),
             ),
           ),
         TextField(
           controller: _trxController,
           onChanged: (_) => setState(() => _error = null),
-          decoration: _dec(LanguageService.tr('Transaction number *', 'ট্রানজেকশন নম্বর *'), Icons.tag_rounded),
+          decoration: _dec(LanguageService.tr('Transaction reference / TxID (optional)', 'ট্রানজেকশন নম্বর / TxID (ঐচ্ছিক)'),
+              Icons.tag_rounded),
         ),
-        const SizedBox(height: 12),
-        _imageBox(
-          label: LanguageService.tr('Bank receipt image *', 'ব্যাংক রসিদের ছবি *'),
-          file: _bankReceiptFile,
-          onTap: () => _pick(false),
-        ),
+        const SizedBox(height: 10),
+        _proofList('BANK', LanguageService.tr('Transfer receipt or screenshot *', 'ট্রান্সফার রসিদ বা স্ক্রিনশট *')),
       ],
     );
   }
@@ -830,18 +1087,21 @@ class _GroupInvestPageState extends State<GroupInvestPage> {
       tintSoft: emeraldSoft,
       children: [
         Wrap(
-          spacing: 8,
-          runSpacing: 8,
+          spacing: 6,
+          runSpacing: 6,
           children: _cashReceivers.map((r) {
             final on = _cashReceiver == r.$1;
             return ChoiceChip(
-              label: Text(LanguageService.tr(r.$1, r.$2)),
+              label: Text(LanguageService.tr(r.$2, r.$3)),
               selected: on,
               showCheckmark: false,
               selectedColor: emerald,
               backgroundColor: ivory,
               side: BorderSide(color: on ? emerald : line),
-              labelStyle: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: on ? Colors.white : ink),
+              labelStyle: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: on ? Colors.white : ink),
+              visualDensity: VisualDensity.compact,
+              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              padding: const EdgeInsets.symmetric(horizontal: 4),
               onSelected: (_) => setState(() {
                 _cashReceiver = r.$1;
                 _error = null;
@@ -849,6 +1109,15 @@ class _GroupInvestPageState extends State<GroupInvestPage> {
             );
           }).toList(),
         ),
+        const SizedBox(height: 10),
+        TextField(
+          controller: _cashReceiptController,
+          onChanged: (_) => setState(() => _error = null),
+          decoration: _dec(LanguageService.tr('Money receipt number (optional)', 'মানি রসিদ নম্বর (ঐচ্ছিক)'),
+              Icons.confirmation_number_outlined),
+        ),
+        const SizedBox(height: 10),
+        _proofList('CASH', LanguageService.tr('Photo of the money receipt (optional)', 'মানি রসিদের ছবি (ঐচ্ছিক)')),
       ],
     );
   }
@@ -858,14 +1127,17 @@ class _GroupInvestPageState extends State<GroupInvestPage> {
     return _card(
       title: LanguageService.tr('Cheque payment', 'চেক পেমেন্ট'),
       icon: Icons.receipt_long_outlined,
-      tint: terracotta,
-      tintSoft: terracottaSoft,
+      tint: emerald,
+      tintSoft: emeraldSoft,
       children: [
-        _imageBox(
-          label: LanguageService.tr('Cheque image *', 'চেকের ছবি *'),
-          file: _chequeImageFile,
-          onTap: () => _pick(true),
+        TextField(
+          controller: _chequeNoController,
+          keyboardType: TextInputType.number,
+          onChanged: (_) => setState(() => _error = null),
+          decoration: _dec(LanguageService.tr('Cheque number *', 'চেক নম্বর *'), Icons.pin_outlined),
         ),
+        const SizedBox(height: 10),
+        _proofList('CHEQUE', LanguageService.tr('Photo of the cheque or deposit slip *', 'চেক বা ডিপোজিট স্লিপের ছবি *')),
       ],
     );
   }
@@ -875,10 +1147,10 @@ class _GroupInvestPageState extends State<GroupInvestPage> {
     return SafeArea(
       top: false,
       child: Container(
-        padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
         decoration: const BoxDecoration(color: Colors.white, border: Border(top: BorderSide(color: line))),
         child: SizedBox(
-          height: 52,
+          height: 46,
           child: FilledButton(
             onPressed: _submitting ? null : _submit,
             style: FilledButton.styleFrom(
@@ -886,26 +1158,26 @@ class _GroupInvestPageState extends State<GroupInvestPage> {
               foregroundColor: Colors.white,
               disabledBackgroundColor: emerald.withAlpha(140),
               disabledForegroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             ),
             child: _submitting
                 ? Row(
               mainAxisSize: MainAxisSize.min,
               children: [
                 const SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2.2, color: Colors.white),
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                 ),
-                const SizedBox(width: 12),
-                Text(_stage),
+                const SizedBox(width: 10),
+                Text(_stage, style: const TextStyle(fontSize: 13)),
               ],
             )
                 : Text(
-              _amount > 0
-                  ? LanguageService.tr('Confirm ${_fmtFull(_amount)}', '${_fmtFull(_amount)} নিশ্চিত করুন')
+              _payNow > 0
+                  ? LanguageService.tr('Confirm ${_fmtFull(_payNow)}', '${_fmtFull(_payNow)} নিশ্চিত করুন')
                   : LanguageService.tr('Confirm', 'নিশ্চিত করুন'),
-              style: const TextStyle(fontSize: 15.5, fontWeight: FontWeight.w700),
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
             ),
           ),
         ),
@@ -926,10 +1198,10 @@ class _GroupInvestPageState extends State<GroupInvestPage> {
     required List<Widget> children,
   }) {
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(color: line),
       ),
       child: Column(
@@ -939,40 +1211,40 @@ class _GroupInvestPageState extends State<GroupInvestPage> {
             children: [
               if (step != null)
                 Container(
-                  width: 26,
-                  height: 26,
+                  width: 22,
+                  height: 22,
                   alignment: Alignment.center,
                   decoration: const BoxDecoration(
                     gradient: LinearGradient(colors: [goldLight, gold]),
                     shape: BoxShape.circle,
                   ),
                   child: Text('$step',
-                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: Colors.white)),
+                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: Colors.white)),
                 )
               else if (icon != null)
                 Container(
-                  width: 30,
-                  height: 30,
-                  decoration: BoxDecoration(color: tintSoft, borderRadius: BorderRadius.circular(9)),
-                  child: Icon(icon, size: 17, color: tint),
+                  width: 26,
+                  height: 26,
+                  decoration: BoxDecoration(color: tintSoft, borderRadius: BorderRadius.circular(8)),
+                  child: Icon(icon, size: 14, color: tint),
                 )
               else
                 Transform.rotate(
                   angle: math.pi / 4,
                   child: Container(width: 7, height: 7, color: gold),
                 ),
-              const SizedBox(width: 10),
+              const SizedBox(width: 9),
               Expanded(
-                child: Text(title, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: ink)),
+                child: Text(title, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: ink)),
               ),
             ],
           ),
           if (subtitle != null)
             Padding(
-              padding: const EdgeInsets.only(left: 40, top: 2),
-              child: Text(subtitle, style: const TextStyle(fontSize: 11.5, color: muted)),
+              padding: const EdgeInsets.only(left: 35, top: 1),
+              child: Text(subtitle, style: const TextStyle(fontSize: 10.5, color: muted)),
             ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 10),
           ...children,
         ],
       ),
@@ -982,75 +1254,111 @@ class _GroupInvestPageState extends State<GroupInvestPage> {
   InputDecoration _dec(String label, IconData icon) {
     return InputDecoration(
       labelText: label,
-      labelStyle: const TextStyle(fontSize: 13, color: muted),
-      prefixIcon: Icon(icon, color: goldDeep, size: 20),
-      helperStyle: const TextStyle(fontSize: 11, color: muted),
+      labelStyle: const TextStyle(fontSize: 12, color: muted),
+      prefixIcon: Icon(icon, color: goldDeep, size: 17),
+      prefixIconConstraints: const BoxConstraints(minWidth: 38, minHeight: 38),
+      helperStyle: const TextStyle(fontSize: 10, color: muted),
+      isDense: true,
       filled: true,
       fillColor: ivory,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: line)),
-      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: line)),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: line)),
+      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: line)),
       focusedBorder:
-      OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: emerald, width: 1.4)),
+      OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: emerald, width: 1.4)),
     );
   }
 
-  Widget _imageBox({required String label, required File? file, required VoidCallback onTap}) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        height: 140,
-        decoration: BoxDecoration(
-          color: file != null ? emeraldSoft : ivory,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: file != null ? emerald : line, width: file != null ? 1.4 : 1),
-        ),
-        child: file != null
-            ? Stack(
+  /// Ek madhyom er proof chobi — 3 ta porjonto, protitar kone ✕
+  Widget _proofList(String key, String label) {
+    final files = _proofs[key]!;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: ink)),
+        const SizedBox(height: 6),
+        Row(
           children: [
-            Positioned.fill(
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(13),
-                child: Image.file(file, fit: BoxFit.cover),
+            for (var i = 0; i < _maxProofs; i++) ...[
+              if (i > 0) const SizedBox(width: 8),
+              SizedBox(
+                width: 64,
+                height: 64,
+                child: i < files.length
+                    ? Stack(
+                  children: [
+                    Positioned.fill(
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: Image.memory(files[i].$1, fit: BoxFit.cover),
+                      ),
+                    ),
+                    Positioned(
+                      right: 4,
+                      top: 4,
+                      child: GestureDetector(
+                        onTap: () => setState(() => files.removeAt(i)),
+                        child: Container(
+                          width: 20,
+                          height: 20,
+                          decoration: BoxDecoration(color: Colors.black.withAlpha(160), shape: BoxShape.circle),
+                          child: const Icon(Icons.close_rounded, size: 13, color: Colors.white),
+                        ),
+                      ),
+                    ),
+                  ],
+                )
+                    : i == files.length
+                    ? GestureDetector(
+                  onTap: () => _pick(key),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: ivory,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: goldDeep.withAlpha(110)),
+                    ),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(Icons.add_a_photo_outlined, color: goldDeep, size: 18),
+                        const SizedBox(height: 2),
+                        Text(LanguageService.tr('Add', 'যোগ করুন'),
+                            style: const TextStyle(fontSize: 9.5, fontWeight: FontWeight.w700, color: goldDeep)),
+                      ],
+                    ),
+                  ),
+                )
+                    : Container(
+                  decoration: BoxDecoration(
+                    color: ivory.withAlpha(120),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: line),
+                  ),
+                ),
               ),
-            ),
-            Positioned(
-              right: 8,
-              bottom: 8,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                decoration: BoxDecoration(color: Colors.black.withAlpha(150), borderRadius: BorderRadius.circular(20)),
-                child: Text(LanguageService.tr('Change', 'বদলান'),
-                    style: const TextStyle(color: Colors.white, fontSize: 11)),
-              ),
-            ),
-          ],
-        )
-            : Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.add_a_photo_outlined, color: goldDeep, size: 28),
-            const SizedBox(height: 6),
-            Text(label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: ink)),
-            const SizedBox(height: 2),
-            Text(LanguageService.tr('JPG / PNG · up to 10 MB', 'JPG / PNG · ১০ MB পর্যন্ত'),
-                style: const TextStyle(fontSize: 10.5, color: muted)),
+            ],
           ],
         ),
-      ),
+        const SizedBox(height: 6),
+        Text(
+          LanguageService.tr('Up to $_maxProofs images · JPG / PNG · max 10 MB each',
+              'সর্বোচ্চ $_maxProofs টি ছবি · JPG / PNG · প্রতিটি ১০ MB পর্যন্ত'),
+          style: const TextStyle(fontSize: 9.5, color: muted),
+        ),
+      ],
     );
   }
 
   Widget _errorBox(String text) {
     return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(color: dangerSoft, borderRadius: BorderRadius.circular(12)),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(color: dangerSoft, borderRadius: BorderRadius.circular(10)),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Icon(Icons.error_outline_rounded, size: 17, color: danger),
+          const Icon(Icons.error_outline_rounded, size: 15, color: danger),
           const SizedBox(width: 8),
-          Expanded(child: Text(text, style: const TextStyle(fontSize: 12.5, color: danger))),
+          Expanded(child: Text(text, style: const TextStyle(fontSize: 11.5, color: danger, height: 1.35))),
         ],
       ),
     );

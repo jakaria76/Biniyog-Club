@@ -1,6 +1,17 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
+/// Forgot / OTP / Reset password page er card — app er emerald + gold design e.
 class AuthCard extends StatelessWidget {
+  static const Color emerald = Color(0xFF0E4A37);
+  static const Color emeraldDeep = Color(0xFF0A3327);
+  static const Color gold = Color(0xFFB8935A);
+  static const Color goldLight = Color(0xFFD9BE8C);
+  static const Color ink = Color(0xFF1C2421);
+  static const Color muted = Color(0xFF6E736F);
+  static const Color line = Color(0xFFE8E2D7);
+
   final String title;
   final String description;
   final Widget child;
@@ -25,11 +36,12 @@ class AuthCard extends StatelessWidget {
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: line),
           boxShadow: [
             BoxShadow(
-              color: Colors.teal.shade900.withAlpha(20),
+              color: emeraldDeep.withAlpha(22),
               blurRadius: 24,
-              offset: const Offset(0, 8),
+              offset: const Offset(0, 10),
             ),
           ],
         ),
@@ -39,25 +51,21 @@ class AuthCard extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // Top Accent Bar
+              // Upore emerald → gold dag
               Container(
                 height: 5,
                 decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [Colors.teal, Colors.tealAccent],
-                  ),
+                  gradient: LinearGradient(colors: [emerald, gold, emerald]),
                 ),
               ),
 
-              // Quote Banner (if provided)
-              if (quoteBanner != null) ...[quoteBanner!],
+              if (quoteBanner != null) quoteBanner!,
 
               Padding(
-                padding: const EdgeInsets.all(28.0),
+                padding: const EdgeInsets.fromLTRB(24, 26, 24, 24),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    // App Brand / Logo Header
                     Center(
                       child: Image.asset(
                         'assets/images/logo_full.png',
@@ -66,47 +74,46 @@ class AuthCard extends StatelessWidget {
                           'Biniyog Club',
                           style: TextStyle(
                             fontSize: 22,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.teal,
+                            fontWeight: FontWeight.w800,
+                            color: emerald,
                             letterSpacing: 0.5,
                           ),
                         ),
                       ),
                     ),
-                    const SizedBox(height: 24),
-
-                    // Title
+                    const SizedBox(height: 14),
+                    // Choto Islamic diamond divider
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Container(width: 28, height: 1, color: goldLight),
+                        const SizedBox(width: 8),
+                        Transform.rotate(
+                          angle: math.pi / 4,
+                          child: Container(width: 7, height: 7, color: gold),
+                        ),
+                        const SizedBox(width: 8),
+                        Container(width: 28, height: 1, color: goldLight),
+                      ],
+                    ),
+                    const SizedBox(height: 18),
                     Text(
                       title,
                       textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.black87,
-                      ),
+                      style: const TextStyle(fontSize: 23, fontWeight: FontWeight.w800, color: ink),
                     ),
                     const SizedBox(height: 6),
-
-                    // Description
                     Text(
                       description,
                       textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: Colors.grey[600],
-                        height: 1.4,
-                      ),
+                      style: const TextStyle(fontSize: 13.5, color: muted, height: 1.45),
                     ),
-                    const SizedBox(height: 28),
-
-                    // Page Specific Form
+                    const SizedBox(height: 26),
                     child,
-
-                    // Footer (if provided)
                     if (footer != null) ...[
-                      const SizedBox(height: 24),
-                      const Divider(height: 1, color: Color(0xFFEEEEEE)),
-                      const SizedBox(height: 20),
+                      const SizedBox(height: 22),
+                      const Divider(height: 1, color: line),
+                      const SizedBox(height: 18),
                       Center(child: footer!),
                     ],
                   ],

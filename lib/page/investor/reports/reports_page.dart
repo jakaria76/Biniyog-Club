@@ -9,6 +9,7 @@ import '../../authentication/login_page.dart';
 import '../../../services/auth_service.dart';
 import '../../../services/database_service.dart';
 import '../../../services/language_service.dart';
+import '../../../theme/app_colors.dart';
 
 class ReportsPage extends StatefulWidget {
   const ReportsPage({super.key});
@@ -18,51 +19,40 @@ class ReportsPage extends StatefulWidget {
 }
 
 class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStateMixin {
-  // ═════════════════════════════════════════════════════════
-  // EXPECTED RETURN — Investments + Portfolio page er sathe ek
-  // Project: 16–22%. Group: tier er nijer % (na thakle 16–22%).
-  // Shudhu ACTIVE investment er upor.
-  // ═════════════════════════════════════════════════════════
-  static const double minReturnRate = 0.16;
-  static const double maxReturnRate = 0.22;
+  // Expected return: project er nijer range (DB), group er tier er %.
+  // Rate deya na thakle kono "expected" dekhai na — banano 16–22% ar na.
 
-  // ─── Palette ───
-  static const Color emerald = Color(0xFF0E4A37);
-  static const Color emeraldDeep = Color(0xFF0A3327);
-  static const Color emeraldSoft = Color(0xFFE3F0E9);
-  static const Color gold = Color(0xFFB8935A);
-  static const Color goldLight = Color(0xFFD9BE8C);
-  static const Color goldDeep = Color(0xFF8A6A3A);
-  static const Color goldSoft = Color(0xFFF6EEDF);
-  static const Color turquoise = Color(0xFF167A80);
-  static const Color turquoiseSoft = Color(0xFFE0F1F1);
-  static const Color lapis = Color(0xFF26437A);
-  static const Color lapisSoft = Color(0xFFE5EAF4);
-  static const Color terracotta = Color(0xFFA5523A);
-  static const Color terracottaSoft = Color(0xFFF7E6DF);
-  static const Color plum = Color(0xFF6B3E5E);
-  static const Color ivory = Color(0xFFF7F4EE);
-  static const Color ink = Color(0xFF1C2421);
-  static const Color muted = Color(0xFF6E736F);
-  static const Color line = Color(0xFFE8E2D7);
-  static const Color danger = Color(0xFFB4413A);
-  static const Color dangerSoft = Color(0xFFFBEAE8);
+  // ─── Palette — website er rong (lib/theme/app_colors.dart) ───
+  static const Color emerald = BC.primary;
+  static const Color emeraldBright = BC.brand500; // home page er moto
+  static const Color emeraldSoft = BC.secondary;
+  static const Color turquoise = BC.chart4;
+  static const Color turquoiseSoft = BC.chart4Muted;
+  static const Color lapis = BC.finance600;
+  static const Color lapisSoft = BC.finance50;
+  static const Color terracotta = BC.destructive;
+  static const Color terracottaSoft = BC.destructiveMuted;
+  static const Color plum = BC.finance700;
+  static const Color ivory = BC.background;
+  static const Color ink = BC.foreground;
+  static const Color muted = BC.mutedForeground;
+  static const Color line = BC.border;
+  static const Color danger = BC.destructive;
+  static const Color dangerSoft = BC.destructiveMuted;
 
-  static const List<Color> _chartColors = [emerald, gold, turquoise, lapis, terracotta, plum];
+  /// Website er --chart-1 … --chart-5 (+ finance-700)
+  static const List<Color> _chartColors = [BC.chart1, BC.chart2, BC.chart3, BC.chart4, BC.chart5, BC.finance700];
 
   static const Map<String, String> categoryLabels = {
     'REAL_ESTATE': 'Real Estate',
     'TRADE_FINANCE': 'Trade Finance',
-    'SME': 'SME Business',
+    'SME': 'SME',
     'TECHNOLOGY': 'Technology',
     'INFRASTRUCTURE': 'Infrastructure',
-    'CROP_FARMING': 'Crop Farming',
-    'LIVESTOCK': 'Livestock',
-    'AQUACULTURE': 'Aquaculture',
-    'POULTRY': 'Poultry',
-    'DAIRY': 'Dairy',
-    'HORTICULTURE': 'Horticulture',
-    'AGRO_PROCESSING': 'Agro Processing',
+    'FMCG': 'FMCG',
+    'FOOD_AGRO': 'Food & Agro',
+    'PRINTING_PACKAGING': 'Printing & Packaging',
+    'COMMUNITY': 'Community',
     'OTHER': 'Other',
   };
 
@@ -215,7 +205,7 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
       case 'ACTIVE':
         return emerald;
       case 'AWAITING':
-        return goldDeep;
+        return BC.chart4Deep;
       case 'COMPLETED':
         return lapis;
       default:
@@ -268,7 +258,7 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
   }
 
   Color _txColor(String state) =>
-      state == 'DONE' ? emerald : (state == 'FAILED' ? danger : goldDeep);
+      state == 'DONE' ? emerald : (state == 'FAILED' ? danger : BC.chart4Deep);
 
   String _txTypeText(String t) {
     switch (t) {
@@ -316,9 +306,8 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
       'amount': _num(inv['amountBdt']),
       'status': inv['status']?.toString() ?? '',
       'createdAt': _parseDate(inv['createdAt']),
-      // Project er nijer range (DB), na thakle 16–22%
-      'rMin': _num(inv['returnMin']) > 0 ? _num(inv['returnMin']) : minReturnRate,
-      'rMax': _num(inv['returnMax']) > 0 ? _num(inv['returnMax']) : maxReturnRate,
+      'rMin': _num(inv['returnMin']),
+      'rMax': _num(inv['returnMax']),
       'received': _num(inv['actualReturnBdt']),
     };
   }
@@ -336,8 +325,8 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
       'amount': _num(g['amountBdt']),
       'status': g['status']?.toString() ?? '',
       'createdAt': _parseDate(g['createdAt']),
-      'rMin': tierPct > 0 ? tierPct : minReturnRate,
-      'rMax': tierPct > 0 ? tierPct : maxReturnRate,
+      'rMin': tierPct,
+      'rMax': tierPct,
       'received': 0.0,
     };
   }
@@ -616,7 +605,7 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
             iconTheme: const IconThemeData(color: ink),
             title: Text(
               LanguageService.tr('Reports', 'রিপোর্টস'),
-              style: const TextStyle(color: ink, fontWeight: FontWeight.w700, fontSize: 18),
+              style: const TextStyle(color: ink, fontWeight: FontWeight.w700, fontSize: 19),
             ),
             actions: [
               if (ready)
@@ -630,11 +619,11 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
                       height: 13,
                       child: CircularProgressIndicator(strokeWidth: 2, color: emerald),
                     )
-                        : const Icon(Icons.ios_share_rounded, size: 15),
+                        : const Icon(Icons.ios_share_rounded, size: 17),
                     label: Text(LanguageService.tr('Export CSV', 'CSV এক্সপোর্ট')),
                     style: OutlinedButton.styleFrom(
                       foregroundColor: emerald,
-                      side: const BorderSide(color: gold),
+                      side: const BorderSide(color: emerald),
                       visualDensity: VisualDensity.compact,
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                     ),
@@ -648,10 +637,10 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
               tabAlignment: TabAlignment.start,
               labelColor: emerald,
               unselectedLabelColor: muted,
-              indicatorColor: gold,
+              indicatorColor: emerald,
               indicatorWeight: 3,
               dividerColor: line,
-              labelStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+              labelStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
               tabs: [
                 Tab(text: LanguageService.tr('Overview', 'সারসংক্ষেপ')),
                 Tab(text: LanguageService.tr('Investments', 'বিনিয়োগ')),
@@ -738,27 +727,13 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
       child: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
-            colors: [Color(0xFF125A43), emeraldDeep, Color(0xFF0B2A3A)],
+            colors: [emeraldBright, emerald],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
           ),
         ),
         child: Stack(
           children: [
-            Positioned.fill(
-              child: CustomPaint(
-                painter: _IslamicPatternPainter(color: Colors.white.withAlpha(16), cell: 44),
-              ),
-            ),
-            Positioned.fill(
-              child: Container(
-                margin: const EdgeInsets.all(7),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: gold.withAlpha(80), width: 0.8),
-                ),
-              ),
-            ),
             Padding(
               padding: const EdgeInsets.all(20),
               child: Column(
@@ -767,8 +742,8 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
                   Text(
                     LanguageService.tr('TOTAL INVESTED', 'মোট বিনিয়োগ'),
                     style: const TextStyle(
-                      color: goldLight,
-                      fontSize: 10.5,
+                      color: Color(0xC8FFFFFF),
+                      fontSize: 12,
                       fontWeight: FontWeight.w600,
                       letterSpacing: 1.3,
                     ),
@@ -781,7 +756,7 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
                       _fmtBdt(_totalInvested),
                       style: const TextStyle(
                         color: Colors.white,
-                        fontSize: 30,
+                        fontSize: 31,
                         fontWeight: FontWeight.w700,
                       ),
                     ),
@@ -793,7 +768,7 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
                         child: _heroSplit(
                             LanguageService.tr('Projects', 'প্রজেক্ট'), _fmtBdt(_projectInvested)),
                       ),
-                      Container(width: 0.8, height: 30, color: gold.withAlpha(90)),
+                      Container(width: 0.8, height: 30, color: Colors.white.withAlpha(60)),
                       const SizedBox(width: 14),
                       Expanded(
                         child: _heroSplit(
@@ -814,11 +789,11 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label, style: TextStyle(color: Colors.white.withAlpha(170), fontSize: 11)),
+        Text(label, style: TextStyle(color: Colors.white.withAlpha(170), fontSize: 12.5)),
         const SizedBox(height: 2),
         Text(
           value,
-          style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700),
+          style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700),
         ),
       ],
     );
@@ -850,8 +825,8 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
                     ? LanguageService.tr('net of fees', 'ফি বাদে')
                     : LanguageService.tr('recorded returns', 'রেকর্ডকৃত রিটার্ন'),
                 Icons.payments_outlined,
-                goldDeep,
-                goldSoft,
+                emerald,
+                emeraldSoft,
               ),
             ),
           ],
@@ -865,8 +840,8 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
                 '${roi.toStringAsFixed(2)}%',
                 LanguageService.tr('received ÷ invested', 'প্রাপ্ত ÷ বিনিয়োগ'),
                 Icons.percent_rounded,
-                lapis,
-                lapisSoft,
+                emerald,
+                emeraldSoft,
               ),
             ),
             const SizedBox(width: 10),
@@ -876,8 +851,8 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
                 _activeCapital > 0 ? _fmtRange(_expectedMin, _expectedMax) : _fmtBdt(0),
                 LanguageService.tr('on active only', 'শুধু চলমানের উপর'),
                 Icons.auto_graph_rounded,
-                turquoise,
-                turquoiseSoft,
+                emerald,
+                emeraldSoft,
               ),
             ),
           ],
@@ -926,12 +901,12 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
                   label,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: ink),
+                  style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600, color: ink),
                 ),
               ),
               Text(
                 '${_fmtBdt(value)} · ${(pct * 100).toStringAsFixed(1)}%',
-                style: const TextStyle(fontSize: 12, color: muted),
+                style: const TextStyle(fontSize: 13, color: muted),
               ),
             ],
           ),
@@ -975,12 +950,12 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
               children: [
                 Text(
                   _bucketText(b),
-                  style: TextStyle(fontSize: 12, color: c, fontWeight: FontWeight.w600),
+                  style: TextStyle(fontSize: 13, color: c, fontWeight: FontWeight.w600),
                 ),
                 const SizedBox(width: 8),
                 Text(
                   '${_statusCounts[b]}',
-                  style: TextStyle(fontSize: 13, color: c, fontWeight: FontWeight.w800),
+                  style: TextStyle(fontSize: 14, color: c, fontWeight: FontWeight.w800),
                 ),
               ],
             ),
@@ -998,7 +973,7 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
           'Expected return is an estimate, not guaranteed. Project: its own range, group: tier rate.',
           'প্রত্যাশিত লাভ একটি আনুমানিক হিসাব, নিশ্চিত নয়। প্রজেক্ট: নিজস্ব হার, গ্রুপ: টিয়ারের হার।',
         ),
-        style: const TextStyle(fontSize: 11, color: muted, height: 1.4),
+        style: const TextStyle(fontSize: 12.5, color: muted, height: 1.4),
       ),
     );
   }
@@ -1020,7 +995,7 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
           const Spacer(),
           Text(
             LanguageService.tr('${list.length} items', '${list.length} টি'),
-            style: const TextStyle(fontSize: 12, color: muted),
+            style: const TextStyle(fontSize: 13, color: muted),
           ),
         ],
       ),
@@ -1064,7 +1039,7 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
         child: Text(
           label,
           style: TextStyle(
-            fontSize: 12.5,
+            fontSize: 13.5,
             fontWeight: FontWeight.w600,
             color: selected ? Colors.white : ink,
           ),
@@ -1086,7 +1061,7 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
     String? footLabel;
     String? footValue;
     Color footColor = emerald;
-    if (b == 'ACTIVE') {
+    if (b == 'ACTIVE' && (it['rMax'] as double) > 0) {
       footLabel = LanguageService.tr('Expected return (${_pctLabel(it['rMin'], it['rMax'])})',
           'প্রত্যাশিত লাভ (${_pctLabel(it['rMin'], it['rMax'])})');
       footValue = _fmtRange(amt * (it['rMin'] as double), amt * (it['rMax'] as double));
@@ -1097,7 +1072,7 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
     } else if (b == 'AWAITING') {
       footLabel = LanguageService.tr(
           'Starts after payment is approved', 'পেমেন্ট অনুমোদনের পর শুরু হবে');
-      footColor = goldDeep;
+      footColor = BC.chart4Deep;
     }
 
     return Padding(
@@ -1112,13 +1087,13 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
                 width: 36,
                 height: 36,
                 decoration: BoxDecoration(
-                  color: isProject ? emeraldSoft : goldSoft,
+                  color: isProject ? emeraldSoft : BC.chart4Muted,
                   borderRadius: BorderRadius.circular(11),
                 ),
                 child: Icon(
                   isProject ? Icons.work_outline_rounded : Icons.groups_2_outlined,
-                  size: 18,
-                  color: isProject ? emerald : goldDeep,
+                  size: 20,
+                  color: isProject ? emerald : BC.chart4Deep,
                 ),
               ),
               const SizedBox(width: 12),
@@ -1128,7 +1103,7 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
                   children: [
                     Text(
                       (it['title'] as String).isEmpty ? '—' : it['title'] as String,
-                      style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700, color: ink),
+                      style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700, color: ink),
                     ),
                     const SizedBox(height: 2),
                     Text(
@@ -1139,7 +1114,7 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
                         if (subtitle.isNotEmpty) subtitle,
                         _fmtDate(it['createdAt'] as DateTime?),
                       ].join(' · '),
-                      style: const TextStyle(fontSize: 11, color: muted),
+                      style: const TextStyle(fontSize: 12.5, color: muted),
                     ),
                   ],
                 ),
@@ -1150,7 +1125,7 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
                 children: [
                   Text(
                     _fmtBdt(amt),
-                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: ink),
+                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: ink),
                   ),
                   const SizedBox(height: 4),
                   Container(
@@ -1161,7 +1136,7 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
                     ),
                     child: Text(
                       _bucketText(b),
-                      style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: c),
+                      style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: c),
                     ),
                   ),
                 ],
@@ -1181,13 +1156,13 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
                   Expanded(
                     child: Text(
                       footLabel,
-                      style: TextStyle(fontSize: 11.5, color: footColor, fontWeight: FontWeight.w600),
+                      style: TextStyle(fontSize: 12.5, color: footColor, fontWeight: FontWeight.w600),
                     ),
                   ),
                   if (footValue != null)
                     Text(
                       footValue,
-                      style: TextStyle(fontSize: 12.5, color: footColor, fontWeight: FontWeight.w800),
+                      style: TextStyle(fontSize: 13.5, color: footColor, fontWeight: FontWeight.w800),
                     ),
                 ],
               ),
@@ -1222,8 +1197,8 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
               _fmtBdt(_underReview),
               LanguageService.tr('$_underReviewCount payment(s)', '$_underReviewCount টি পেমেন্ট'),
               Icons.hourglass_top_rounded,
-              goldDeep,
-              goldSoft,
+              emerald,
+              emeraldSoft,
             ),
           ),
         ],
@@ -1273,31 +1248,31 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
             children: [
               Text(
                 _txTypeText(type),
-                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: ink),
+                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: ink),
               ),
               if (title.isNotEmpty)
                 Text(
                   title,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 11.5, color: ink),
+                  style: const TextStyle(fontSize: 12.5, color: ink),
                 ),
               const SizedBox(height: 2),
               Text(
                 _fmtDateTime(_parseDate(t['createdAt'])),
-                style: const TextStyle(fontSize: 10.5, color: muted),
+                style: const TextStyle(fontSize: 12, color: muted),
               ),
               if (ref.isNotEmpty)
                 SelectableText(
                   'Ref: $ref',
-                  style: const TextStyle(fontSize: 10.5, color: muted),
+                  style: const TextStyle(fontSize: 12, color: muted),
                 ),
               if (state == 'FAILED' && note.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.only(top: 4),
                   child: Text(
                     note,
-                    style: const TextStyle(fontSize: 11, color: danger),
+                    style: const TextStyle(fontSize: 12.5, color: danger),
                   ),
                 ),
             ],
@@ -1310,7 +1285,7 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
             Text(
               _fmtBdt(_num(t['amountBdt'])),
               style: TextStyle(
-                fontSize: 13.5,
+                fontSize: 14.5,
                 fontWeight: FontWeight.w800,
                 color: state == 'FAILED' ? muted : ink,
                 decoration: state == 'FAILED' ? TextDecoration.lineThrough : null,
@@ -1319,7 +1294,7 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
             if (fee > 0)
               Text(
                 LanguageService.tr('Fee ${_fmtBdt(fee)}', 'ফি ${_fmtBdt(fee)}'),
-                style: const TextStyle(fontSize: 10, color: muted),
+                style: const TextStyle(fontSize: 11.5, color: muted),
               ),
             const SizedBox(height: 4),
             Container(
@@ -1327,7 +1302,7 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
               decoration: BoxDecoration(color: c.withAlpha(22), borderRadius: BorderRadius.circular(8)),
               child: Text(
                 _txStatusText(status),
-                style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: c),
+                style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: c),
               ),
             ),
           ],
@@ -1349,8 +1324,8 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
               _fmtBdt(_distGross),
               LanguageService.tr('before fees', 'ফি এর আগে'),
               Icons.account_balance_wallet_outlined,
-              lapis,
-              lapisSoft,
+              emerald,
+              emeraldSoft,
             ),
           ),
           const SizedBox(width: 8),
@@ -1360,8 +1335,8 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
               _fmtBdt(_distFees),
               LanguageService.tr('deducted', 'কাটা হয়েছে'),
               Icons.receipt_outlined,
-              terracotta,
-              terracottaSoft,
+              emerald,
+              emeraldSoft,
             ),
           ),
           const SizedBox(width: 8),
@@ -1411,7 +1386,7 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
           width: 34,
           height: 34,
           decoration: BoxDecoration(color: emeraldSoft, borderRadius: BorderRadius.circular(10)),
-          child: const Icon(Icons.savings_outlined, size: 17, color: emerald),
+          child: const Icon(Icons.savings_outlined, size: 19, color: emerald),
         ),
         const SizedBox(width: 12),
         Expanded(
@@ -1420,18 +1395,18 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
             children: [
               Text(
                 title.isEmpty ? '—' : title,
-                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: ink),
+                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: ink),
               ),
               const SizedBox(height: 2),
               Text(
                 _fmtDate(_parseDate(d['date'])),
-                style: const TextStyle(fontSize: 10.5, color: muted),
+                style: const TextStyle(fontSize: 12, color: muted),
               ),
               if (fee > 0)
                 Text(
                   LanguageService.tr('Gross ${_fmtBdt(gross)} · Fee ${_fmtBdt(fee)}',
                       'মোট ${_fmtBdt(gross)} · ফি ${_fmtBdt(fee)}'),
-                  style: const TextStyle(fontSize: 10.5, color: muted),
+                  style: const TextStyle(fontSize: 12, color: muted),
                 ),
             ],
           ),
@@ -1441,13 +1416,13 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
           children: [
             Text(
               '+${_fmtBdt(_num(d['netAmountBdt']))}',
-              style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w800, color: emerald),
+              style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w800, color: emerald),
             ),
             if (status.isNotEmpty) ...[
               const SizedBox(height: 4),
               Text(
                 _txStatusText(status),
-                style: TextStyle(fontSize: 10, color: _txColor(_txState(status))),
+                style: TextStyle(fontSize: 11.5, color: _txColor(_txState(status))),
               ),
             ],
           ],
@@ -1471,14 +1446,14 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
             width: 30,
             height: 30,
             decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(9)),
-            child: Icon(icon, size: 15, color: Colors.white),
+            child: Icon(icon, size: 17, color: Colors.white),
           ),
           const SizedBox(height: 10),
           Text(
             label,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: TextStyle(fontSize: 11, color: color.withAlpha(210), fontWeight: FontWeight.w600),
+            style: TextStyle(fontSize: 12.5, color: color.withAlpha(210), fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: 3),
           FittedBox(
@@ -1486,14 +1461,14 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
             alignment: Alignment.centerLeft,
             child: Text(
               value,
-              style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: color),
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: color),
             ),
           ),
           Text(
             sub,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: TextStyle(fontSize: 10, color: color.withAlpha(170)),
+            style: TextStyle(fontSize: 11.5, color: color.withAlpha(170)),
           ),
         ],
       ),
@@ -1520,7 +1495,7 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
                   width: 7,
                   height: 7,
                   decoration: const BoxDecoration(
-                    gradient: LinearGradient(colors: [goldLight, gold]),
+                    gradient: LinearGradient(colors: [emeraldBright, emerald]),
                   ),
                 ),
               ),
@@ -1528,7 +1503,7 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
               Expanded(
                 child: Text(
                   title,
-                  style: const TextStyle(fontSize: 15.5, fontWeight: FontWeight.w700, color: ink),
+                  style: const TextStyle(fontSize: 16.5, fontWeight: FontWeight.w700, color: ink),
                 ),
               ),
             ],
@@ -1537,7 +1512,7 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
             const SizedBox(height: 3),
             Padding(
               padding: const EdgeInsets.only(left: 17),
-              child: Text(subtitle, style: const TextStyle(fontSize: 11, color: muted)),
+              child: Text(subtitle, style: const TextStyle(fontSize: 12.5, color: muted)),
             ),
           ],
           const SizedBox(height: 16),
@@ -1553,7 +1528,7 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
       child: Text(
         text,
         textAlign: TextAlign.center,
-        style: const TextStyle(fontSize: 12.5, color: muted, height: 1.4),
+        style: const TextStyle(fontSize: 13.5, color: muted, height: 1.4),
       ),
     ),
   );
@@ -1566,17 +1541,17 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 40, color: goldDeep),
+            Icon(icon, size: 40, color: emerald),
             const SizedBox(height: 12),
             Text(
               title,
               textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: ink),
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: ink),
             ),
             if (subtitle != null) ...[
               const SizedBox(height: 4),
               Text(subtitle,
-                  textAlign: TextAlign.center, style: const TextStyle(fontSize: 12.5, color: muted)),
+                  textAlign: TextAlign.center, style: const TextStyle(fontSize: 13.5, color: muted)),
             ],
             const SizedBox(height: 16),
             FilledButton(
@@ -1593,46 +1568,4 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
       ),
     );
   }
-}
-
-// ═══════════════════════════════════════════════════════════
-// Islamic geometric pattern (dashboard er moto 8-point star)
-// ═══════════════════════════════════════════════════════════
-class _IslamicPatternPainter extends CustomPainter {
-  final Color color;
-  final double cell;
-
-  _IslamicPatternPainter({required this.color, required this.cell});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 0.9;
-
-    final r = cell * 0.34;
-
-    for (double y = 0; y <= size.height + cell; y += cell) {
-      final offsetRow = ((y / cell).round() % 2) * cell / 2;
-      for (double x = -cell; x <= size.width + cell; x += cell) {
-        final c = Offset(x + offsetRow, y);
-        for (final start in [0.0, math.pi / 4]) {
-          final path = Path();
-          for (int i = 0; i < 4; i++) {
-            final a = start + i * math.pi / 2;
-            final p = Offset(c.dx + r * math.cos(a), c.dy + r * math.sin(a));
-            i == 0 ? path.moveTo(p.dx, p.dy) : path.lineTo(p.dx, p.dy);
-          }
-          path.close();
-          canvas.drawPath(path, paint);
-        }
-        canvas.drawCircle(c, r * 0.32, paint);
-      }
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _IslamicPatternPainter old) =>
-      old.color != color || old.cell != cell;
 }

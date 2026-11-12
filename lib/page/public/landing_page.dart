@@ -1,32 +1,9 @@
-// ============================================================================
-//  LandingPage — website (biniyogclub.com) er home page er native Flutter rup.
-//  WebView ar nai. Section order website er moto hubohu:
-//    01 Hero (brand video + 2 button + headline)
-//    02 About — Discover the Power of Collective Opportunities
-//    03 Business Segments — One Platform. Six Business Segments.
-//    04 Investment Opportunities — Explore Businesses You Can Be Part Of
-//    05 How It Works — Your Investment Journey, Simplified
-//    06 Our Portfolio — Explore the Businesses Behind the Opportunities
-//    07 Transparency — Clarity, Accountability & Informed Decisions (dark)
-//    08 Registration — Join the Biniyog Club Ecosystem (dark)
-//    + Footer
-//
-//  Splash theke: logged in na thakle ei page (agher WebView er jaygay).
-//
-//  Niyom:
-//   - Projects / groups er data DB theke asol data (DatabaseService) — kono
-//     banano sonkha nai. Data na thakle oi jinish lukano thake.
-//   - Shudhu dekha jay (scroll, filter). "How It Works" page er vitore scroll kore.
-//   - Account khola button (Register, Create Free Investor Account, footer
-//     "Create Account") → Registration page.
-//   - Baki SHOB action (login, project/group tap, onno button, footer link…) → Login page.
-//   - Marketing chobi/video website er public folder theke network e load hoy,
-//     tai app size bare na. Load na hole Islamic pattern placeholder dekhay.
-// ============================================================================
+import 'dart:math' as math;
 
+import 'package:curved_labeled_navigation_bar/curved_navigation_bar.dart';
+import 'package:curved_labeled_navigation_bar/curved_navigation_bar_item.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:video_player/video_player.dart';
 
 import '../../screens/home_screen.dart';
 import '../../services/auth_service.dart';
@@ -34,142 +11,14 @@ import '../../services/database_service.dart';
 import '../../services/language_service.dart';
 import '../authentication/login_page.dart';
 import '../authentication/registration_page.dart';
+import '../investor/groups/browse_groups_page.dart';
+import '../investor/help/help_center_page.dart';
+import '../investor/projects/project_detail_page.dart';
+import '../investor/settings/legal_web_page.dart';
+import '../../theme/app_colors.dart';
 
-// ─── Palette (InvestorDashboardPage er Islamic palette er sathe mil) ─────────
-class _C {
-  static const emerald = Color(0xFF0E4A37);
-  static const emeraldDeep = Color(0xFF0A3327);
-  static const emeraldSoft = Color(0xFFE3F0E9);
-  static const night = Color(0xFF06140F); // dark section er background
-  static const nightBlue = Color(0xFF0B2A3A);
-  static const gold = Color(0xFFB8935A);
-  static const goldDeep = Color(0xFF8A6A3A);
-  static const goldLight = Color(0xFFD9BE8C);
-  static const goldSoft = Color(0xFFF6EEDF);
-  static const turquoise = Color(0xFF167A80);
-  static const lapis = Color(0xFF26437A);
-  static const ivory = Color(0xFFF7F4EE);
-  static const ink = Color(0xFF1C2421);
-  static const muted = Color(0xFF6E736F);
-  static const line = Color(0xFFE8E2D7);
-}
-
-const String _site = 'https://biniyogclub.com';
-const double _radius = 4; // website er moto prai square corner
-
-String _t(String en, String bn) => LanguageService.tr(en, bn);
-
-String _asset(String path) => '$_site${Uri.encodeFull(path)}';
-
-// ─── Choto helper — DB map theke nirapod vabe value pora ──────────────────
-dynamic _pick(Map m, List<String> keys) {
-  for (final k in keys) {
-    final v = m[k];
-    if (v != null && v.toString().isNotEmpty) return v;
-  }
-  return null;
-}
-
-String _str(Map m, List<String> keys) => (_pick(m, keys) ?? '').toString();
-
-double _num(Map m, List<String> keys) {
-  final v = _pick(m, keys);
-  if (v is num) return v.toDouble();
-  return double.tryParse(v?.toString() ?? '') ?? 0;
-}
-
-double? _numOrNull(Map m, List<String> keys) {
-  final v = _pick(m, keys);
-  if (v == null) return null;
-  if (v is num) return v.toDouble();
-  return double.tryParse(v.toString());
-}
-
-List<Map> _list(dynamic v) =>
-    v is List ? v.whereType<Map>().toList() : const <Map>[];
-
-/// 1234 → 1,234
-String _count(int n) => n.toString().replaceAllMapped(
-    RegExp(r'(\d)(?=(\d{3})+$)'), (m) => '${m[1]},');
-
-/// 15 ba 0.15 — duitai 15% hisebe dhora hoy.
-double _pct(double v) => v > 0 && v <= 1 ? v * 100 : v;
-
-String _pctText(double v) {
-  final p = _pct(v);
-  return p == p.roundToDouble() ? p.toStringAsFixed(0) : p.toStringAsFixed(1);
-}
-
-String _bdt(double n) {
-  if (n >= 10000000) return '৳${(n / 10000000).toStringAsFixed(1)} Cr';
-  if (n >= 100000) return '৳${(n / 100000).toStringAsFixed(1)}L';
-  if (n >= 1000) return '৳${(n / 1000).toStringAsFixed(0)}K';
-  return '৳${n.toStringAsFixed(0)}';
-}
-
-String? _imageUrl(dynamic raw) {
-  final s = raw?.toString() ?? '';
-  if (s.isEmpty) return null;
-  if (s.startsWith('http')) return s;
-  if (s.startsWith('/')) return _asset(s);
-  return null;
-}
-
-/// Project er return label — website er moto: min–max, na thakle expected.
-String? _returnLabel(Map p) {
-  final min = _numOrNull(p, ['returnMin', 'returnPctMin']);
-  final max = _numOrNull(p, ['returnMax', 'returnPctMax']);
-  if (min != null && max != null && max > 0) {
-    return '${_pctText(min)}–${_pctText(max)}%';
-  }
-  final exp = _numOrNull(p, ['expectedReturnPct', 'expectedReturn']);
-  if (exp != null && exp > 0) return '${_pctText(exp)}%';
-  return null;
-}
-
-String _categoryLabel(String c) {
-  if (c.isEmpty) return '';
-  return c
-      .split('_')
-      .map((w) => w.isEmpty ? w : w[0] + w.substring(1).toLowerCase())
-      .join(' ');
-}
-
-String _statusLabel(String s) {
-  switch (s) {
-    case 'FUNDRAISING':
-      return _t('Fundraising', 'তহবিল সংগ্রহ চলছে');
-    case 'FUNDED':
-      return _t('Funded', 'তহবিল পূর্ণ');
-    case 'ACTIVE':
-      return _t('Active', 'চলমান');
-    case 'HARVESTING':
-      return _t('Harvesting', 'ফসল সংগ্রহ');
-    case 'COMPLETED':
-      return _t('Completed', 'সম্পন্ন');
-    default:
-      return _categoryLabel(s);
-  }
-}
-
-Color _statusColor(String s) {
-  switch (s) {
-    case 'FUNDRAISING':
-      return const Color(0xFF1F8A5B);
-    case 'FUNDED':
-      return _C.lapis;
-    case 'ACTIVE':
-      return _C.turquoise;
-    case 'HARVESTING':
-      return _C.goldDeep;
-    default:
-      return _C.muted;
-  }
-}
-
-// ============================================================================
-//  PAGE
-// ============================================================================
+/// biniyogclub.com er home page er app version — niche bottom navbar:
+/// Home · Projects · Groups · Account. Shob shonkha DB theke (kono banano data nei).
 class LandingPage extends StatefulWidget {
   const LandingPage({super.key});
 
@@ -177,20 +26,192 @@ class LandingPage extends StatefulWidget {
   State<LandingPage> createState() => _LandingPageState();
 }
 
+// ═══════════════════════════════════════════════════════════
+// PALETTE — website er rong (lib/theme/app_colors.dart), dashboard er moto.
+// Kono sonali nei.
+// ═══════════════════════════════════════════════════════════
+class _C {
+  static const Color emerald = BC.primary;
+  static const Color emeraldBright = BC.brand500; // dashboard card er gradient
+  static const Color emeraldDeep = BC.brand800;
+  static const Color emeraldSoft = BC.secondary;
+  static const Color emeraldLight = BC.brand200; // sobuj er upor halka lekha
+  static const Color onDark = Colors.white; // sobuj er upor lekha / icon
+  static const Color ivory = BC.background;
+  static const Color tint = BC.muted;
+  static const Color ink = BC.foreground;
+  static const Color muted = BC.mutedForeground;
+  static const Color line = BC.border;
+  static const Color danger = BC.destructive;
+  static const Color dangerSoft = BC.destructiveMuted;
+  static const Color lapis = BC.finance600;
+  static const Color notice = BC.chart4Deep; // "notun / ghoshona" er rong
+  static const Color noticeSoft = BC.chart4Muted;
+}
+
+// ═══════════════════════════════════════════════════════════
+// ASSETS — website er public folder theke ana (assets/ e)
+// ═══════════════════════════════════════════════════════════
+class _A {
+  static const logo = 'assets/logo.png';
+  static const logoFull = 'assets/images/logo_full.png';
+  static const logoIcon = 'assets/Biniyog Club Logo Icon PNG.png';
+  static const about = 'assets/images/biniyog.png';
+  static const transparency = 'assets/images/Transparency in Fintech Accountability.png';
+  static const agro = 'assets/images/smart-agro-farm.jpg';
+  static const coldChain = 'assets/images/cold-chain-sme.jpg';
+  static const contract = 'assets/images/contract-security.jpg';
+  static const wallet = 'assets/images/wallet-returns-payout.jpg';
+  static const kyc = 'assets/images/digital-kyc-verify.jpg';
+  static const community = 'assets/images/investor-community.jpg';
+  static const dueDiligence = 'assets/images/about-due-diligence.jpg';
+
+  // About er 4 pillar (website er /icons)
+  static const iconSecure = 'assets/icons/secure-platform.jpg';
+  static const iconTransparent = 'assets/icons/transparent-process.jpg';
+  static const iconTech = 'assets/icons/modern-technology.jpg';
+  static const iconUser = 'assets/icons/user-experience.jpg';
+
+  // Stats er icon (website er MetricsDock)
+  static const iconInvestment = 'assets/icons/investment.png';
+  static const iconInvestors = 'assets/icons/user.png';
+  static const iconProjects = 'assets/icons/search-engine.png';
+  static const iconIncome = 'assets/icons/income.png';
+
+  /// Website er groupLogo() — assets/Group logos/
+  static String? groupLogo(String slug) {
+    switch (slug.toUpperCase()) {
+      case 'MARINERS':
+        return 'assets/Group logos/Mariners Group logo.png';
+      case 'MOHS':
+        return 'assets/Group logos/MOHS Group logo.png';
+      case 'MARINOZZ':
+        return 'assets/Group logos/Marinozz Group logo.png';
+      case 'COMMUNITY_VENTURES':
+        return 'assets/Group logos/Community Ventures Logo.png';
+      case 'VENTURE_ALLIANCES':
+        return 'assets/Group logos/Venture Alliance Logo.png';
+      default:
+        return null;
+    }
+  }
+
+  /// Website er "One Ecosystem" grid — 6 ta logo, website er ek-i kroma.
+  /// (DB te shob group nao thakte pare — tai logo gulo website er motoi fixed.)
+  static const List<(String, String, String)> ecosystem = [
+    // (nam, app asset, website path)
+    ('Mariners Group', 'assets/Group logos/Mariners Group logo.png', '/Group logos/Mariners Group logo.png'),
+    ('MOHS Group', 'assets/Group logos/MOHS Group logo.png', '/Group logos/MOHS Group logo.png'),
+    ('Marinozz Group', 'assets/Group logos/Marinozz Group logo.png', '/Group logos/Marinozz Group logo.png'),
+    ('Community Ventures', 'assets/Group logos/Community Ventures Logo.png', '/Group logos/Community Ventures Logo.png'),
+    ('Venture Alliance', 'assets/Group logos/Venture Alliance Logo.png', '/Group logos/Venture Alliance Logo.png'),
+    ('Venture System', 'assets/Group logos/Venture system .png', '/Group logos/Venture system .png'),
+  ];
+
+  /// Website er GROUP_VISUAL_MAP er cover
+  static String groupCover(String slug) {
+    switch (slug.toUpperCase()) {
+      case 'MARINERS':
+        return 'assets/4.png';
+      case 'MOHS':
+        return 'assets/2.png';
+      case 'MARINOZZ':
+        return 'assets/3.png';
+      case 'COMMUNITY_VENTURES':
+        return community;
+      case 'VENTURE_ALLIANCES':
+        return dueDiligence;
+      default:
+        return 'assets/1..png';
+    }
+  }
+
+  /// Website er getProjectFallbackImage — project er nijer chobi na thakle
+  static String projectFallback(String category, String id) {
+    final c = category.toUpperCase();
+    if (c.contains('AGRO') || c.contains('FARM') || c.contains('FOOD')) return agro;
+    if (c.contains('LOGISTICS') || c.contains('COLD') || c.contains('SUPPLY') || c == 'INFRASTRUCTURE') {
+      return coldChain;
+    }
+    if (c.contains('TECH') || c.contains('DIGITAL')) return kyc;
+    if (c.contains('RETAIL') || c.contains('COMMERCE') || c.contains('TRADE') || c == 'FMCG') return wallet;
+    if (c == 'COMMUNITY') return community;
+    const rotation = [agro, coldChain, contract, wallet, kyc];
+    return rotation[id.hashCode.abs() % rotation.length];
+  }
+}
+
+/// Asset chobi — file na thakle sobuj box (app crash kore na)
+Widget _assetImage(String path, {BoxFit fit = BoxFit.cover, Widget? fallback}) {
+  return Image.asset(
+    path,
+    fit: fit,
+    errorBuilder: (_, __, ___) => fallback ?? const _ImageFallbackBox(),
+  );
+}
+
+String _tr(String en, String bn) => LanguageService.tr(en, bn);
+
+double _num(dynamic v) {
+  if (v is num) return v.toDouble();
+  return double.tryParse(v?.toString() ?? '') ?? 0.0;
+}
+
+String _trimNum(double v, int digits) {
+  final s = v.toStringAsFixed(digits);
+  return s.contains('.') ? s.replaceAll(RegExp(r'0+$'), '').replaceAll(RegExp(r'\.$'), '') : s;
+}
+
+String _bdtShort(double n) {
+  if (n >= 10000000) return '৳${_trimNum(n / 10000000, 1)} Cr';
+  if (n >= 100000) return '৳${_trimNum(n / 100000, 1)}L';
+  if (n >= 1000) return '৳${_trimNum(n / 1000, 0)}K';
+  return '৳${n.toStringAsFixed(0)}';
+}
+
+String _pctRange(double lo, double hi) {
+  String p(double r) => _trimNum(r * 100, 1);
+  if (lo <= 0 && hi <= 0) return '—';
+  if (lo <= 0 || lo == hi) return '${p(hi)}%';
+  return '${p(lo)}–${p(hi)}%';
+}
+
+String _categoryLabel(String c) {
+  if (c.isEmpty) return '';
+  return c
+      .split('_')
+      .map((w) => w.isEmpty ? w : '${w[0]}${w.substring(1).toLowerCase()}')
+      .join(' ');
+}
+
+String _fmtDate(String raw) {
+  var t = raw.trim().replaceFirst(' ', 'T');
+  if (t.contains('T') && !RegExp(r'(Z|[+-]\d{2}:?\d{2})$').hasMatch(t)) t = '${t}Z';
+  final d = DateTime.tryParse(t)?.toLocal();
+  if (d == null) return '';
+  const m = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return '${d.day} ${m[d.month - 1]} ${d.year}';
+}
+
 class _LandingPageState extends State<LandingPage> {
-  // Onno page er moto static cache — abar khulle sathe sathe dekhay, pichone refresh.
-  static List<Map>? _cachedProjects;
-  static List<Map>? _cachedGroups;
-  static int _cachedInvestors = 0;
+  int _tab = 0;
+  bool _loading = true;
+  bool _failed = false;
+  bool _loggedIn = false;
 
-  final _scroll = ScrollController();
-  final _howItWorksKey = GlobalKey();
+  List<Map<String, dynamic>> _projects = [];
+  List<Map<String, dynamic>> _groups = [];
+  List<Map<String, dynamic>> _updates = [];
+  int _investors = 0;
 
-  List<Map> _projects = _cachedProjects ?? const [];
-  List<Map> _groups = _cachedGroups ?? const [];
-  bool _loading = _cachedProjects == null;
-  int _totalInvestors = _cachedInvestors;
-  bool _openingLogin = false;
+  final _homeScroll = ScrollController();
+  final _howKey = GlobalKey();
+  String _projectFilter = 'ALL';
+
+  /// Website er event banner er motoi — 2 Nov 2026 er por nijei lukay
+  static final DateTime _eventEndsAt = DateTime.utc(2026, 11, 2, 18); // 3 Nov 00:00 Dhaka
+  static const String _vipPassUrl = 'https://ceremony2026.marinersgroupbd.com/';
+  static const String _site = 'https://biniyogclub.com';
 
   @override
   void initState() {
@@ -200,174 +221,110 @@ class _LandingPageState extends State<LandingPage> {
 
   @override
   void dispose() {
-    _scroll.dispose();
+    _homeScroll.dispose();
     super.dispose();
   }
 
   Future<void> _load() async {
-    try {
-      final results = await Future.wait<dynamic>([
-        DatabaseService.getLandingData(),
-        DatabaseService.getBusinessGroupsWithTiers(),
-      ]);
-      final landing = results[0] as Map<String, dynamic>;
-      final projects = _list(landing['projects']);
-      final groups = _list(results[1]);
-      final investors = (landing['totalInvestors'] as int?) ?? 0;
-      if (!mounted) return;
+    if (mounted) {
       setState(() {
-        if (investors > 0) {
-          _totalInvestors = investors;
-          _cachedInvestors = investors;
-        }
-        // Network fail hole purono cache rakhi
-        if (projects.isNotEmpty || _cachedProjects == null) {
-          _projects = projects;
-          _cachedProjects = projects;
-        }
-        if (groups.isNotEmpty || _cachedGroups == null) {
-          _groups = groups;
-          _cachedGroups = groups;
-        }
-        _loading = false;
+        _loading = _projects.isEmpty;
+        _failed = false;
       });
-    } catch (_) {
-      if (mounted) setState(() => _loading = false);
     }
-  }
-
-  /// Landing er shob action → Login page. Login hoye fire ashle → Dashboard.
-  Future<void> _goLogin() async {
-    if (_openingLogin || !mounted) return;
-    _openingLogin = true;
-    await Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => const LoginPage()),
-    );
-    _openingLogin = false;
+    final res = await Future.wait<dynamic>([
+      DatabaseService.getLandingData(),
+      DatabaseService.getBusinessGroupsWithTiers(),
+      AuthService.isLoggedIn(),
+    ]);
     if (!mounted) return;
-
-    bool isLoggedIn = false;
-    try {
-      isLoggedIn = await AuthService.isLoggedIn();
-    } catch (e) {
-      debugPrint('Auth check error: $e');
-    }
-    if (!mounted || !isLoggedIn) return;
-    Navigator.pushAndRemoveUntil(
-      context,
-      MaterialPageRoute(builder: (_) => const HomeScreen()),
-          (route) => false,
-    );
+    final data = res[0] as Map<String, dynamic>;
+    final groups = res[1] as List<Map<String, dynamic>>;
+    final projects = ((data['projects'] as List?) ?? [])
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+    setState(() {
+      _projects = projects;
+      _groups = groups;
+      _updates = ((data['updates'] as List?) ?? []).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+      _investors = (data['totalInvestors'] as num?)?.toInt() ?? 0;
+      _loggedIn = res[2] as bool;
+      _failed = data['ok'] == false && projects.isEmpty && groups.isEmpty;
+      _loading = false;
+    });
   }
 
-  /// Account khola button gulo → Registration page.
-  /// Registration shofol hole page nijei Dashboard e niye jay.
-  Future<void> _goRegister() async {
-    if (_openingLogin || !mounted) return;
-    _openingLogin = true;
-    await Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => const RegistrationPage()),
-    );
-    _openingLogin = false;
-    if (!mounted) return;
+  // ═════════════════════════════════════════════════════════
+  // NAVIGATION
+  // ═════════════════════════════════════════════════════════
+  void _open(Widget page) => Navigator.push(context, MaterialPageRoute(builder: (_) => page));
 
-    // Registration page theke "Sign in" diye login kore fire ashleo Dashboard e
-    bool isLoggedIn = false;
-    try {
-      isLoggedIn = await AuthService.isLoggedIn();
-    } catch (e) {
-      debugPrint('Auth check error: $e');
-    }
-    if (!mounted || !isLoggedIn) return;
-    Navigator.pushAndRemoveUntil(
-      context,
-      MaterialPageRoute(builder: (_) => const HomeScreen()),
-          (route) => false,
-    );
-  }
+  void _openWeb(String title, String url) => _open(LegalWebPage(title: title, url: url));
 
-  void _scrollToHowItWorks() {
-    final ctx = _howItWorksKey.currentContext;
+  void _openProject(Map<String, dynamic> p) => _open(ProjectDetailPage(projectIdOrSlug: p['id'].toString()));
+
+  void _goLogin() => _open(const LoginPage());
+
+  void _goRegister() => _open(const RegistrationPage());
+
+  void _goDashboard() => Navigator.pushAndRemoveUntil(
+    context,
+    MaterialPageRoute(builder: (_) => const HomeScreen()),
+        (route) => false,
+  );
+
+  void _scrollToHow() {
+    final ctx = _howKey.currentContext;
     if (ctx != null) {
-      Scrollable.ensureVisible(ctx,
-          duration: const Duration(milliseconds: 600), curve: Curves.easeInOut);
+      Scrollable.ensureVisible(ctx, duration: const Duration(milliseconds: 550), curve: Curves.easeOutCubic);
     }
   }
 
-  /// Ekta project kon group er — groupId / groupSlug / groupName jeta pai.
-  List<Map> _projectsOfGroup(Map group) {
-    final id = _str(group, ['id']);
-    final slug = _str(group, ['slug']).toUpperCase();
-    final name = _str(group, ['name']).toLowerCase();
-    return _projects.where((p) {
-      final pid = _str(p, ['groupId']);
-      if (pid.isNotEmpty) return pid == id;
-      final ps = _str(p, ['groupSlug']).toUpperCase();
-      if (ps.isNotEmpty) return ps == slug;
-      final pn = _str(p, ['groupName']).toLowerCase();
-      return pn.isNotEmpty && pn == name;
-    }).toList();
+  double get _minEntry {
+    // Shudhu je project e ekhon invest kora jay
+    final mins = _projects
+        .where((p) => p['acceptingInvestment'] == true)
+        .map((p) => _num(p['minInvestmentBdt']))
+        .where((v) => v > 0)
+        .toList();
+    if (mins.isEmpty) return 0;
+    return mins.reduce(math.min);
   }
 
+  // ═════════════════════════════════════════════════════════
+  // BUILD
+  // ═════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder(
+    return ValueListenableBuilder<String>(
       valueListenable: LanguageService.currentLanguage,
-      builder: (context, _, __) {
-        final featured = _projects
-            .where((p) => const ['FUNDRAISING', 'FUNDED', 'ACTIVE']
-            .contains(_str(p, ['status'])))
-            .take(6)
-            .toList();
-
-        return Scaffold(
-          backgroundColor: _C.ivory,
-          appBar: _buildAppBar(),
-          body: RefreshIndicator(
-            color: _C.emerald,
-            onRefresh: _load,
-            child: SingleChildScrollView(
-              controller: _scroll,
-              physics: const AlwaysScrollableScrollPhysics(),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  _HeroSection(
-                    onExplore: _goLogin,
-                    onHowItWorks: _scrollToHowItWorks,
-                  ),
-                  _AboutSection(onAction: _goLogin),
-                  _HierarchySection(
-                    groups: _groups,
-                    projectsOf: _projectsOfGroup,
-                    loading: _loading,
-                    onAction: _goLogin,
-                  ),
-                  _FeaturedProjectsSection(
-                    projects: featured,
-                    loading: _loading,
-                    onAction: _goLogin,
-                  ),
-                  KeyedSubtree(
-                    key: _howItWorksKey,
-                    child: _HowItWorksSection(onAction: _goLogin),
-                  ),
-                  _PortfolioSection(
-                    groups: _groups,
-                    loading: _loading,
-                    onAction: _goLogin,
-                  ),
-                  _SecuritySection(onAction: _goLogin),
-                  _FinalCtaSection(
-                      onAction: _goLogin,
-                      onRegister: _goRegister,
-                      totalInvestors: _totalInvestors),
-                  _Footer(onAction: _goLogin, onRegister: _goRegister),
-                ],
+      builder: (context, lang, _) {
+        return AnnotatedRegion<SystemUiOverlayStyle>(
+          // GaRho app bar er upor status bar er icon shada
+          value: SystemUiOverlayStyle.light,
+          child: Scaffold(
+            backgroundColor: _C.ivory,
+            // Curve er pichone page dekha jay
+            extendBody: true,
+            appBar: _buildAppBar(),
+            body: _loading
+                ? const Center(
+              child: SizedBox(
+                width: 28,
+                height: 28,
+                child: CircularProgressIndicator(color: _C.emerald, strokeWidth: 2.4),
               ),
+            )
+                : IndexedStack(
+              index: _tab,
+              children: [
+                _buildHomeTab(),
+                _buildProjectsTab(),
+                _buildGroupsTab(),
+                _buildAccountTab(),
+              ],
             ),
+            bottomNavigationBar: _buildBottomNav(),
           ),
         );
       },
@@ -375,2611 +332,1944 @@ class _LandingPageState extends State<LandingPage> {
   }
 
   PreferredSizeWidget _buildAppBar() {
+    // Niche nav bar er sathe mil rekhe: dashboard er sobuj
     return AppBar(
-      backgroundColor: Colors.white,
-      surfaceTintColor: Colors.white,
+      backgroundColor: _C.emerald,
+      surfaceTintColor: Colors.transparent,
       elevation: 0,
-      scrolledUnderElevation: 1,
-      shadowColor: Colors.black12,
-      automaticallyImplyLeading: false,
+      scrolledUnderElevation: 0,
       titleSpacing: 16,
-      toolbarHeight: 64,
-      title: Image.asset(
-        'assets/images/logo_full.png',
-        height: 38,
-        fit: BoxFit.contain,
-        errorBuilder: (_, __, ___) => const Text(
-          'Biniyog Club',
-          style: TextStyle(
-              color: _C.emerald, fontWeight: FontWeight.w700, fontSize: 20),
+      // Website er motoi gaRho background e logo shada
+      title: ColorFiltered(
+        colorFilter: const ColorFilter.mode(Colors.white, BlendMode.srcIn),
+        child: Image.asset(
+          _A.logo,
+          height: 32,
+          errorBuilder: (_, __, ___) => Image.asset(
+            _A.logoFull,
+            height: 30,
+            errorBuilder: (_, __, ___) => const Text(
+              'Biniyog Club',
+              style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 20),
+            ),
+          ),
         ),
       ),
       actions: [
-        TextButton(
-          onPressed: _goLogin,
-          style: TextButton.styleFrom(foregroundColor: _C.emerald),
-          child: Text(_t('Login', 'লগইন'),
-              style: const TextStyle(fontWeight: FontWeight.w600)),
-        ),
         Padding(
-          padding: const EdgeInsets.only(right: 12, left: 4),
-          child: FilledButton(
-            onPressed: _goRegister,
-            style: FilledButton.styleFrom(
-              backgroundColor: _C.emerald,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(_radius)),
-            ),
-            child: Text(_t('Register', 'রেজিস্টার'),
-                style: const TextStyle(fontWeight: FontWeight.w600)),
+          padding: const EdgeInsets.only(right: 12),
+          child: _loggedIn
+              ? FilledButton.icon(
+            onPressed: _goDashboard,
+            icon: const Icon(Icons.dashboard_outlined, size: 16),
+            label: Text(_tr('Dashboard', 'ড্যাশবোর্ড')),
+            style: _smallFilled(),
+          )
+              : FilledButton(
+            onPressed: _goLogin,
+            style: _smallFilled(),
+            child: Text(_tr('Sign in', 'সাইন ইন')),
           ),
         ),
       ],
-      bottom: PreferredSize(
-        preferredSize: const Size.fromHeight(2),
-        child: Container(
-          height: 2,
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-                colors: [_C.emerald, _C.gold, _C.turquoise]),
-          ),
-        ),
-      ),
     );
   }
-}
 
-// ============================================================================
-//  SHARED WIDGETS
-// ============================================================================
-
-/// 8-point star grid (dashboard er pattern er moto).
-class _StarPatternPainter extends CustomPainter {
-  final Color color;
-  final double cell;
-  const _StarPatternPainter({required this.color, this.cell = 46});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 0.9;
-    final r = cell * 0.26;
-    final d = r * 1.4142;
-    for (double y = 0; y <= size.height + cell; y += cell) {
-      for (double x = 0; x <= size.width + cell; x += cell) {
-        final c = Offset(x, y);
-        canvas.drawRect(Rect.fromCenter(center: c, width: r * 2, height: r * 2),
-            paint);
-        final p = Path()
-          ..moveTo(c.dx, c.dy - d)
-          ..lineTo(c.dx + d, c.dy)
-          ..lineTo(c.dx, c.dy + d)
-          ..lineTo(c.dx - d, c.dy)
-          ..close();
-        canvas.drawPath(p, paint);
-        canvas.drawCircle(c, r * 0.35, paint);
-      }
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _StarPatternPainter old) =>
-      old.color != color || old.cell != cell;
-}
-
-class _Pattern extends StatelessWidget {
-  final Color color;
-  final double cell;
-  const _Pattern({required this.color, this.cell = 46});
-
-  @override
-  Widget build(BuildContext context) => Positioned.fill(
-    child: IgnorePointer(
-      child: CustomPaint(
-          painter: _StarPatternPainter(color: color, cell: cell)),
-    ),
+  ButtonStyle _smallFilled() => FilledButton.styleFrom(
+    backgroundColor: Colors.white,
+    foregroundColor: _C.emerald,
+    visualDensity: VisualDensity.compact,
+    padding: const EdgeInsets.symmetric(horizontal: 14),
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+    textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
   );
-}
 
-/// Chobi na thakle / load na hole ei placeholder.
-class _PatternPlaceholder extends StatelessWidget {
-  final IconData icon;
-  const _PatternPlaceholder({this.icon = Icons.eco_outlined});
+  Widget _buildBottomNav() {
+    // Dashboard er moto: sobuj bar, sobuj bubble, sada icon — kono sonali nei
+    Widget icon(IconData data, int i) =>
+        Icon(data, size: 25, color: _tab == i ? Colors.white : Colors.white.withAlpha(200));
+    const label = TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: Colors.white);
 
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [_C.emerald, _C.emeraldDeep, _C.nightBlue],
+    return CurvedNavigationBar(
+      index: _tab,
+      height: 70,
+      color: _C.emerald,
+      buttonBackgroundColor: _C.emeraldBright,
+      backgroundColor: Colors.transparent,
+      animationCurve: Curves.easeOutCubic,
+      animationDuration: const Duration(milliseconds: 450),
+      items: [
+        CurvedNavigationBarItem(
+          child: icon(_tab == 0 ? Icons.home_rounded : Icons.home_outlined, 0),
+          label: _tr('Home', 'হোম'),
+          labelStyle: label,
         ),
-      ),
-      child: Stack(children: [
-        _Pattern(color: _C.gold.withValues(alpha: 0.22), cell: 34),
-        Center(child: Icon(icon, color: _C.goldLight, size: 30)),
-      ]),
-    );
-  }
-}
-
-class _NetImage extends StatelessWidget {
-  final String? url;
-  final IconData placeholderIcon;
-  final int? cacheWidth;
-  const _NetImage(this.url,
-      {this.placeholderIcon = Icons.eco_outlined, this.cacheWidth = 900});
-
-  @override
-  Widget build(BuildContext context) {
-    if (url == null) return _PatternPlaceholder(icon: placeholderIcon);
-    return Image.network(
-      url!,
-      fit: BoxFit.cover,
-      cacheWidth: cacheWidth,
-      frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
-        if (wasSynchronouslyLoaded) return child;
-        return AnimatedSwitcher(
-          duration: const Duration(milliseconds: 400),
-          child: frame != null
-              ? child
-              : Container(
-                  color: _C.emeraldDeep,
-                  child: const Center(
-                    child: SizedBox(
-                      width: 24,
-                      height: 24,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: _C.goldLight,
-                      ),
-                    ),
-                  ),
-                ),
-        );
+        CurvedNavigationBarItem(
+          child: icon(Icons.trending_up_rounded, 1),
+          label: _tr('Projects', 'প্রজেক্ট'),
+          labelStyle: label,
+        ),
+        CurvedNavigationBarItem(
+          child: icon(_tab == 2 ? Icons.apartment_rounded : Icons.apartment_outlined, 2),
+          label: _tr('Groups', 'গ্রুপ'),
+          labelStyle: label,
+        ),
+        CurvedNavigationBarItem(
+          child: icon(_tab == 3 ? Icons.person_rounded : Icons.person_outline_rounded, 3),
+          label: _tr('Account', 'অ্যাকাউন্ট'),
+          labelStyle: label,
+        ),
+      ],
+      onTap: (i) {
+        // Home e thakle abar Home chaple upore niye jay
+        if (i == _tab && i == 0 && _homeScroll.hasClients) {
+          _homeScroll.animateTo(0, duration: const Duration(milliseconds: 400), curve: Curves.easeOut);
+        }
+        if (i != _tab) setState(() => _tab = i);
       },
-      errorBuilder: (_, __, ___) => _PatternPlaceholder(icon: placeholderIcon),
     );
   }
-}
 
-/// Section er background: plain → tinted → … → dark (website er rhythm).
-class _Section extends StatelessWidget {
-  final Widget child;
-  final Color color;
-  final bool pattern;
-  const _Section(
-      {required this.child, this.color = _C.ivory, this.pattern = false});
+  // ═════════════════════════════════════════════════════════
+  // HOME TAB — website er section gulo, ek-i kroma
+  // ═════════════════════════════════════════════════════════
+  Widget _buildHomeTab() {
+    final showEvent = DateTime.now().toUtc().isBefore(_eventEndsAt);
+    final featured = _projects.take(6).toList();
 
-  @override
-  Widget build(BuildContext context) {
+    return RefreshIndicator(
+      onRefresh: _load,
+      color: _C.emerald,
+      child: ListView(
+        controller: _homeScroll,
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: EdgeInsets.zero,
+        children: [
+          if (_failed) _offlineBar(),
+          if (showEvent) _eventBanner(),
+          _hero(),
+          _ecosystemBand(),
+          _section(child: _about()),
+          _section(tinted: true, child: _featuredProjects(featured)),
+          _section(key: _howKey, child: _howItWorks()),
+          if (_groups.isNotEmpty) _section(tinted: true, child: _groupsPreview()),
+          _section(child: _transparency()),
+          _section(tinted: true, child: _governance()),
+          if (_updates.isNotEmpty) _section(child: _latestUpdates()),
+          _section(tinted: _updates.isNotEmpty ? false : true, child: _faq()),
+          _finalCta(),
+          _footer(),
+        ],
+      ),
+    );
+  }
+
+  Widget _section({Key? key, bool tinted = false, required Widget child}) {
     return Container(
-      color: color,
-      child: Stack(children: [
-        if (pattern) _Pattern(color: _C.gold.withValues(alpha: 0.07), cell: 54),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 52, 16, 52),
-          child: child,
-        ),
-      ]),
+      key: key,
+      color: tinted ? _C.tint : _C.ivory,
+      padding: const EdgeInsets.fromLTRB(16, 28, 16, 28),
+      child: child,
     );
   }
-}
 
-/// Website er SectionHeading: eyebrow — light title + semibold highlight — description.
-class _SectionHeading extends StatelessWidget {
-  final String eyebrow;
-  final String title;
-  final String? highlight;
-  final String? description;
-  final bool center;
-  final bool dark;
-  const _SectionHeading({
-    required this.eyebrow,
-    required this.title,
-    this.highlight,
-    this.description,
-    this.center = false,
-    this.dark = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final eyebrowColor = dark ? _C.goldLight : _C.goldDeep;
-    final lineW = Container(
-        width: 22, height: 1, color: eyebrowColor.withValues(alpha: 0.7));
-    return Column(
-      crossAxisAlignment:
-      center ? CrossAxisAlignment.center : CrossAxisAlignment.start,
-      children: [
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            lineW,
-            const SizedBox(width: 8),
-            Flexible(
-              child: Text(
-                eyebrow.toUpperCase(),
-                style: TextStyle(
-                  color: eyebrowColor,
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 2,
-                ),
-              ),
-            ),
-            if (center) ...[const SizedBox(width: 8), lineW],
-          ],
-        ),
-        const SizedBox(height: 14),
-        Text.rich(
-          TextSpan(children: [
-            TextSpan(
-              text: title,
-              style: TextStyle(
-                fontWeight: FontWeight.w300,
-                color: dark ? Colors.white : _C.ink,
-              ),
-            ),
-            if (highlight != null) ...[
-              const TextSpan(text: ' '),
-              TextSpan(
-                text: highlight,
-                style: TextStyle(
-                  fontWeight: FontWeight.w700,
-                  color: dark ? _C.goldLight : _C.emerald,
-                ),
-              ),
-            ],
-          ]),
-          textAlign: center ? TextAlign.center : TextAlign.start,
-          style: const TextStyle(fontSize: 28, height: 1.2, letterSpacing: -0.4),
-        ),
-        if (description != null) ...[
-          const SizedBox(height: 14),
-          Text(
-            description!,
-            textAlign: center ? TextAlign.center : TextAlign.start,
-            style: TextStyle(
-              fontSize: 15,
-              height: 1.55,
-              color: dark ? const Color(0xFFC9D3CE) : _C.muted,
-            ),
-          ),
-        ],
-      ],
-    );
-  }
-}
-
-enum _BtnStyle { primary, outline, ghostDark, gold }
-
-class _Btn extends StatelessWidget {
-  final String label;
-  final VoidCallback onTap;
-  final _BtnStyle style;
-  final IconData? icon;
-  const _Btn(this.label,
-      {required this.onTap, this.style = _BtnStyle.primary, this.icon});
-
-  @override
-  Widget build(BuildContext context) {
-    late Color bg, fg;
-    Color? border;
-    switch (style) {
-      case _BtnStyle.primary:
-        bg = _C.emerald;
-        fg = Colors.white;
-        break;
-      case _BtnStyle.outline:
-        bg = Colors.white;
-        fg = _C.emerald;
-        border = _C.line;
-        break;
-      case _BtnStyle.ghostDark:
-        bg = Colors.white.withValues(alpha: 0.08);
-        fg = Colors.white;
-        border = Colors.white.withValues(alpha: 0.25);
-        break;
-      case _BtnStyle.gold:
-        bg = _C.gold;
-        fg = Colors.white;
-        break;
-    }
-    final btn = Material(
-      color: bg,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(_radius),
-        side: border == null ? BorderSide.none : BorderSide(color: border),
-      ),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(_radius),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Flexible(
-                child: Text(label,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                        color: fg,
-                        fontSize: 14.5,
-                        fontWeight: FontWeight.w600)),
-              ),
-              if (icon != null) ...[
-                const SizedBox(width: 8),
-                Icon(icon, color: fg, size: 18),
-              ],
-            ],
-          ),
-        ),
-      ),
-    );
-    return SizedBox(width: double.infinity, child: btn);
-  }
-}
-
-class _Pill extends StatelessWidget {
-  final String text;
-  final Color fg;
-  final Color bg;
-  final Color? border;
-  final IconData? icon;
-  final bool dot;
-  const _Pill(this.text,
-      {required this.fg,
-        required this.bg,
-        this.border,
-        this.icon,
-        this.dot = false});
-
-  @override
-  Widget build(BuildContext context) {
+  Widget _offlineBar() {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(2),
-        border: border == null ? null : Border.all(color: border!),
-      ),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        if (dot) ...[
-          Container(
-              width: 6,
-              height: 6,
-              decoration: BoxDecoration(color: fg, shape: BoxShape.circle)),
-          const SizedBox(width: 5),
-        ],
-        if (icon != null) ...[
-          Icon(icon, size: 12, color: fg),
-          const SizedBox(width: 4),
-        ],
-        Flexible(
-          child: Text(text,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                  color: fg,
-                  fontSize: 10.5,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0.3)),
-        ),
-      ]),
-    );
-  }
-}
-
-class _Card extends StatelessWidget {
-  final Widget child;
-  final VoidCallback? onTap;
-  const _Card({required this.child, this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: Colors.white,
-      clipBehavior: Clip.antiAlias,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(_radius),
-        side: const BorderSide(color: _C.line),
-      ),
-      child: InkWell(onTap: onTap, child: child),
-    );
-  }
-}
-
-class _LoadingBox extends StatelessWidget {
-  const _LoadingBox();
-  @override
-  Widget build(BuildContext context) => const Padding(
-    padding: EdgeInsets.symmetric(vertical: 40),
-    child: Center(
-      child: SizedBox(
-        width: 26,
-        height: 26,
-        child: CircularProgressIndicator(strokeWidth: 2.4, color: _C.emerald),
-      ),
-    ),
-  );
-}
-
-class _EmptyBox extends StatelessWidget {
-  final String text;
-  const _EmptyBox(this.text);
-  @override
-  Widget build(BuildContext context) => Container(
-    width: double.infinity,
-    padding: const EdgeInsets.symmetric(vertical: 36, horizontal: 20),
-    decoration: BoxDecoration(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(_radius),
-      border: Border.all(color: _C.line),
-    ),
-    child: Text(text,
-        textAlign: TextAlign.center,
-        style: const TextStyle(color: _C.muted, fontSize: 13.5)),
-  );
-}
-
-// ============================================================================
-//  01 HERO
-// ============================================================================
-class _HeroSection extends StatelessWidget {
-  final VoidCallback onExplore;
-  final VoidCallback onHowItWorks;
-  const _HeroSection({required this.onExplore, required this.onHowItWorks});
-
-  @override
-  Widget build(BuildContext context) {
-    final h = (MediaQuery.of(context).size.height * 0.5).clamp(300.0, 480.0).toDouble();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        SizedBox(
-          height: h,
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              const _HeroVideo(),
-              // Button gulo porishkar dekhate niche halka gradient
-              const DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    stops: [0.55, 1],
-                    colors: [Colors.transparent, Color(0x99000000)],
-                  ),
-                ),
-              ),
-              Positioned(
-                left: 16,
-                right: 16,
-                bottom: 16,
-                child: Row(children: [
-                  Expanded(
-                    child: _Btn(_t('Explore Opportunities', 'সুযোগগুলো দেখুন'),
-                        onTap: onExplore, icon: Icons.arrow_forward),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: _Btn(_t('How It Works', 'কীভাবে কাজ করে'),
-                        onTap: onHowItWorks, style: _BtnStyle.outline),
-                  ),
-                ]),
-              ),
-            ],
-          ),
-        ),
-        Container(
-          color: Colors.white,
-          padding: const EdgeInsets.fromLTRB(20, 34, 20, 34),
-          child: Text.rich(
-            TextSpan(children: [
-              TextSpan(
-                  text: _t('Your Gateway to ', 'আপনার প্রবেশদ্বার — '),
-                  style: const TextStyle(fontWeight: FontWeight.w300)),
-              TextSpan(
-                text: _t('Real Business Opportunities',
-                    'বাস্তব ব্যবসায়িক সুযোগে'),
-                style: const TextStyle(
-                    fontWeight: FontWeight.w700, color: _C.emerald),
-              ),
-            ]),
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-                fontSize: 28, height: 1.25, color: _C.ink, letterSpacing: -0.4),
-          ),
-        ),
-        Container(height: 1, color: _C.line),
-      ],
-    );
-  }
-}
-
-/// Website er brand video ("logo with money.mp4") — loop, mute.
-/// Load na hole / internet na thakle pattern + logo dekhay.
-class _HeroVideo extends StatefulWidget {
-  const _HeroVideo();
-  @override
-  State<_HeroVideo> createState() => _HeroVideoState();
-}
-
-class _HeroVideoState extends State<_HeroVideo> {
-  VideoPlayerController? _ctrl;
-  bool _ready = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _init();
-  }
-
-  Future<void> _init() async {
-    final c = VideoPlayerController.networkUrl(
-      Uri.parse(_asset('/logo with money.mp4')),
-      videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
-    );
-    _ctrl = c;
-    try {
-      await c.initialize().timeout(const Duration(seconds: 45));
-      await c.setVolume(0);
-      await c.setLooping(true);
-      await c.play();
-      if (mounted) setState(() => _ready = true);
-    } catch (e) {
-      debugPrint("Hero video load_error on physical device: $e");
-    }
-  }
-
-  @override
-  void dispose() {
-    _ctrl?.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final c = _ctrl;
-    return Stack(fit: StackFit.expand, children: [
-      // Poster (video load howar age / fail korle)
-      Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [_C.emerald, _C.emeraldDeep, _C.nightBlue],
-          ),
-        ),
-        child: Stack(children: [
-          _Pattern(color: _C.gold.withValues(alpha: 0.18)),
-          Center(
-            child: Padding(
-              padding: const EdgeInsets.only(bottom: 60),
-              child: Image.asset(
-                'assets/images/logo_icon.png',
-                height: 96,
-                errorBuilder: (_, __, ___) => const Icon(Icons.mosque_outlined,
-                    color: _C.goldLight, size: 64),
-              ),
-            ),
-          ),
-        ]),
-      ),
-      AnimatedOpacity(
-        opacity: _ready && c != null ? 1.0 : 0.0,
-        duration: const Duration(milliseconds: 800),
-        child: c != null
-            ? FittedBox(
-                fit: BoxFit.cover,
-                clipBehavior: Clip.hardEdge,
-                child: SizedBox(
-                  width: c.value.size.width,
-                  height: c.value.size.height,
-                  child: VideoPlayer(c),
-                ),
-              )
-            : const SizedBox.shrink(),
-      ),
-    ]);
-  }
-}
-
-// ============================================================================
-//  02 ABOUT
-// ============================================================================
-class _AboutSection extends StatelessWidget {
-  final VoidCallback onAction;
-  const _AboutSection({required this.onAction});
-
-  @override
-  Widget build(BuildContext context) {
-    final pillars = [
-      (
-      _t('Secure Platform', 'নিরাপদ প্ল্যাটফর্ম'),
-      _t(
-          'Rigorous due diligence, multi-tier audits, and segregated escrow management for all allocations.',
-          'কঠোর যাচাই-বাছাই, বহুস্তরের অডিট এবং প্রতিটি বিনিয়োগের জন্য আলাদা এসক্রো ব্যবস্থাপনা।'),
-      '/icons/secure-platform.jpg',
-      ),
-      (
-      _t('Transparent Process', 'স্বচ্ছ প্রক্রিয়া'),
-      _t(
-          'Full milestone transparency, audited yield formulas, and zero hidden deductions.',
-          'প্রতিটি ধাপে পূর্ণ স্বচ্ছতা, অডিটকৃত মুনাফার হিসাব এবং কোনো লুকানো কর্তন নেই।'),
-      '/icons/transparent-process.jpg',
-      ),
-      (
-      _t('Modern Technology', 'আধুনিক প্রযুক্তি'),
-      _t(
-          'Double-entry cryptographic ledger architecture ensuring balance immutability and instant reconciliation.',
-          'ডাবল-এন্ট্রি লেজার ব্যবস্থা, যাতে হিসাব অপরিবর্তনীয় থাকে এবং তাৎক্ষণিক মিলানো যায়।'),
-      '/icons/modern-technology.jpg',
-      ),
-      (
-      _t('User-Focused Experience', 'ব্যবহারকারী-কেন্দ্রিক অভিজ্ঞতা'),
-      _t(
-          'Seamless NID onboarding, real-time dashboard analytics, and direct payouts to bank or MFS accounts.',
-          'সহজ NID দিয়ে যুক্ত হওয়া, রিয়েল-টাইম ড্যাশবোর্ড এবং সরাসরি ব্যাংক বা মোবাইল ব্যাংকিংয়ে মুনাফা।'),
-      '/icons/user-experience.jpg',
-      ),
-    ];
-
-    return _Section(
-      color: _C.ivory,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+      color: _C.dangerSoft,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: Row(
         children: [
-          // ── Due diligence image card ──
-          ClipRRect(
-            borderRadius: BorderRadius.circular(_radius),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                SizedBox(
-                  height: 230,
-                  child: Stack(fit: StackFit.expand, children: [
-                    _NetImage(_asset('/images/about-due-diligence.jpg'),
-                        placeholderIcon: Icons.fact_check_outlined),
-                    const DecoratedBox(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.bottomCenter,
-                          end: Alignment.topCenter,
-                          colors: [Color(0xF006140F), Color(0x6606140F), Colors.transparent],
-                        ),
-                      ),
-                    ),
-                    Positioned(
-                      top: 14,
-                      left: 14,
-                      child: _Pill(
-                        _t('On-Site Due Diligence Team', 'সরেজমিন যাচাই টিম'),
-                        fg: Colors.white,
-                        bg: Colors.black.withValues(alpha: 0.55),
-                        border: Colors.white24,
-                        icon: Icons.verified_user_outlined,
-                      ),
-                    ),
-                    Positioned(
-                      left: 14,
-                      right: 14,
-                      bottom: 14,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(_t('DHAKA HEADQUARTERS', 'ঢাকা প্রধান কার্যালয়'),
-                              style: const TextStyle(
-                                  color: _C.goldLight,
-                                  fontSize: 10.5,
-                                  fontWeight: FontWeight.w700,
-                                  letterSpacing: 1.4)),
-                          const SizedBox(height: 3),
-                          Text(
-                              _t('Physical Site & Financial Audits',
-                                  'সরেজমিন পরিদর্শন ও আর্থিক অডিট'),
-                              style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w600)),
-                        ],
-                      ),
-                    ),
-                  ]),
-                ),
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: const BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [_C.emeraldDeep, _C.night, _C.nightBlue],
-                    ),
-                  ),
-                  child: Column(children: [
-                    Row(children: [
-                      Expanded(
-                        child: _DarkFact(
-                          label: _t('GOVERNANCE', 'পরিচালনা'),
-                          value: _t('Bangladesh Law', 'বাংলাদেশের আইন'),
-                          note: _t('Contract Act 1872', 'চুক্তি আইন ১৮৭২'),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: _DarkFact(
-                          label: _t('LEDGER AUDIT', 'লেজার অডিট'),
-                          value: _t('Double-Entry', 'ডাবল-এন্ট্রি'),
-                          note: _t('Zero Tampering', 'পরিবর্তন অসম্ভব'),
-                        ),
-                      ),
-                    ]),
-                    const SizedBox(height: 10),
-                    _DarkCheckBar(
-                      text: _t('Multi-tier physical checks on every asset',
-                          'প্রতিটি সম্পদে বহুস্তরের সরেজমিন যাচাই'),
-                      trailing: _t('Verified', 'যাচাইকৃত'),
-                    ),
-                  ]),
-                ),
-              ],
-            ),
+          const Icon(Icons.wifi_off_rounded, size: 17, color: _C.danger),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(_tr('Could not load live data. Pull down to retry.', 'তথ্য লোড হয়নি। নিচে টেনে আবার চেষ্টা করুন।'),
+                style: const TextStyle(fontSize: 13.5, color: _C.danger, fontWeight: FontWeight.w600)),
           ),
-          const SizedBox(height: 36),
-          _SectionHeading(
-            eyebrow: _t('About Biniyog Club', 'বিনিয়োগ ক্লাব সম্পর্কে'),
-            title: _t('Discover the Power of', 'আবিষ্কার করুন'),
-            highlight: _t('Collective Opportunities', 'সম্মিলিত সুযোগের শক্তি'),
-            description: _t(
-                'Biniyog Club was established with a clear mandate: to bridge the gap between conscientious co-investors and high-potential, vetted commercial opportunities in Bangladesh.',
-                'বিনিয়োগ ক্লাব প্রতিষ্ঠিত হয়েছে একটি স্পষ্ট লক্ষ্যে — সচেতন সহ-বিনিয়োগকারীদের সাথে বাংলাদেশের সম্ভাবনাময়, যাচাইকৃত ব্যবসায়িক সুযোগের সেতুবন্ধন তৈরি করা।'),
-          ),
-          const SizedBox(height: 12),
-          Text(
-            _t(
-                'By combining institutional-grade financial analysis, direct legal enforceability, and an immutable double-entry ledger, we give everyday investors and institutions access to structured wealth creation previously reserved for private equity firms.',
-                'প্রাতিষ্ঠানিক মানের আর্থিক বিশ্লেষণ, সরাসরি আইনি সুরক্ষা এবং অপরিবর্তনীয় ডাবল-এন্ট্রি লেজার একসাথে করে আমরা সাধারণ বিনিয়োগকারী ও প্রতিষ্ঠানকে এমন সুসংগঠিত সম্পদ গড়ার সুযোগ দিই, যা আগে শুধু প্রাইভেট ইকুইটি প্রতিষ্ঠানের জন্য ছিল।'),
-            style: const TextStyle(fontSize: 14.5, height: 1.6, color: _C.muted),
-          ),
-          const SizedBox(height: 24),
-          for (final p in pillars) ...[
-            _Card(
-              child: Padding(
-                padding: const EdgeInsets.all(14),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Container(
-                      width: 46,
-                      height: 46,
-                      decoration: BoxDecoration(
-                        border: Border.all(color: _C.gold.withValues(alpha: 0.4)),
-                        borderRadius: BorderRadius.circular(_radius),
-                      ),
-                      clipBehavior: Clip.antiAlias,
-                      child: _NetImage(_asset(p.$3),
-                          cacheWidth: 140,
-                          placeholderIcon: Icons.star_border_rounded),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(p.$1,
-                              style: const TextStyle(
-                                  fontSize: 14.5,
-                                  fontWeight: FontWeight.w600,
-                                  color: _C.ink)),
-                          const SizedBox(height: 4),
-                          Text(p.$2,
-                              style: const TextStyle(
-                                  fontSize: 12.5, height: 1.5, color: _C.muted)),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 10),
-          ],
-          const SizedBox(height: 14),
-          _Btn(_t('Our Methodology & Team', 'আমাদের পদ্ধতি ও টিম'),
-              onTap: onAction, icon: Icons.chevron_right),
-          const SizedBox(height: 10),
-          _Btn(_t('How The Platform Works', 'প্ল্যাটফর্ম কীভাবে কাজ করে'),
-              onTap: onAction, style: _BtnStyle.outline),
+          TextButton(onPressed: _load, child: Text(_tr('Retry', 'আবার'))),
         ],
       ),
     );
   }
-}
 
-class _DarkFact extends StatelessWidget {
-  final String label, value, note;
-  const _DarkFact(
-      {required this.label, required this.value, required this.note});
-
-  @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.all(12),
-    decoration: BoxDecoration(
-      color: Colors.white.withValues(alpha: 0.05),
-      border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
-      borderRadius: BorderRadius.circular(2),
-    ),
-    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Text(label,
-          style: const TextStyle(
-              color: Color(0xFF9AA7A1),
-              fontSize: 10,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 0.8)),
-      const SizedBox(height: 3),
-      Text(value,
-          style: const TextStyle(
-              color: Colors.white,
-              fontSize: 14,
-              fontWeight: FontWeight.w700)),
-      const SizedBox(height: 3),
-      Text(note,
-          style: const TextStyle(color: _C.goldLight, fontSize: 10.5)),
-    ]),
-  );
-}
-
-class _DarkCheckBar extends StatelessWidget {
-  final String text, trailing;
-  const _DarkCheckBar({required this.text, required this.trailing});
-
-  @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.all(12),
-    decoration: BoxDecoration(
-      color: _C.emerald.withValues(alpha: 0.45),
-      border: Border.all(color: _C.gold.withValues(alpha: 0.35)),
-      borderRadius: BorderRadius.circular(2),
-    ),
-    child: Row(children: [
-      const Icon(Icons.check_circle_outline, color: _C.goldLight, size: 18),
-      const SizedBox(width: 8),
-      Expanded(
-        child: Text(text,
-            style: const TextStyle(
-                color: Color(0xFFE2E8E5), fontSize: 12, height: 1.4)),
-      ),
-      const SizedBox(width: 8),
-      Text(trailing,
-          style: const TextStyle(
-              color: _C.goldLight,
-              fontSize: 12,
-              fontWeight: FontWeight.w700)),
-    ]),
-  );
-}
-
-// ============================================================================
-//  03 BUSINESS SEGMENTS (hierarchy)
-// ============================================================================
-
-class _GroupVisual {
-  final String cover;
-  final String sectorEn, sectorBn;
-  final String code;
-  final IconData icon;
-  const _GroupVisual(
-      this.cover, this.sectorEn, this.sectorBn, this.code, this.icon);
-}
-
-// Website er GROUP_VISUAL_MAP (hierarchy section)
-const Map<String, _GroupVisual> _hierarchyVisual = {
-  'MARINERS': _GroupVisual('/2.png', 'Maritime & Supply Chain',
-      'সামুদ্রিক ও সাপ্লাই চেইন', 'GRP-01', Icons.account_balance_outlined),
-  'MOHS': _GroupVisual('/3.png', 'Real Estate & Commercial Holdings',
-      'রিয়েল এস্টেট ও বাণিজ্যিক সম্পদ', 'GRP-02', Icons.apartment_outlined),
-  'MARINOZZ': _GroupVisual('/4.png', 'Hospitality & Agro Enterprise',
-      'আতিথেয়তা ও কৃষি উদ্যোগ', 'GRP-03', Icons.auto_awesome_outlined),
-  'CV': _GroupVisual('/images/investor-community.jpg',
-      'Community & Impact Ventures', 'কমিউনিটি ও ইমপ্যাক্ট উদ্যোগ', 'GRP-04',
-      Icons.groups_outlined),
-  'VA': _GroupVisual('/images/about-due-diligence.jpg',
-      'Strategic Cross-Sector Alliances', 'কৌশলগত বহুখাত জোট', 'GRP-05',
-      Icons.work_outline),
-};
-
-class _HierarchySection extends StatefulWidget {
-  final List<Map> groups;
-  final List<Map> Function(Map group) projectsOf;
-  final bool loading;
-  final VoidCallback onAction;
-  const _HierarchySection({
-    required this.groups,
-    required this.projectsOf,
-    required this.loading,
-    required this.onAction,
-  });
-
-  @override
-  State<_HierarchySection> createState() => _HierarchySectionState();
-}
-
-class _HierarchySectionState extends State<_HierarchySection> {
-  String _filter = 'ALL'; // ALL | ACTIVE | UPCOMING
-
-  // Website er STATIC_GROUPS — ekhono DB te nei, "Incubating" dekhay.
-  List<Map<String, dynamic>> get _staticGroups => [
-    {
-      'id': 'cv',
-      'slug': null,
-      'name': _t('Community Ventures', 'কমিউনিটি ভেঞ্চারস'),
-      'tagline': _t('Community-driven co-investment initiatives',
-          'কমিউনিটি-ভিত্তিক সহ-বিনিয়োগ উদ্যোগ'),
-    },
-    {
-      'id': 'va',
-      'slug': null,
-      'name': _t('Venture Alliances', 'ভেঞ্চার অ্যালায়েন্স'),
-      'tagline': _t('Strategic cross-sector consortium partnerships',
-          'কৌশলগত বহুখাতের অংশীদারিত্ব'),
-    },
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    final live = widget.groups;
-    final statics = _staticGroups;
-    final all = <Map>[...live, ...statics];
-    final shown = _filter == 'ACTIVE'
-        ? live
-        : _filter == 'UPCOMING'
-        ? statics
-        : all;
-
-    return _Section(
-      color: _C.goldSoft,
-      pattern: true,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+  // ─── Event banner ─────────────────────────────────────────
+  Widget _eventBanner() {
+    return Container(
+      color: _C.noticeSoft,
+      padding: const EdgeInsets.fromLTRB(16, 10, 12, 10),
+      child: Row(
         children: [
-          _SectionHeading(
-            center: true,
-            eyebrow: _t('Business segments', 'ব্যবসায়িক খাত'),
-            title: _t('One Platform.', 'একটি প্ল্যাটফর্ম।'),
-            highlight: _t('Six Business Segments.', 'ছয়টি ব্যবসায়িক খাত।'),
-          ),
-          const SizedBox(height: 28),
-          // ── Master hub card ──
           Container(
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(_radius),
-              border: Border.all(color: _C.emerald.withValues(alpha: 0.3)),
-              boxShadow: [
-                BoxShadow(
-                    color: _C.emerald.withValues(alpha: 0.08),
-                    blurRadius: 24,
-                    offset: const Offset(0, 8)),
-              ],
-            ),
-            clipBehavior: Clip.antiAlias,
-            child: Column(children: [
-              Container(
-                height: 3,
-                decoration: const BoxDecoration(
-                    gradient: LinearGradient(
-                        colors: [_C.emerald, _C.gold, _C.turquoise])),
-              ),
-              Padding(
-                padding: const EdgeInsets.all(16),
-                child: Row(children: [
-                  Container(
-                    width: 48,
-                    height: 48,
-                    color: _C.emerald,
-                    padding: const EdgeInsets.all(10),
-                    child: Image.asset(
-                      'assets/images/logo_icon.png',
-                      color: Colors.white,
-                      errorBuilder: (_, __, ___) => const Icon(
-                          Icons.account_balance,
-                          color: Colors.white,
-                          size: 24),
-                    ),
-                  ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(_t('Biniyog Club', 'বিনিয়োগ ক্লাব'),
-                            style: const TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w700,
-                                color: _C.ink)),
-                        const SizedBox(height: 2),
-                        Text(
-                            _t('Central investment platform',
-                                'কেন্দ্রীয় বিনিয়োগ প্ল্যাটফর্ম'),
-                            style: const TextStyle(
-                                fontSize: 12.5, color: _C.muted)),
-                      ],
-                    ),
-                  ),
-                  _Pill(_t('Live', 'লাইভ'),
-                      fg: const Color(0xFF1F8A5B),
-                      bg: _C.emeraldSoft,
-                      dot: true),
-                ]),
-              ),
-            ]),
-          ),
-          // ── Stem connector ──
-          Center(
-            child: Column(children: [
-              Container(width: 2, height: 22, color: _C.emerald.withValues(alpha: 0.6)),
-              Container(
-                width: 22,
-                height: 22,
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  shape: BoxShape.circle,
-                  border: Border.all(color: _C.emerald.withValues(alpha: 0.4)),
-                ),
-                alignment: Alignment.center,
-                child: Container(
-                    width: 8,
-                    height: 8,
-                    decoration: const BoxDecoration(
-                        color: _C.gold, shape: BoxShape.circle)),
-              ),
-              Container(width: 2, height: 18, color: _C.gold.withValues(alpha: 0.5)),
-            ]),
-          ),
-          const SizedBox(height: 10),
-          Text(_t('TIER-2 CORPORATE HOLDINGS', 'টিয়ার-২ কর্পোরেট হোল্ডিংস'),
-              style: const TextStyle(
-                  color: _C.goldDeep,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 1.2)),
-          const SizedBox(height: 4),
-          Text(_t('Institutional Business Groups', 'প্রাতিষ্ঠানিক ব্যবসায়িক গ্রুপ'),
-              style: const TextStyle(
-                  fontSize: 19, fontWeight: FontWeight.w700, color: _C.ink)),
-          const SizedBox(height: 14),
-          // ── Filter tabs ──
-          Container(
-            padding: const EdgeInsets.all(4),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              border: Border.all(color: _C.line),
-              borderRadius: BorderRadius.circular(_radius),
-            ),
-            child: Row(children: [
-              _tab('ALL', '${_t('All', 'সব')} (${all.length})'),
-              _tab('ACTIVE', '${_t('Active', 'সক্রিয়')} (${live.length})'),
-              _tab('UPCOMING',
-                  '${_t('Incubating', 'প্রস্তুতিতে')} (${statics.length})'),
-            ]),
-          ),
-          const SizedBox(height: 18),
-          if (widget.loading && live.isEmpty && _filter != 'UPCOMING')
-            const _LoadingBox(),
-          for (int i = 0; i < shown.length; i++) ...[
-            _SegmentGroupCard(
-              group: shown[i],
-              projects:
-              shown[i]['slug'] == null ? const [] : widget.projectsOf(shown[i]),
-              onAction: widget.onAction,
-            ),
-            const SizedBox(height: 16),
-          ],
-          const SizedBox(height: 10),
-          // ── Bottom CTA hub ──
-          _Card(
-            child: Padding(
-              padding: const EdgeInsets.all(18),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(
-                      _t('Ready to co-invest in verified commercial projects?',
-                          'যাচাইকৃত ব্যবসায়িক প্রকল্পে সহ-বিনিয়োগ করতে প্রস্তুত?'),
-                      style: const TextStyle(
-                          fontSize: 17,
-                          fontWeight: FontWeight.w700,
-                          color: _C.ink,
-                          height: 1.3)),
-                  const SizedBox(height: 6),
-                  Text(
-                      _t(
-                          'Choose an individual project or co-invest directly at the parent holding group level to gain diversified profit allocations.',
-                          'একটি নির্দিষ্ট প্রকল্প বেছে নিন, অথবা সরাসরি মূল গ্রুপ পর্যায়ে সহ-বিনিয়োগ করে বৈচিত্র্যময় মুনাফা পান।'),
-                      style: const TextStyle(
-                          fontSize: 13, height: 1.5, color: _C.muted)),
-                  const SizedBox(height: 14),
-                  Row(children: [
-                    Expanded(
-                      child: _Btn(_t('Browse Projects', 'প্রকল্প দেখুন'),
-                          onTap: widget.onAction, style: _BtnStyle.outline),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: _Btn(_t('Explore All Groups', 'সব গ্রুপ দেখুন'),
-                          onTap: widget.onAction),
-                    ),
-                  ]),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _tab(String key, String label) {
-    final on = _filter == key;
-    return Expanded(
-      child: GestureDetector(
-        onTap: () => setState(() => _filter = key),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
-          padding: const EdgeInsets.symmetric(vertical: 9),
-          color: on ? _C.emerald : Colors.transparent,
-          alignment: Alignment.center,
-          child: Text(label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: on ? Colors.white : _C.muted)),
-        ),
-      ),
-    );
-  }
-}
-
-class _SegmentGroupCard extends StatelessWidget {
-  final Map group;
-  final List<Map> projects;
-  final VoidCallback onAction;
-  const _SegmentGroupCard(
-      {required this.group, required this.projects, required this.onAction});
-
-  @override
-  Widget build(BuildContext context) {
-    final slug = group['slug']?.toString();
-    final isLive = slug != null && slug.isNotEmpty;
-    final key = (slug ?? group['id']?.toString() ?? '').toUpperCase();
-    final visual = _hierarchyVisual[key];
-    final name = _str(group, ['name']);
-    final cover = _imageUrl(_pick(group, ['coverUrl', 'coverImageUrl'])) ??
-        (visual != null ? _asset(visual.cover) : null);
-    final logo = _imageUrl(_pick(group, ['logoUrl']));
-    final tagline = _str(group, ['tagline', 'description']);
-
-    return _Card(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // ── Cover banner ──
-          SizedBox(
-            height: 150,
-            child: Stack(fit: StackFit.expand, children: [
-              Opacity(
-                  opacity: 0.85,
-                  child: _NetImage(cover,
-                      placeholderIcon: visual?.icon ?? Icons.apartment_outlined)),
-              const DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.bottomCenter,
-                    end: Alignment.topCenter,
-                    colors: [Color(0xF006140F), Color(0x8806140F), Colors.transparent],
-                  ),
-                ),
-              ),
-              Positioned(
-                top: 12,
-                left: 12,
-                right: 12,
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    if (visual != null)
-                      _Pill(visual.code,
-                          fg: _C.goldLight,
-                          bg: Colors.black.withValues(alpha: 0.55),
-                          border: _C.gold.withValues(alpha: 0.4),
-                          dot: true)
-                    else
-                      const SizedBox.shrink(),
-                    isLive
-                        ? _Pill(_t('Active Holding', 'সক্রিয় হোল্ডিং'),
-                        fg: const Color(0xFF9FE0BF),
-                        bg: _C.emeraldDeep.withValues(alpha: 0.85),
-                        border: const Color(0x5534D399),
-                        icon: Icons.check_circle_outline)
-                        : _Pill(_t('Incubating', 'প্রস্তুতিতে'),
-                        fg: _C.goldLight,
-                        bg: const Color(0xD93A2A10),
-                        border: _C.gold.withValues(alpha: 0.4),
-                        icon: Icons.lock_outline),
-                  ],
-                ),
-              ),
-              Positioned(
-                left: 12,
-                right: 12,
-                bottom: 12,
-                child: Row(children: [
-                  Container(
-                    width: 44,
-                    height: 44,
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.95),
-                      border: Border.all(color: _C.gold.withValues(alpha: 0.4)),
-                    ),
-                    padding: const EdgeInsets.all(7),
-                    child: logo != null
-                        ? Image.network(logo,
-                        fit: BoxFit.contain,
-                        errorBuilder: (_, __, ___) => Icon(
-                            visual?.icon ?? Icons.apartment_outlined,
-                            color: _C.emerald))
-                        : Icon(visual?.icon ?? Icons.apartment_outlined,
-                        color: _C.emerald),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                            (visual == null
-                                ? _t('Commercial Holdings', 'বাণিজ্যিক হোল্ডিংস')
-                                : _t(visual.sectorEn, visual.sectorBn))
-                                .toUpperCase(),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                                color: Color(0xFFCBD5D1),
-                                fontSize: 10,
-                                fontWeight: FontWeight.w600,
-                                letterSpacing: 0.8)),
-                        const SizedBox(height: 2),
-                        Text(name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 17,
-                                fontWeight: FontWeight.w700)),
-                      ],
-                    ),
-                  ),
-                ]),
-              ),
-            ]),
-          ),
-          // ── Tagline + assets count ──
-          Container(
-            color: _C.ivory,
-            padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (tagline.isNotEmpty)
-                  Text(tagline,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                          fontSize: 12.5, height: 1.45, color: _C.muted)),
-                const SizedBox(height: 10),
-                Row(children: [
-                  const Icon(Icons.layers_outlined, size: 15, color: _C.emerald),
-                  const SizedBox(width: 5),
-                  Expanded(
-                    child: Text(
-                        _t(
-                            '${projects.length} Asset${projects.length == 1 ? '' : 's'} Hosted',
-                            '${projects.length}টি প্রকল্প'),
-                        style: const TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                            color: _C.muted)),
-                  ),
-                  if (isLive)
-                    InkWell(
-                      onTap: onAction,
-                      child: Row(children: [
-                        Text(_t('Details', 'বিস্তারিত'),
-                            style: const TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w700,
-                                color: _C.emerald)),
-                        const Icon(Icons.chevron_right,
-                            size: 16, color: _C.emerald),
-                      ]),
-                    )
-                  else
-                    Text(_t('Audit in progress', 'অডিট চলছে'),
-                        style:
-                        const TextStyle(fontSize: 11, color: _C.muted)),
-                ]),
-              ],
-            ),
-          ),
-          Container(height: 1, color: _C.line),
-          // ── Nested projects ──
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(children: [
-                  Expanded(
-                    child: Text(
-                        _t('COMMERCIAL PROJECTS', 'বাণিজ্যিক প্রকল্প'),
-                        style: const TextStyle(
-                            fontSize: 10.5,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 1,
-                            color: _C.muted)),
-                  ),
-                  if (projects.isNotEmpty)
-                    Text(_t('Live & Vetted', 'লাইভ ও যাচাইকৃত'),
-                        style: const TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w600,
-                            color: Color(0xFF1F8A5B))),
-                ]),
-                const SizedBox(height: 10),
-                if (projects.isNotEmpty)
-                  for (final p in projects) ...[
-                    _ProjectMiniCard(project: p, onTap: onAction),
-                    const SizedBox(height: 8),
-                  ]
-                else
-                  Container(
-                    padding: const EdgeInsets.all(20),
-                    decoration: BoxDecoration(
-                      border: Border.all(color: _C.line),
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                    child: Column(children: [
-                      const Icon(Icons.folder_open_outlined,
-                          color: _C.muted, size: 26),
-                      const SizedBox(height: 8),
-                      Text(
-                          _t('Upcoming Project Pipeline',
-                              'আসন্ন প্রকল্পের তালিকা'),
-                          style: const TextStyle(
-                              fontSize: 12.5,
-                              fontWeight: FontWeight.w600,
-                              color: _C.ink)),
-                      const SizedBox(height: 4),
-                      Text(
-                          _t(
-                              'Compliance and risk underwriting currently in progress for co-investment listing.',
-                              'সহ-বিনিয়োগ তালিকাভুক্তির জন্য কমপ্লায়েন্স ও ঝুঁকি যাচাই চলছে।'),
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                              fontSize: 11.5, height: 1.45, color: _C.muted)),
-                    ]),
-                  ),
-              ],
-            ),
-          ),
-          // ── Footer action ──
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-            child: isLive
-                ? _Btn(
-                _t('Explore $name Portfolio', '$name পোর্টফোলিও দেখুন'),
-                onTap: onAction,
-                style: _BtnStyle.outline,
-                icon: Icons.arrow_forward)
-                : Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(vertical: 12),
-              color: _C.ivory,
-              alignment: Alignment.center,
-              child: Text(
-                  _t('Pipeline Coming Soon', 'শীঘ্রই তালিকাভুক্ত হবে'),
-                  style: const TextStyle(
-                      fontSize: 11.5,
-                      fontWeight: FontWeight.w500,
-                      color: _C.muted)),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ProjectMiniCard extends StatelessWidget {
-  final Map project;
-  final VoidCallback onTap;
-  const _ProjectMiniCard({required this.project, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    final status = _str(project, ['status']);
-    final category = _str(project, ['category']);
-    final min = _num(project, ['minInvestmentBdt', 'minInvestment']);
-    final days = _num(project, ['durationDays']);
-    final ret = _returnLabel(project);
-    final img = _imageUrl(_pick(project, ['coverImageUrl', 'coverImage', 'cover'])) ??
-        _firstImage(project);
-
-    return _Card(
-      onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.all(10),
-        child: Row(children: [
-          SizedBox(
-            width: 66,
-            height: 66,
-            child: Stack(fit: StackFit.expand, children: [
-              _NetImage(img, cacheWidth: 200),
-              if (category.isNotEmpty)
-                Positioned(
-                  left: 3,
-                  right: 3,
-                  bottom: 3,
-                  child: Container(
-                    color: Colors.black.withValues(alpha: 0.6),
-                    padding:
-                    const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
-                    child: Text(category.replaceAll('_', ' '),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 8,
-                            fontWeight: FontWeight.w700)),
-                  ),
-                ),
-            ]),
+            width: 8,
+            height: 8,
+            decoration: const BoxDecoration(color: _C.notice, shape: BoxShape.circle),
           ),
           const SizedBox(width: 10),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(children: [
-                  Expanded(
-                    child: Text(_str(project, ['title']),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: _C.ink)),
-                  ),
-                  const Icon(Icons.north_east, size: 14, color: _C.muted),
-                ]),
-                const SizedBox(height: 5),
-                Row(children: [
-                  if (status.isNotEmpty)
-                    Flexible(
-                      child: _Pill(_statusLabel(status),
-                          fg: _statusColor(status),
-                          bg: _statusColor(status).withValues(alpha: 0.1),
-                          border: _statusColor(status).withValues(alpha: 0.3),
-                          dot: true),
-                    ),
-                  if (min > 0) ...[
-                    const SizedBox(width: 6),
-                    Text('${_t('Min', 'সর্বনিম্ন')} ${_bdt(min)}',
-                        style:
-                        const TextStyle(fontSize: 10.5, color: _C.muted)),
-                  ],
-                ]),
-                const SizedBox(height: 6),
-                Container(height: 1, color: _C.line),
-                const SizedBox(height: 5),
-                Row(children: [
-                  if (ret != null) ...[
-                    const Icon(Icons.trending_up,
-                        size: 13, color: Color(0xFF1F8A5B)),
-                    const SizedBox(width: 3),
-                    Text(ret,
-                        style: const TextStyle(
-                            fontSize: 11.5,
-                            fontWeight: FontWeight.w700,
-                            color: Color(0xFF1F8A5B))),
-                    const SizedBox(width: 3),
-                    Text(_t('p.a.', 'বার্ষিক'),
-                        style: const TextStyle(fontSize: 9.5, color: _C.muted)),
-                  ],
-                  const Spacer(),
-                  if (days > 0) ...[
-                    const Icon(Icons.schedule, size: 12, color: _C.muted),
-                    const SizedBox(width: 3),
-                    Text('${(days / 30).round()} ${_t('mo', 'মাস')}',
-                        style:
-                        const TextStyle(fontSize: 10.5, color: _C.muted)),
-                  ],
-                ]),
+                const Text(
+                  'BINIYOG CLUB Official Ceremony 2026',
+                  style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w800, color: _C.ink),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  _tr('Investment Partners’ Gathering · 2 Nov 2026, IDEB Kakrail',
+                      'ইনভেস্টমেন্ট পার্টনারস গ্যাদারিং · ২ নভেম্বর ২০২৬, আইডিইবি কাকরাইল'),
+                  style: const TextStyle(fontSize: 12.5, color: _C.muted),
+                ),
               ],
             ),
           ),
-        ]),
-      ),
-    );
-  }
-}
-
-String? _firstImage(Map p) {
-  final imgs = _pick(p, ['imageUrls', 'images']);
-  if (imgs is List && imgs.isNotEmpty) {
-    final first = imgs.first;
-    if (first is Map) return _imageUrl(_pick(first, ['url', 'src']));
-    return _imageUrl(first);
-  }
-  return null;
-}
-
-// ============================================================================
-//  04 INVESTMENT OPPORTUNITIES (featured projects)
-// ============================================================================
-class _FeaturedProjectsSection extends StatelessWidget {
-  final List<Map> projects;
-  final bool loading;
-  final VoidCallback onAction;
-  const _FeaturedProjectsSection(
-      {required this.projects, required this.loading, required this.onAction});
-
-  @override
-  Widget build(BuildContext context) {
-    return _Section(
-      color: _C.ivory,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          _SectionHeading(
-            eyebrow: _t('Investment opportunities', 'বিনিয়োগের সুযোগ'),
-            title: _t('Explore Businesses', 'যেসব ব্যবসার'),
-            highlight: _t('You Can Be Part Of', 'অংশ হতে পারেন'),
-            description: _t(
-                'Explore admin-vetted, asset-backed commercial ventures with legally binding contracts and transparent milestone distributions.',
-                'যাচাইকৃত, সম্পদ-সমর্থিত ব্যবসায়িক উদ্যোগ দেখুন — আইনি চুক্তি এবং ধাপে ধাপে স্বচ্ছ মুনাফা বণ্টনসহ।'),
-          ),
-          const SizedBox(height: 26),
-          if (loading && projects.isEmpty)
-            const _LoadingBox()
-          else if (projects.isEmpty)
-            _EmptyBox(_t('New vetted project listings are currently being audited.',
-                'নতুন যাচাইকৃত প্রকল্পগুলোর অডিট চলছে।'))
-          else
-            for (final p in projects) ...[
-              _ProjectCard(project: p, onTap: onAction),
-              const SizedBox(height: 18),
-            ],
-          const SizedBox(height: 8),
-          _Btn(_t('View All Investment Projects', 'সব বিনিয়োগ প্রকল্প দেখুন'),
-              onTap: onAction,
-              style: _BtnStyle.outline,
-              icon: Icons.chevron_right),
-        ],
-      ),
-    );
-  }
-}
-
-class _ProjectCard extends StatelessWidget {
-  final Map project;
-  final VoidCallback onTap;
-  const _ProjectCard({required this.project, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    final status = _str(project, ['status']);
-    final category = _categoryLabel(_str(project, ['category']));
-    final title = _str(project, ['title']);
-    final location = _str(project, ['location']);
-    final desc = _str(project, ['description']);
-    final goal = _num(project, ['fundingGoalBdt', 'fundingGoal', 'goal']);
-    final raised = _num(project, ['fundedAmountBdt', 'fundedAmount', 'raised']);
-    final min = _num(project, ['minInvestmentBdt', 'minInvestment']);
-    final days = _num(project, ['durationDays']);
-    final investors = _num(project, ['investorCount', 'investors', 'investorsCount']);
-    final daysLeft = _num(project, ['daysLeft']);
-    final hasDeadline = project['hasDeadline'] == true;
-    final ret = _returnLabel(project);
-    final groupName = _str(project, ['groupName']);
-    final img = _imageUrl(_pick(project, ['coverImageUrl', 'coverImage', 'cover'])) ??
-        _firstImage(project);
-    final pct = goal > 0 ? (raised / goal).clamp(0.0, 1.0).toDouble() : 0.0;
-
-    return _Card(
-      onTap: onTap,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          SizedBox(
-            height: 190,
-            child: Stack(fit: StackFit.expand, children: [
-              _NetImage(img),
-              const DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.bottomCenter,
-                    end: Alignment.center,
-                    colors: [Color(0x9906140F), Colors.transparent],
-                  ),
-                ),
-              ),
-              Positioned(
-                top: 12,
-                left: 12,
-                right: 12,
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    if (category.isNotEmpty)
-                      Flexible(
-                        child: _Pill(category,
-                            fg: _C.emerald, bg: Colors.white.withValues(alpha: 0.92)),
-                      ),
-                    if (status.isNotEmpty)
-                      _Pill(
-                        status == 'FUNDRAISING' && hasDeadline && daysLeft > 0
-                            ? _t('${daysLeft.toInt()} days left',
-                            '${daysLeft.toInt()} দিন বাকি')
-                            : _statusLabel(status),
-                        fg: Colors.white,
-                        bg: _statusColor(status),
-                        dot: true,
-                      ),
-                  ],
-                ),
-              ),
-              if (groupName.isNotEmpty)
-                Positioned(
-                  left: 12,
-                  bottom: 10,
-                  right: 12,
-                  child: Text(groupName,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                          color: _C.goldLight,
-                          fontSize: 11.5,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: 0.4)),
-                ),
-            ]),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                        fontSize: 17,
-                        fontWeight: FontWeight.w700,
-                        color: _C.ink,
-                        height: 1.3)),
-                if (location.isNotEmpty) ...[
-                  const SizedBox(height: 5),
-                  Row(children: [
-                    const Icon(Icons.place_outlined, size: 14, color: _C.muted),
-                    const SizedBox(width: 3),
-                    Expanded(
-                      child: Text(location,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                              fontSize: 12.5, color: _C.muted)),
-                    ),
-                  ]),
-                ],
-                if (desc.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  Text(desc,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                          fontSize: 13, height: 1.5, color: _C.muted)),
-                ],
-                if (goal > 0) ...[
-                  const SizedBox(height: 14),
-                  Row(children: [
-                    Text('${(pct * 100).toStringAsFixed(0)}% ${_t('funded', 'সংগৃহীত')}',
-                        style: const TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                            color: _C.emerald)),
-                    const Spacer(),
-                    Text('${_bdt(raised)} / ${_bdt(goal)}',
-                        style: const TextStyle(
-                            fontSize: 12, color: _C.muted)),
-                  ]),
-                  const SizedBox(height: 6),
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(2),
-                    child: LinearProgressIndicator(
-                      value: pct,
-                      minHeight: 6,
-                      backgroundColor: _C.emeraldSoft,
-                      valueColor: const AlwaysStoppedAnimation(_C.gold),
-                    ),
-                  ),
-                ],
-                const SizedBox(height: 14),
-                Row(children: [
-                  if (ret != null)
-                    _MetricBox(
-                        label: _t('Return', 'রিটার্ন'),
-                        value: ret,
-                        valueColor: const Color(0xFF1F8A5B)),
-                  if (days > 0)
-                    _MetricBox(
-                        label: _t('Duration', 'মেয়াদ'),
-                        value: '${(days / 30).round()} ${_t('mo', 'মাস')}'),
-                  if (investors > 0)
-                    _MetricBox(
-                        label: _t('Investors', 'বিনিয়োগকারী'),
-                        value: investors.toInt().toString()),
-                ]),
-                if (min > 0) ...[
-                  const SizedBox(height: 12),
-                  Container(height: 1, color: _C.line),
-                  const SizedBox(height: 10),
-                  Row(children: [
-                    Text(_t('Minimum investment', 'সর্বনিম্ন বিনিয়োগ'),
-                        style:
-                        const TextStyle(fontSize: 12, color: _C.muted)),
-                    const Spacer(),
-                    Text(_bdt(min),
-                        style: const TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w700,
-                            color: _C.ink)),
-                    const SizedBox(width: 4),
-                    const Icon(Icons.chevron_right, size: 18, color: _C.emerald),
-                  ]),
-                ],
-              ],
+          const SizedBox(width: 8),
+          FilledButton(
+            onPressed: () => _openWeb('VIP Pass', _vipPassUrl),
+            style: FilledButton.styleFrom(
+              backgroundColor: _C.emerald,
+              foregroundColor: Colors.white,
+              visualDensity: VisualDensity.compact,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800),
             ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _MetricBox extends StatelessWidget {
-  final String label, value;
-  final Color valueColor;
-  const _MetricBox(
-      {required this.label, required this.value, this.valueColor = _C.ink});
-
-  @override
-  Widget build(BuildContext context) => Expanded(
-    child: Container(
-      margin: const EdgeInsets.symmetric(horizontal: 3),
-      padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 6),
-      decoration: BoxDecoration(
-        color: _C.ivory,
-        border: Border.all(color: _C.line),
-        borderRadius: BorderRadius.circular(2),
-      ),
-      child: Column(children: [
-        Text(label.toUpperCase(),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-                fontSize: 9.5,
-                fontWeight: FontWeight.w600,
-                letterSpacing: 0.6,
-                color: _C.muted)),
-        const SizedBox(height: 3),
-        Text(value,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-                fontSize: 13.5,
-                fontWeight: FontWeight.w700,
-                color: valueColor)),
-      ]),
-    ),
-  );
-}
-
-// ============================================================================
-//  05 HOW IT WORKS
-// ============================================================================
-class _HowItWorksSection extends StatelessWidget {
-  final VoidCallback onAction;
-  const _HowItWorksSection({required this.onAction});
-
-  @override
-  Widget build(BuildContext context) {
-    final steps = [
-      (
-      '01',
-      _t('Create Your Account', 'অ্যাকাউন্ট খুলুন'),
-      _t('Register in under 2 minutes. Instant digital identity checks with NID/Passport verification.',
-          '২ মিনিটেরও কম সময়ে রেজিস্টার করুন। NID/পাসপোর্ট দিয়ে তাৎক্ষণিক ডিজিটাল পরিচয় যাচাই।'),
-      '/images/digital-kyc-verify.jpg',
-      _t('Fast Onboarding', 'দ্রুত যুক্ত হওয়া'),
-      ),
-      (
-      '02',
-      _t('Explore Vetted Portfolios', 'যাচাইকৃত পোর্টফোলিও দেখুন'),
-      _t('Compare reviewed agricultural and commercial ventures with audited returns and transparent disclosures.',
-          'অডিটকৃত রিটার্ন ও স্বচ্ছ তথ্যসহ যাচাইকৃত কৃষি ও বাণিজ্যিক উদ্যোগ তুলনা করুন।'),
-      '/images/smart-agro-farm.jpg',
-      _t('Vetted Portfolios', 'যাচাইকৃত পোর্টফোলিও'),
-      ),
-      (
-      '03',
-      _t('Direct Legal Contract', 'সরাসরি আইনি চুক্তি'),
-      _t('Fund seamlessly via Bank or MFS. Every investment is bound by an enforceable digital deed.',
-          'ব্যাংক বা মোবাইল ব্যাংকিংয়ে সহজে টাকা দিন। প্রতিটি বিনিয়োগ কার্যকর ডিজিটাল দলিলে সুরক্ষিত।'),
-      '/images/contract-security.jpg',
-      _t('Legally Protected', 'আইনিভাবে সুরক্ষিত'),
-      ),
-      (
-      '04',
-      _t('Receive Return Payouts', 'মুনাফা গ্রহণ করুন'),
-      _t('Track milestone progress in real time and receive scheduled return payouts directly to your wallet.',
-          'রিয়েল টাইমে অগ্রগতি দেখুন এবং নির্ধারিত সময়ে সরাসরি মুনাফা গ্রহণ করুন।'),
-      '/images/wallet-returns-payout.jpg',
-      _t('Automated Returns', 'স্বয়ংক্রিয় রিটার্ন'),
-      ),
-    ];
-
-    return _Section(
-      color: _C.emeraldSoft,
-      pattern: true,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          _SectionHeading(
-            center: true,
-            eyebrow: _t('Four simple steps', 'চারটি সহজ ধাপ'),
-            title: _t('Your Investment Journey,', 'আপনার বিনিয়োগ যাত্রা,'),
-            highlight: _t('Simplified', 'সহজ করে'),
-            description: _t(
-                'From registration to scheduled profit payouts directly into your bank or mobile wallet.',
-                'রেজিস্ট্রেশন থেকে শুরু করে সরাসরি ব্যাংক বা মোবাইল ওয়ালেটে নির্ধারিত মুনাফা পর্যন্ত।'),
-          ),
-          const SizedBox(height: 28),
-          for (int i = 0; i < steps.length; i++) ...[
-            _Card(
-              child: Padding(
-                padding: const EdgeInsets.all(14),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    SizedBox(
-                      height: 150,
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(2),
-                        child: Stack(fit: StackFit.expand, children: [
-                          _NetImage(_asset(steps[i].$4)),
-                          const DecoratedBox(
-                            decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                begin: Alignment.bottomCenter,
-                                end: Alignment.topCenter,
-                                colors: [Color(0xB306140F), Colors.transparent],
-                              ),
-                            ),
-                          ),
-                          Positioned(
-                            top: 10,
-                            right: 10,
-                            child: _Pill('STEP ${steps[i].$1}',
-                                fg: Colors.white,
-                                bg: Colors.black.withValues(alpha: 0.6),
-                                border: Colors.white24),
-                          ),
-                          Positioned(
-                            left: 10,
-                            bottom: 10,
-                            child: _Pill(steps[i].$5.toUpperCase(),
-                                fg: _C.goldLight,
-                                bg: _C.emeraldDeep.withValues(alpha: 0.85),
-                                border: _C.gold.withValues(alpha: 0.35)),
-                          ),
-                        ]),
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    Text(steps[i].$2,
-                        style: const TextStyle(
-                            fontSize: 16.5,
-                            fontWeight: FontWeight.w600,
-                            color: _C.ink)),
-                    const SizedBox(height: 6),
-                    Text(steps[i].$3,
-                        style: const TextStyle(
-                            fontSize: 13, height: 1.5, color: _C.muted)),
-                  ],
-                ),
-              ),
-            ),
-            if (i < steps.length - 1)
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 6),
-                child: Center(
-                    child: Icon(Icons.keyboard_arrow_down,
-                        color: _C.gold, size: 24)),
-              ),
-          ],
-          const SizedBox(height: 22),
-          _Btn(_t('Explore Detailed Investment Guide', 'বিস্তারিত বিনিয়োগ গাইড দেখুন'),
-              onTap: onAction,
-              style: _BtnStyle.outline,
-              icon: Icons.arrow_forward),
-        ],
-      ),
-    );
-  }
-}
-
-// ============================================================================
-//  06 OUR PORTFOLIO (business group cards)
-// ============================================================================
-
-// Website er BusinessGroupCard er cover / sector / ticker
-const Map<String, String> _portfolioCover = {
-  'MARINERS': '/4.png',
-  'MOHS': '/2.png',
-  'MARINOZZ': '/3.png',
-};
-const Map<String, List<String>> _portfolioMeta = {
-  'MARINERS': ['Maritime Logistics & Cold Chain', 'সামুদ্রিক লজিস্টিকস ও কোল্ড চেইন', 'MARINERS-GRP'],
-  'MOHS': ['Real Estate & Commercial Holdings', 'রিয়েল এস্টেট ও বাণিজ্যিক সম্পদ', 'MOHS-CORP'],
-  'MARINOZZ': ['Hospitality & Public Enterprise', 'আতিথেয়তা ও জনসেবা উদ্যোগ', 'MARINOZZ-PLC'],
-};
-
-class _PortfolioSection extends StatelessWidget {
-  final List<Map> groups;
-  final bool loading;
-  final VoidCallback onAction;
-  const _PortfolioSection(
-      {required this.groups, required this.loading, required this.onAction});
-
-  @override
-  Widget build(BuildContext context) {
-    return _Section(
-      color: _C.ivory,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          _SectionHeading(
-            eyebrow: _t('Our portfolio', 'আমাদের পোর্টফোলিও'),
-            title: _t('Explore the Businesses', 'সুযোগগুলোর পেছনের'),
-            highlight: _t('Behind the Opportunities', 'ব্যবসাগুলো দেখুন'),
-            description: _t(
-                'Partner with vetted corporate enterprises and multi-sector conglomerates driving verified economic growth across Bangladesh.',
-                'বাংলাদেশজুড়ে যাচাইকৃত অর্থনৈতিক প্রবৃদ্ধি চালিত করা কর্পোরেট প্রতিষ্ঠান ও বহুখাতের গ্রুপের অংশীদার হন।'),
-          ),
-          const SizedBox(height: 26),
-          if (loading && groups.isEmpty)
-            const _LoadingBox()
-          else if (groups.isEmpty)
-            _EmptyBox(_t('Corporate business groups will appear here.',
-                'কর্পোরেট ব্যবসায়িক গ্রুপগুলো এখানে দেখা যাবে।'))
-          else
-            for (final g in groups) ...[
-              _BusinessGroupCard(group: g, onTap: onAction),
-              const SizedBox(height: 18),
-            ],
-          const SizedBox(height: 8),
-          _Btn(_t('View All Business Groups', 'সব ব্যবসায়িক গ্রুপ দেখুন'),
-              onTap: onAction,
-              style: _BtnStyle.outline,
-              icon: Icons.chevron_right),
-        ],
-      ),
-    );
-  }
-}
-
-class _BusinessGroupCard extends StatelessWidget {
-  final Map group;
-  final VoidCallback onTap;
-  const _BusinessGroupCard({required this.group, required this.onTap});
-
-  static const _tierLabels = {
-    'INVESTOR': ['Investor', 'বিনিয়োগকারী'],
-    'SHAREHOLDER': ['Shareholder', 'শেয়ারহোল্ডার'],
-    'DIRECTORSHIP': ['Directorship', 'ডিরেক্টরশিপ'],
-    'PLOT_BOOKING': ['Plot Booking', 'প্লট বুকিং'],
-    'LAND_SHARE': ['Land Share', 'জমির শেয়ার'],
-  };
-  static const _tierColors = {
-    'INVESTOR': Color(0xFF1F8A5B),
-    'SHAREHOLDER': _C.lapis,
-    'DIRECTORSHIP': _C.goldDeep,
-    'PLOT_BOOKING': Color(0xFF6B4A8A),
-    'LAND_SHARE': _C.turquoise,
-  };
-
-  @override
-  Widget build(BuildContext context) {
-    final slug = _str(group, ['slug']).toUpperCase();
-    final name = _str(group, ['name']);
-    final desc = _str(group, ['description', 'tagline']);
-    final entities = _list(group['entities']);
-    final tiers = <Map>[for (final e in entities) ..._list(e['tiers'])];
-    final types = <String>{
-      for (final t in tiers) _str(t, ['type'])
-    }..remove('');
-
-    // Est. Return = tier gulor moddhe sobcheye beshi expected return
-    double maxRet = 0;
-    double? minEntry;
-    final durations = <double>[];
-    for (final t in tiers) {
-      final r = _pct(_num(t, ['expectedReturnPct', 'returnPct', 'expectedReturn']));
-      if (r > maxRet) maxRet = r;
-      final m = _num(t, ['minAmountBdt', 'minAmount']);
-      if (m > 0 && (minEntry == null || m < minEntry)) minEntry = m;
-      final d = _num(t, ['durationMonths']);
-      if (d > 0) durations.add(d);
-    }
-    String tenure = _t('Flexible', 'নমনীয়');
-    if (durations.isNotEmpty) {
-      durations.sort();
-      final a = durations.first.toInt(), b = durations.last.toInt();
-      tenure = a == b
-          ? '$a ${_t('Mo.', 'মাস')}'
-          : '$a–$b ${_t('Mo.', 'মাস')}';
-    }
-
-    final meta = _portfolioMeta[slug];
-    final cover = _imageUrl(_pick(group, ['coverUrl', 'coverImageUrl'])) ??
-        _asset(_portfolioCover[slug] ?? '/2.png');
-
-    return _Card(
-      onTap: onTap,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          SizedBox(
-            height: 220,
-            child: Stack(fit: StackFit.expand, children: [
-              _NetImage(cover, placeholderIcon: Icons.apartment_outlined),
-              const DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.bottomCenter,
-                    end: Alignment.topCenter,
-                    colors: [Color(0xF206140F), Color(0x8806140F), Color(0x55000000)],
-                  ),
-                ),
-              ),
-              Positioned(
-                top: 14,
-                left: 14,
-                right: 14,
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    _Pill(meta?[2] ?? '$slug-GRP',
-                        fg: Colors.white,
-                        bg: Colors.black.withValues(alpha: 0.6),
-                        border: Colors.white24,
-                        dot: true),
-                    _Pill(_t('Vetted Conglomerate', 'যাচাইকৃত গ্রুপ'),
-                        fg: Colors.white,
-                        bg: Colors.black.withValues(alpha: 0.6),
-                        border: Colors.white24,
-                        icon: Icons.verified_user_outlined),
-                  ],
-                ),
-              ),
-              Positioned(
-                left: 14,
-                right: 14,
-                bottom: 14,
-                child: Row(children: [
-                  Container(
-                    width: 44,
-                    height: 44,
-                    decoration: BoxDecoration(
-                      color: _C.night.withValues(alpha: 0.9),
-                      border: Border.all(color: Colors.white24),
-                    ),
-                    child: const Icon(Icons.trending_up, color: _C.goldLight),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                            (meta == null
-                                ? _t('Institutional Conglomerate', 'প্রাতিষ্ঠানিক গ্রুপ')
-                                : _t(meta[0], meta[1]))
-                                .toUpperCase(),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                                color: _C.goldLight,
-                                fontSize: 10,
-                                fontWeight: FontWeight.w600,
-                                letterSpacing: 1.2)),
-                        const SizedBox(height: 2),
-                        Text(name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 21,
-                                fontWeight: FontWeight.w400)),
-                      ],
-                    ),
-                  ),
-                ]),
-              ),
-            ]),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                if (desc.isNotEmpty)
-                  Text(desc,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                          fontSize: 13, height: 1.5, color: _C.muted)),
-                if (entities.isNotEmpty) ...[
-                  const SizedBox(height: 14),
-                  Row(children: [
-                    const Icon(Icons.apartment_outlined,
-                        size: 13, color: _C.emerald),
-                    const SizedBox(width: 5),
-                    Expanded(
-                      child: Text(
-                          _t('OPERATING SUBSIDIARIES', 'পরিচালিত প্রতিষ্ঠান'),
-                          style: const TextStyle(
-                              fontSize: 10.5,
-                              fontWeight: FontWeight.w600,
-                              letterSpacing: 0.8,
-                              color: _C.muted)),
-                    ),
-                    Text('${entities.length} ${_t('Units', 'টি')}',
-                        style: const TextStyle(
-                            fontSize: 11.5,
-                            fontWeight: FontWeight.w700,
-                            color: _C.ink)),
-                  ]),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 6,
-                    children: [
-                      for (final e in entities)
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 9, vertical: 5),
-                          decoration: BoxDecoration(
-                            color: _C.ivory,
-                            border: Border.all(color: _C.line),
-                            borderRadius: BorderRadius.circular(2),
-                          ),
-                          child: Text(_str(e, ['name']),
-                              style: const TextStyle(
-                                  fontSize: 11.5, color: _C.ink)),
-                        ),
-                    ],
-                  ),
-                ],
-                const SizedBox(height: 16),
-                Container(
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  decoration: BoxDecoration(
-                    color: _C.ivory,
-                    border: Border.all(color: _C.line),
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                  child: IntrinsicHeight(
-                    child: Row(children: [
-                      _kpi(_t('EST. RETURN', 'আনুমানিক রিটার্ন'),
-                          maxRet > 0 ? '${_pctText(maxRet)}%' : '—',
-                          const Color(0xFF1F8A5B)),
-                      const VerticalDivider(width: 1, color: _C.line),
-                      _kpi(_t('MIN. ENTRY', 'সর্বনিম্ন'),
-                          minEntry != null ? _bdt(minEntry) : '—', _C.ink),
-                      const VerticalDivider(width: 1, color: _C.line),
-                      _kpi(_t('TENURE', 'মেয়াদ'), tenure, _C.ink),
-                    ]),
-                  ),
-                ),
-                if (types.isNotEmpty) ...[
-                  const SizedBox(height: 16),
-                  Text(
-                      _t('AVAILABLE ALLOCATION TIERS (${tiers.length} options)',
-                          'উপলব্ধ বিনিয়োগ স্তর (${tiers.length}টি)'),
-                      style: const TextStyle(
-                          fontSize: 10.5,
-                          fontWeight: FontWeight.w600,
-                          letterSpacing: 0.6,
-                          color: _C.muted)),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 6,
-                    children: [
-                      for (final type in types)
-                        _Pill(
-                          _tierLabels[type] != null
-                              ? _t(_tierLabels[type]![0], _tierLabels[type]![1])
-                              : _categoryLabel(type),
-                          fg: _tierColors[type] ?? _C.muted,
-                          bg: (_tierColors[type] ?? _C.muted).withValues(alpha: 0.08),
-                          border:
-                          (_tierColors[type] ?? _C.muted).withValues(alpha: 0.3),
-                        ),
-                    ],
-                  ),
-                ],
-                const SizedBox(height: 16),
-                Container(height: 1, color: _C.line),
-                const SizedBox(height: 14),
-                Row(children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(_t('Explore Group Portfolio', 'গ্রুপ পোর্টফোলিও দেখুন'),
-                            style: const TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600,
-                                color: _C.ink)),
-                        const SizedBox(height: 2),
-                        Text(
-                            _t('Direct institutional contracts',
-                                'সরাসরি প্রাতিষ্ঠানিক চুক্তি'),
-                            style: const TextStyle(
-                                fontSize: 11.5, color: _C.muted)),
-                      ],
-                    ),
-                  ),
-                  Container(
-                    width: 38,
-                    height: 38,
-                    color: _C.emerald,
-                    child: const Icon(Icons.arrow_forward,
-                        color: Colors.white, size: 18),
-                  ),
-                ]),
-              ],
-            ),
+            child: Text(_tr('VIP Pass', 'ভিআইপি পাস')),
           ),
         ],
       ),
     );
   }
 
-  Widget _kpi(String label, String value, Color color) => Expanded(
-    child: Column(children: [
-      Text(label,
-          textAlign: TextAlign.center,
-          style: const TextStyle(
-              fontSize: 9.5,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 0.6,
-              color: _C.muted)),
-      const SizedBox(height: 4),
-      Text(value,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-              fontSize: 15.5, fontWeight: FontWeight.w700, color: color)),
-    ]),
-  );
-}
-
-// ============================================================================
-//  07 TRANSPARENCY / SECURITY (dark)
-// ============================================================================
-class _SecuritySection extends StatelessWidget {
-  final VoidCallback onAction;
-  const _SecuritySection({required this.onAction});
-
-  @override
-  Widget build(BuildContext context) {
-    final pillars = [
-      (
-      Icons.lock_outline,
-      _t('Double-Entry Ledger Immutability', 'ডাবল-এন্ট্রি লেজারের অপরিবর্তনীয়তা'),
-      _t('Every transaction is recorded with mathematical debit-credit balance checks, preventing unilateral modifications or phantom balances.',
-          'প্রতিটি লেনদেন ডেবিট-ক্রেডিট মিলিয়ে রেকর্ড হয়, তাই একতরফা পরিবর্তন বা ভুয়া ব্যালান্স সম্ভব নয়।'),
-      ),
-      (
-      Icons.task_outlined,
-      _t('Legally Binding Digital Agreements', 'আইনত বাধ্যতামূলক ডিজিটাল চুক্তি'),
-      _t('Every allocation generates a timestamped digital contract executed under the Contract Act of Bangladesh, establishing direct legal rights.',
-          'প্রতিটি বিনিয়োগে বাংলাদেশের চুক্তি আইনের অধীনে সময়সহ ডিজিটাল চুক্তি তৈরি হয়, যা সরাসরি আইনি অধিকার দেয়।'),
-      ),
-      (
-      Icons.shield_outlined,
-      _t('Escrow Segregation Principle', 'এসক্রো পৃথকীকরণ নীতি'),
-      _t("Capital contributed by co-investors is segregated by project and held strictly separated from Biniyog Club's corporate operations.",
-          'সহ-বিনিয়োগকারীদের অর্থ প্রকল্প অনুযায়ী আলাদা রাখা হয় এবং বিনিয়োগ ক্লাবের নিজস্ব কার্যক্রম থেকে সম্পূর্ণ পৃথক থাকে।'),
-      ),
-      (
-      Icons.check_circle_outline,
-      _t('Finance Specialist Multi-Check', 'ফাইন্যান্স বিশেষজ্ঞের বহু-যাচাই'),
-      _t('Incoming bank wires and mobile financial service payments are manually inspected and approved by finance officers before allocation.',
-          'ব্যাংক ও মোবাইল ব্যাংকিংয়ের প্রতিটি পেমেন্ট বরাদ্দের আগে ফাইন্যান্স অফিসার নিজে যাচাই করে অনুমোদন দেন।'),
-      ),
-      (
-      Icons.how_to_reg_outlined,
-      _t('Mandatory KYC Identity Screening', 'বাধ্যতামূলক KYC পরিচয় যাচাই'),
-      _t('All co-investors submit verified National Identity (NID) or Passport records, safeguarding the integrity of the collective ecosystem.',
-          'সকল সহ-বিনিয়োগকারী যাচাইকৃত NID বা পাসপোর্ট তথ্য দেন, যা পুরো ব্যবস্থার নিরাপত্তা রক্ষা করে।'),
-      ),
-      (
-      Icons.dns_outlined,
-      _t('Data Confidentiality & Privacy', 'তথ্যের গোপনীয়তা'),
-      _t('Sensitive identification records, bank statements, and tax data are encrypted and accessible only to authorized compliance personnel.',
-          'পরিচয়পত্র, ব্যাংক স্টেটমেন্ট ও করের তথ্য এনক্রিপ্ট করা থাকে এবং শুধু অনুমোদিত কর্মীরাই দেখতে পারেন।'),
-      ),
-    ];
-
-    final rows = [
-      (
-      _t('Ledger Immutability Guarantee', 'লেজার অপরিবর্তনীয়তার নিশ্চয়তা'),
-      _t('Every deposit and payout is audited via double-entry accounting',
-          'প্রতিটি জমা ও পরিশোধ ডাবল-এন্ট্রি হিসাবে অডিট হয়'),
-      '100%',
-      ),
-      (
-      _t('Contract Act 1872 Alignment', 'চুক্তি আইন ১৮৭২ অনুযায়ী'),
-      _t('Legally recognized deeds enforceable in Bangladeshi courts',
-          'বাংলাদেশের আদালতে কার্যকর স্বীকৃত দলিল'),
-      _t('Legal', 'আইনি'),
-      ),
-      (
-      _t('Segregated Escrow Allocation', 'পৃথক এসক্রো বরাদ্দ'),
-      _t('Project capital isolated from operational accounts',
-          'প্রকল্পের অর্থ পরিচালন হিসাব থেকে আলাদা'),
-      _t('Isolated', 'পৃথক'),
-      ),
-    ];
-
+  // ─── 01 Hero ──────────────────────────────────────────────
+  Widget _hero() {
+    final minEntry = _minEntry;
     return Container(
       decoration: const BoxDecoration(
         gradient: LinearGradient(
+          colors: [_C.emeraldBright, _C.emerald],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [_C.emeraldDeep, _C.night, Color(0xFF071A22)],
         ),
       ),
-      child: Stack(children: [
-        _Pattern(color: _C.gold.withValues(alpha: 0.06), cell: 56),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 52, 16, 52),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              _SectionHeading(
-                dark: true,
-                eyebrow: _t('Transparency', 'স্বচ্ছতা'),
-                title: _t('Clarity, Accountability', 'স্পষ্টতা, জবাবদিহিতা'),
-                highlight: _t('& Informed Decisions', 'ও সচেতন সিদ্ধান্ত'),
-                description: _t(
-                    'Bangladeshi co-investors deserve uncompromising rigor. Biniyog Club pairs ledger precision with enforceable legal contracts to safeguard your capital at every step.',
-                    'বাংলাদেশি সহ-বিনিয়োগকারীদের প্রাপ্য আপসহীন নির্ভুলতা। বিনিয়োগ ক্লাব নির্ভুল লেজার ও কার্যকর আইনি চুক্তি দিয়ে প্রতিটি ধাপে আপনার মূলধন সুরক্ষিত রাখে।'),
-              ),
-              const SizedBox(height: 26),
-              for (final p in pillars) ...[
+      child: Stack(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 30, 20, 34),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
                 Container(
-                  padding: const EdgeInsets.all(14),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                   decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.05),
-                    border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
-                    borderRadius: BorderRadius.circular(_radius),
+                    border: Border.all(color: _C.onDark.withAlpha(110)),
+                    color: Colors.white.withAlpha(14),
                   ),
                   child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Container(
-                        width: 34,
-                        height: 34,
-                        color: _C.gold.withValues(alpha: 0.18),
-                        child: Icon(p.$1, color: _C.goldLight, size: 18),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(p.$2,
-                                style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w600,
-                                    height: 1.3)),
-                            const SizedBox(height: 5),
-                            Text(p.$3,
-                                style: const TextStyle(
-                                    color: Color(0xFFD5DDD9),
-                                    fontSize: 12.5,
-                                    height: 1.5)),
-                          ],
+                      Container(width: 6, height: 6, decoration: const BoxDecoration(color: _C.onDark, shape: BoxShape.circle)),
+                      const SizedBox(width: 8),
+                      Flexible(
+                        child: Text(
+                          _tr("BANGLADESH'S DIRECT INVESTMENT PLATFORM", 'বাংলাদেশের সরাসরি বিনিয়োগ প্ল্যাটফর্ম'),
+                          style: const TextStyle(
+                              color: _C.onDark, fontSize: 11.5, fontWeight: FontWeight.w800, letterSpacing: 1.2),
                         ),
                       ),
                     ],
+                  ),
+                ),
+                const SizedBox(height: 18),
+                Text(
+                  _tr('Your Gateway to', 'আপনার প্রবেশদ্বার'),
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.white, fontSize: 29, fontWeight: FontWeight.w300, height: 1.15),
+                ),
+                Text(
+                  _tr('Real Business Opportunities', 'বাস্তব ব্যবসার সুযোগে'),
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: _C.onDark, fontSize: 29, fontWeight: FontWeight.w800, height: 1.15),
+                ),
+                const SizedBox(height: 14),
+                Text(
+                  _tr(
+                    'Invest directly in vetted Bangladeshi businesses — from real estate to food and hospitality — with legally binding agreements, segregated capital and transparent reporting at every step.',
+                    'রিয়েল এস্টেট থেকে ফুড ও হসপিটালিটি — যাচাই করা বাংলাদেশি ব্যবসায় সরাসরি বিনিয়োগ করুন। আইনি চুক্তি, আলাদা রাখা মূলধন আর প্রতিটি ধাপে স্বচ্ছ রিপোর্ট।',
+                  ),
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.white.withAlpha(200), fontSize: 14.5, height: 1.55),
+                ),
+                if (minEntry > 0) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    _tr('Projects open from ${_bdtShort(minEntry)}', '${_bdtShort(minEntry)} থেকে প্রজেক্টে বিনিয়োগ'),
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: _C.onDark, fontSize: 13.5, fontWeight: FontWeight.w700),
+                  ),
+                ],
+                const SizedBox(height: 22),
+                // Website er motoi: dui button opore-niche, puro chowra
+                SizedBox(
+                  width: double.infinity,
+                  height: 48,
+                  child: FilledButton(
+                    onPressed: () => setState(() => _tab = 1),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: Colors.white,
+                      foregroundColor: _C.emerald,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(_tr('Explore Opportunities', 'সুযোগ দেখুন'),
+                            style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
+                        const SizedBox(width: 6),
+                        const Icon(Icons.arrow_forward_rounded, size: 17),
+                      ],
+                    ),
                   ),
                 ),
                 const SizedBox(height: 10),
-              ],
-              const SizedBox(height: 14),
-              _Btn(_t('Our Due Diligence Approach', 'আমাদের যাচাই পদ্ধতি'),
-                  onTap: onAction, style: _BtnStyle.gold, icon: Icons.chevron_right),
-              const SizedBox(height: 10),
-              _Btn(_t('Security & Compliance FAQ', 'নিরাপত্তা ও কমপ্লায়েন্স প্রশ্নোত্তর'),
-                  onTap: onAction, style: _BtnStyle.ghostDark),
-              const SizedBox(height: 30),
-              // ── Trust & Security Framework card ──
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [Color(0xFF13201B), _C.night, Color(0xFF06150F)],
+                SizedBox(
+                  width: double.infinity,
+                  height: 48,
+                  child: OutlinedButton(
+                    onPressed: _scrollToHow,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.white,
+                      side: BorderSide(color: Colors.white.withAlpha(110)),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    child: Text(_tr('How It Works', 'কীভাবে কাজ করে'),
+                        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
                   ),
-                  border: Border.all(color: _C.gold.withValues(alpha: 0.3)),
-                  borderRadius: BorderRadius.circular(_radius),
                 ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ─── 02 Operating groups band — website er motoi 3 column grid, scroll nei ─
+  Widget _ecosystemBand() {
+    final groups = _A.ecosystem;
+
+    // App er asset → na thakle website theke → tao na hole nam
+    Widget logoOf((String, String, String) g) {
+      final name = Text(
+        g.$1,
+        textAlign: TextAlign.center,
+        maxLines: 2,
+        style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w800, color: _C.emerald),
+      );
+      return _assetImage(
+        g.$2,
+        fit: BoxFit.contain,
+        fallback: Image.network(
+          'https://www.biniyogclub.com${Uri.encodeFull(g.$3)}',
+          fit: BoxFit.contain,
+          errorBuilder: (_, __, ___) => name,
+        ),
+      );
+    }
+
+    return Container(
+      width: double.infinity,
+      decoration: const BoxDecoration(
+        color: _C.ivory,
+        border: Border(bottom: BorderSide(color: _C.line)),
+      ),
+      padding: const EdgeInsets.fromLTRB(16, 24, 16, 24),
+      child: Column(
+        children: [
+          Text(
+            _tr('ONE ECOSYSTEM · ${groups.length} BUSINESS SEGMENTS · REAL OPERATING COMPANIES',
+                'এক ইকোসিস্টেম · ${groups.length}টি ব্যবসায়িক খাত · বাস্তব প্রতিষ্ঠান'),
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+                fontSize: 12.5, fontWeight: FontWeight.w800, color: _C.ink, letterSpacing: 1.6, height: 1.7),
+          ),
+          const SizedBox(height: 8),
+          InkWell(
+            onTap: () => setState(() => _tab = 2),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(_tr('Explore the groups', 'গ্রুপগুলো দেখুন'),
+                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _C.emerald)),
+                  const SizedBox(width: 4),
+                  const Icon(Icons.arrow_forward_rounded, size: 15, color: _C.emerald),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+          // 3 column, dorkar moto row — kono scroll na
+          LayoutBuilder(
+            builder: (context, c) {
+              const cols = 3;
+              // Bairer border 1px + 1px — round down jeno 3 ta ek line e dhore
+              final w = ((c.maxWidth - 2) / cols).floorToDouble();
+              final h = w * 0.88;
+              return Container(
+                decoration: BoxDecoration(color: Colors.white, border: Border.all(color: _C.line)),
+                child: Wrap(
                   children: [
-                    Row(children: [
-                      Container(
-                        width: 42,
-                        height: 42,
-                        decoration: BoxDecoration(
-                          color: _C.gold.withValues(alpha: 0.18),
-                          border: Border.all(color: _C.gold.withValues(alpha: 0.35)),
-                        ),
-                        child: const Icon(Icons.shield_outlined,
-                            color: _C.goldLight),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                                _t('Trust & Security Framework',
-                                    'আস্থা ও নিরাপত্তা কাঠামো'),
-                                style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w600)),
-                            const SizedBox(height: 3),
-                            Text(
-                                _t('Multi-Layer Audit Active',
-                                    'বহুস্তরের অডিট চালু'),
-                                style: const TextStyle(
-                                    color: _C.goldLight,
-                                    fontSize: 11.5,
-                                    fontWeight: FontWeight.w500)),
-                          ],
-                        ),
-                      ),
-                    ]),
-                    const SizedBox(height: 14),
-                    Container(height: 1, color: Colors.white12),
-                    const SizedBox(height: 14),
-                    SizedBox(
-                      height: 170,
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(2),
-                        child: Stack(fit: StackFit.expand, children: [
-                          _NetImage(_asset('/images/contract-security.jpg'),
-                              placeholderIcon: Icons.description_outlined),
-                          const DecoratedBox(
-                            decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                begin: Alignment.bottomCenter,
-                                end: Alignment.topCenter,
-                                colors: [Color(0xF006140F), Colors.transparent],
-                              ),
+                    for (int i = 0; i < groups.length; i++)
+                      InkWell(
+                        onTap: () => setState(() => _tab = 2),
+                        child: Container(
+                          width: w,
+                          height: h,
+                          padding: const EdgeInsets.all(12),
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            border: Border(
+                              right: i % cols == cols - 1
+                                  ? BorderSide.none
+                                  : const BorderSide(color: _C.line),
+                              bottom: i >= ((groups.length - 1) ~/ cols) * cols
+                                  ? BorderSide.none
+                                  : const BorderSide(color: _C.line),
                             ),
                           ),
-                          Positioned(
-                            left: 10,
-                            right: 10,
-                            bottom: 10,
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Flexible(
-                                  child: _Pill(
-                                      _t('Stamped Legal Agreement',
-                                          'স্ট্যাম্পকৃত আইনি চুক্তি'),
-                                      fg: Colors.white,
-                                      bg: Colors.black.withValues(alpha: 0.6),
-                                      border: Colors.white24),
-                                ),
-                                const SizedBox(width: 6),
-                                _Pill(_t('Contract Act 1872', 'চুক্তি আইন ১৮৭২'),
-                                    fg: _C.goldLight,
-                                    bg: _C.emeraldDeep.withValues(alpha: 0.85),
-                                    border: _C.gold.withValues(alpha: 0.35)),
-                              ],
-                            ),
-                          ),
-                        ]),
+                          child: logoOf(groups[i]),
+                        ),
+                      ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+
+  // ─── Section heading (website er SectionHeading) ─────────
+  Widget _heading({
+    required String eyebrow,
+    required String title,
+    String? highlight,
+    String? description,
+    bool dark = false,
+    bool center = false,
+  }) {
+    final align = center ? CrossAxisAlignment.center : CrossAxisAlignment.start;
+    final tAlign = center ? TextAlign.center : TextAlign.start;
+    return Column(
+      crossAxisAlignment: align,
+      children: [
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(width: 20, height: 1, color: dark ? _C.onDark : _C.emeraldBright),
+            const SizedBox(width: 8),
+            Text(
+              eyebrow.toUpperCase(),
+              style: TextStyle(
+                fontSize: 12.5,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 1.6,
+                color: dark ? _C.onDark : _C.emerald,
+              ),
+            ),
+            if (center) ...[
+              const SizedBox(width: 8),
+              Container(width: 20, height: 1, color: dark ? _C.onDark : _C.emeraldBright),
+            ],
+          ],
+        ),
+        const SizedBox(height: 10),
+        Text.rich(
+          TextSpan(
+            style: TextStyle(
+              fontSize: 22,
+              height: 1.22,
+              fontWeight: FontWeight.w300,
+              color: dark ? Colors.white : _C.ink,
+            ),
+            children: [
+              TextSpan(text: title),
+              if (highlight != null)
+                TextSpan(
+                  text: ' $highlight',
+                  style: TextStyle(fontWeight: FontWeight.w800, color: dark ? _C.onDark : _C.emerald),
+                ),
+            ],
+          ),
+          textAlign: tAlign,
+        ),
+        if (description != null) ...[
+          const SizedBox(height: 10),
+          Text(
+            description,
+            textAlign: tAlign,
+            style: TextStyle(fontSize: 13.5, height: 1.55, color: dark ? Colors.white.withAlpha(190) : _C.muted),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _linkButton(String text, VoidCallback onTap, {bool filled = false}) {
+    final child = Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Flexible(child: Text(text, overflow: TextOverflow.ellipsis)),
+        const SizedBox(width: 6),
+        const Icon(Icons.arrow_forward_rounded, size: 16),
+      ],
+    );
+    final shape = RoundedRectangleBorder(borderRadius: BorderRadius.circular(12));
+    return SizedBox(
+      width: double.infinity,
+      child: filled
+          ? FilledButton(
+        onPressed: onTap,
+        style: FilledButton.styleFrom(
+          backgroundColor: _C.emerald,
+          foregroundColor: Colors.white,
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          shape: shape,
+          textStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
+        ),
+        child: child,
+      )
+          : OutlinedButton(
+        onPressed: onTap,
+        style: OutlinedButton.styleFrom(
+          foregroundColor: _C.ink,
+          backgroundColor: Colors.white,
+          side: const BorderSide(color: _C.line),
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          shape: shape,
+          textStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
+        ),
+        child: child,
+      ),
+    );
+  }
+
+  Widget _iconBox(IconData icon, {Color bg = _C.emeraldSoft, Color fg = _C.emerald, double size = 40}) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(11)),
+      child: Icon(icon, size: size * 0.5, color: fg),
+    );
+  }
+
+  // ─── 03 About ─────────────────────────────────────────────
+  Widget _about() {
+    final pillars = <(String, IconData, String, String)>[
+      (
+      _A.iconSecure,
+      Icons.shield_outlined,
+      _tr('Secure Platform', 'নিরাপদ প্ল্যাটফর্ম'),
+      _tr('Due diligence on every project and capital kept separate for each allocation.',
+          'প্রতিটি প্রজেক্ট যাচাই করা হয় এবং প্রতিটি বিনিয়োগের টাকা আলাদা রাখা হয়।'),
+      ),
+      (
+      _A.iconTransparent,
+      Icons.visibility_outlined,
+      _tr('Transparent Process', 'স্বচ্ছ প্রক্রিয়া'),
+      _tr('Milestone updates, clear return terms and no hidden deductions.',
+          'মাইলস্টোন আপডেট, পরিষ্কার লাভের শর্ত, কোনো গোপন কর্তন নেই।'),
+      ),
+      (
+      _A.iconTech,
+      Icons.memory_rounded,
+      _tr('Modern Technology', 'আধুনিক প্রযুক্তি'),
+      _tr('A double-entry ledger keeps every taka balanced and reconciled.',
+          'ডাবল-এন্ট্রি লেজার প্রতিটি টাকার হিসাব মিলিয়ে রাখে।'),
+      ),
+      (
+      _A.iconUser,
+      Icons.person_pin_outlined,
+      _tr('User-Focused Experience', 'ব্যবহারকারী-বান্ধব'),
+      _tr('Quick sign-up, a real-time dashboard and payouts to your bank or mobile wallet.',
+          'দ্রুত রেজিস্ট্রেশন, রিয়েল-টাইম ড্যাশবোর্ড আর ব্যাংক বা মোবাইল ওয়ালেটে পেমেন্ট।'),
+      ),
+    ];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _heading(
+          eyebrow: _tr('About Biniyog Club', 'বিনিয়োগ ক্লাব সম্পর্কে'),
+          title: _tr('Discover the Power of', 'আবিষ্কার করুন'),
+          highlight: _tr('Collective Opportunities', 'সম্মিলিত সুযোগের শক্তি'),
+          description: _tr(
+            'Biniyog Club bridges conscientious co-investors and vetted, high-potential commercial opportunities in Bangladesh — with financial analysis, enforceable legal agreements and an immutable double-entry ledger.',
+            'বিনিয়োগ ক্লাব সচেতন বিনিয়োগকারীদের সাথে বাংলাদেশের যাচাই করা, সম্ভাবনাময় ব্যবসার সংযোগ ঘটায় — আর্থিক বিশ্লেষণ, আইনি চুক্তি আর অপরিবর্তনীয় ডাবল-এন্ট্রি লেজারের মাধ্যমে।',
+          ),
+        ),
+        const SizedBox(height: 20),
+        // Website er "Invest today, reap tomorrow" chobi
+        Container(
+          decoration: BoxDecoration(
+            border: Border.all(color: _C.line),
+            boxShadow: [BoxShadow(color: _C.emeraldDeep.withAlpha(25), blurRadius: 22, offset: const Offset(0, 10))],
+          ),
+          child: AspectRatio(aspectRatio: 4 / 5, child: _assetImage(_A.about)),
+        ),
+        const SizedBox(height: 20),
+        for (final p in pillars)
+          Container(
+            margin: const EdgeInsets.only(bottom: 10),
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(color: Colors.white, border: Border.all(color: _C.line)),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 46,
+                  height: 46,
+                  clipBehavior: Clip.antiAlias,
+                  decoration: BoxDecoration(
+                    color: _C.emeraldSoft,
+                    border: Border.all(color: _C.emerald.withAlpha(70)),
+                  ),
+                  child: _assetImage(p.$1, fallback: _iconBox(p.$2, size: 46)),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(p.$3, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: _C.ink)),
+                      const SizedBox(height: 3),
+                      Text(p.$4, style: const TextStyle(fontSize: 13.5, color: _C.muted, height: 1.45)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        const SizedBox(height: 8),
+        _linkButton(_tr('Our Methodology & Team', 'আমাদের পদ্ধতি ও টিম'),
+                () => _openWeb(_tr('About', 'আমাদের সম্পর্কে'), '$_site/about'),
+            filled: true),
+      ],
+    );
+  }
+
+  // ─── 05 Featured projects ─────────────────────────────────
+  Widget _featuredProjects(List<Map<String, dynamic>> featured) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _heading(
+          eyebrow: _tr('Investment opportunities', 'বিনিয়োগের সুযোগ'),
+          title: _tr('Explore Businesses', 'যে ব্যবসাগুলোর'),
+          highlight: _tr('You Can Be Part Of', 'অংশ হতে পারেন'),
+          description: _tr(
+            'Admin-vetted, asset-backed ventures with legally binding contracts and transparent distributions.',
+            'অ্যাডমিন-যাচাইকৃত, সম্পদ-সমর্থিত ব্যবসা — আইনি চুক্তি ও স্বচ্ছ লাভ বণ্টন সহ।',
+          ),
+        ),
+        const SizedBox(height: 18),
+        if (featured.isEmpty)
+          _emptyBox(_tr('New vetted project listings are being reviewed.', 'নতুন প্রজেক্ট যাচাই চলছে।'))
+        else
+          SizedBox(
+            height: 352,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              clipBehavior: Clip.none,
+              itemCount: featured.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 12),
+              itemBuilder: (_, i) => SizedBox(width: 280, child: _projectCard(featured[i])),
+            ),
+          ),
+        const SizedBox(height: 18),
+        _linkButton(_tr('View All Projects', 'সব প্রজেক্ট দেখুন'), () => setState(() => _tab = 1)),
+      ],
+    );
+  }
+
+  Widget _emptyBox(String text) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 16),
+      decoration: BoxDecoration(color: Colors.white, border: Border.all(color: _C.line)),
+      child: Text(text, textAlign: TextAlign.center, style: const TextStyle(fontSize: 14, color: _C.muted)),
+    );
+  }
+
+  (String, Color) _statusMeta(String s) {
+    switch (s) {
+      case 'FUNDRAISING':
+        return (_tr('Fundraising', 'ফান্ড সংগ্রহ চলছে'), _C.emerald);
+      case 'FUNDED':
+        return (_tr('Funded', 'ফান্ড পূর্ণ'), _C.lapis);
+      case 'ACTIVE':
+        return (_tr('Active', 'চলমান'), BC.chart4Deep);
+      case 'HARVESTING':
+        return (_tr('Harvesting', 'হারভেস্টিং'), _C.emerald);
+      case 'COMPLETED':
+        return (_tr('Completed', 'সম্পন্ন'), _C.muted);
+      default:
+        return (_categoryLabel(s), _C.muted);
+    }
+  }
+
+  Widget _projectCard(Map<String, dynamic> p, {bool full = false}) {
+    final img = p['coverImageUrl']?.toString() ?? '';
+    final closedByDeadline = p['status'] == 'FUNDRAISING' && p['deadlinePassed'] == true;
+    final (label, color) = closedByDeadline
+        ? (_tr('Funding closed', 'বিনিয়োগ বন্ধ'), _C.danger)
+        : _statusMeta(p['status']?.toString() ?? '');
+    final progress = _num(p['progress']).clamp(0.0, 1.0).toDouble();
+    final minInv = _num(p['minInvestmentBdt']);
+    final days = (p['durationDays'] as num?)?.toInt() ?? 0;
+    final months = days > 0 ? (days / 30).round() : 0;
+    final group = p['groupName']?.toString() ?? '';
+    final location = p['location']?.toString() ?? '';
+    final deadlineDays = (p['deadlineDays'] as num?)?.toInt();
+    final open = p['acceptingInvestment'] == true;
+
+    return InkWell(
+      onTap: () => _openProject(p),
+      child: Container(
+        clipBehavior: Clip.antiAlias,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border.all(color: _C.line),
+          boxShadow: [BoxShadow(color: _C.emeraldDeep.withAlpha(10), blurRadius: 14, offset: const Offset(0, 6))],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              height: full ? 170 : 140,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  img.startsWith('http')
+                      ? Image.network(img, fit: BoxFit.cover, errorBuilder: (_, __, ___) => _projectFallback(p))
+                      : _projectFallback(p),
+                  const DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [Colors.transparent, Color(0x99000000)],
                       ),
                     ),
-                    const SizedBox(height: 14),
-                    for (final r in rows) ...[
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.05),
-                          border:
-                          Border.all(color: Colors.white.withValues(alpha: 0.10)),
-                        ),
-                        child: Row(children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(r.$1,
-                                    style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 12.5,
-                                        fontWeight: FontWeight.w600)),
-                                const SizedBox(height: 3),
-                                Text(r.$2,
-                                    style: const TextStyle(
-                                        color: Color(0xFFC3CDC8),
-                                        fontSize: 11.5,
-                                        height: 1.4)),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          _Pill(r.$3,
-                              fg: _C.goldLight,
-                              bg: _C.emeraldDeep.withValues(alpha: 0.7),
-                              border: _C.gold.withValues(alpha: 0.35)),
-                        ]),
+                  ),
+                  Positioned(
+                    top: 10,
+                    left: 10,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      color: Colors.white,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(width: 6, height: 6, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+                          const SizedBox(width: 5),
+                          Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: color)),
+                        ],
                       ),
-                      const SizedBox(height: 10),
+                    ),
+                  ),
+                  if ((p['category']?.toString() ?? '').isNotEmpty)
+                    Positioned(
+                      left: 10,
+                      bottom: 8,
+                      child: Text(
+                        _categoryLabel(p['category'].toString()).toUpperCase(),
+                        style: const TextStyle(
+                            color: Colors.white, fontSize: 11.5, fontWeight: FontWeight.w800, letterSpacing: 1.1),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    p['title']?.toString() ?? '',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: _C.ink, height: 1.25),
+                  ),
+                  if (group.isNotEmpty || location.isNotEmpty) ...[
+                    const SizedBox(height: 3),
+                    Text(
+                      [group, location].where((s) => s.isNotEmpty).join(' · '),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 12.5, color: _C.muted),
+                    ),
+                  ],
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      _fact(_tr('Return', 'লাভ'), _pctRange(_num(p['returnMin']), _num(p['returnMax'])), _C.emerald),
+                      _fact(_tr('Min', 'সর্বনিম্ন'), minInv > 0 ? _bdtShort(minInv) : '—', _C.ink),
+                      _fact(_tr('Term', 'মেয়াদ'), months > 0 ? _tr('$months mo', '$months মাস') : '—', _C.ink),
                     ],
-                    const SizedBox(height: 4),
-                    _DarkCheckBar(
-                      text: _t(
-                          'Multi-stage due diligence conducted prior to every project listing',
-                          'প্রতিটি প্রকল্প তালিকাভুক্তির আগে বহুধাপের যাচাই সম্পন্ন হয়'),
-                      trailing: _t('Compliant', 'অনুবর্তী'),
+                  ),
+                  const SizedBox(height: 12),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: LinearProgressIndicator(
+                      value: progress,
+                      minHeight: 6,
+                      backgroundColor: _C.line,
+                      valueColor: const AlwaysStoppedAnimation(_C.emeraldBright),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Text(
+                        _tr('${(progress * 100).round()}% funded', '${(progress * 100).round()}% সংগৃহীত'),
+                        style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: _C.emerald),
+                      ),
+                      const Spacer(),
+                      if (open && deadlineDays != null)
+                        Text(
+                          deadlineDays > 1
+                              ? _tr('$deadlineDays days left', '$deadlineDays দিন বাকি')
+                              : deadlineDays == 1
+                              ? _tr('Closes tomorrow', 'কাল শেষ দিন')
+                              : _tr('Closes today', 'আজ শেষ দিন'),
+                          style: const TextStyle(fontSize: 12.5, color: _C.muted),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _fact(String label, String value, Color color) {
+    return Expanded(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label.toUpperCase(),
+              style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w800, color: _C.muted, letterSpacing: 0.7)),
+          const SizedBox(height: 2),
+          Text(value,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w800, color: color)),
+        ],
+      ),
+    );
+  }
+
+  /// Project er chobi na thakle website er motoi category onujayi chobi
+  Widget _projectFallback(Map<String, dynamic> p) => _assetImage(
+    _A.projectFallback(p['category']?.toString() ?? '', p['id']?.toString() ?? ''),
+  );
+
+  Widget _imagePlaceholder() {
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          colors: [_C.emeraldBright, _C.emerald],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+      ),
+      child: Center(child: Icon(Icons.image_outlined, color: Colors.white.withAlpha(120), size: 30)),
+    );
+  }
+
+  // ─── 06 How it works ──────────────────────────────────────
+  Widget _howItWorks() {
+    const stepImages = [_A.kyc, _A.agro, _A.contract, _A.wallet];
+    final steps = <(String, IconData, String, String, String)>[
+      (
+      '01',
+      Icons.person_add_alt_1_outlined,
+      _tr('Create Your Account', 'অ্যাকাউন্ট খুলুন'),
+      _tr('Register in under 2 minutes with your name, phone number and date of birth.',
+          'নাম, মোবাইল নম্বর আর জন্ম তারিখ দিয়ে ২ মিনিটেরও কম সময়ে রেজিস্টার করুন।'),
+      _tr('Fast onboarding', 'দ্রুত শুরু'),
+      ),
+      (
+      '02',
+      Icons.travel_explore_rounded,
+      _tr('Explore Vetted Portfolios', 'যাচাই করা প্রজেক্ট দেখুন'),
+      _tr('Compare reviewed projects and business group tiers with clear returns and disclosures.',
+          'পরিষ্কার লাভ ও তথ্যসহ যাচাই করা প্রজেক্ট ও বিজনেস গ্রুপ টিয়ার তুলনা করুন।'),
+      _tr('Vetted portfolios', 'যাচাইকৃত'),
+      ),
+      (
+      '03',
+      Icons.history_edu_outlined,
+      _tr('Pay & Get Your Contract', 'পেমেন্ট ও চুক্তি'),
+      _tr('Pay by bank, cash or cheque. After admin approval you receive a receipt and a numbered deed.',
+          'ব্যাংক, ক্যাশ বা চেকে টাকা দিন। অ্যাডমিন অনুমোদনের পর রসিদ ও নম্বরসহ ডিড পাবেন।'),
+      _tr('Legally protected', 'আইনি সুরক্ষা'),
+      ),
+      (
+      '04',
+      Icons.payments_outlined,
+      _tr('Receive Return Payouts', 'লাভ গ্রহণ করুন'),
+      _tr('Track progress in real time and receive scheduled returns from your dashboard.',
+          'রিয়েল-টাইমে অগ্রগতি দেখুন আর নির্ধারিত সময়ে লাভ পান।'),
+      _tr('Scheduled returns', 'নির্ধারিত লাভ'),
+      ),
+    ];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _heading(
+          eyebrow: _tr('Four simple steps', 'চারটি সহজ ধাপ'),
+          title: _tr('Your Investment Journey,', 'আপনার বিনিয়োগ যাত্রা,'),
+          highlight: _tr('Simplified', 'সহজভাবে'),
+          description: _tr('From registration to scheduled profit payouts into your bank or mobile wallet.',
+              'রেজিস্ট্রেশন থেকে ব্যাংক বা মোবাইল ওয়ালেটে লাভ পাওয়া পর্যন্ত।'),
+        ),
+        const SizedBox(height: 22),
+        for (int i = 0; i < steps.length; i++)
+          IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                SizedBox(
+                  width: 44,
+                  child: Column(
+                    children: [
+                      Container(
+                        width: 40,
+                        height: 40,
+                        alignment: Alignment.center,
+                        decoration: const BoxDecoration(
+                          gradient: LinearGradient(colors: [_C.emeraldBright, _C.emerald]),
+                          shape: BoxShape.circle,
+                        ),
+                        child: Text(steps[i].$1,
+                            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: Colors.white)),
+                      ),
+                      if (i < steps.length - 1) Expanded(child: Container(width: 2, color: _C.emeraldBright.withAlpha(90))),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Container(
+                    margin: const EdgeInsets.only(bottom: 14),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(color: Colors.white, border: Border.all(color: _C.line)),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Website er step chobi
+                        SizedBox(
+                          height: 120,
+                          width: double.infinity,
+                          child: Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              _assetImage(stepImages[i]),
+                              const DecoratedBox(
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    begin: Alignment.topCenter,
+                                    end: Alignment.bottomCenter,
+                                    colors: [Colors.transparent, Color(0xB3020617)],
+                                  ),
+                                ),
+                              ),
+                              Positioned(
+                                top: 8,
+                                right: 8,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                  color: const Color(0xCC0F172A),
+                                  child: Text('STEP ${steps[i].$1}',
+                                      style: const TextStyle(
+                                          color: Colors.white, fontSize: 12, fontWeight: FontWeight.w800)),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        Row(
+                          children: [
+                            Icon(steps[i].$2, size: 19, color: _C.emerald),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(steps[i].$3,
+                                  style: const TextStyle(fontSize: 15.5, fontWeight: FontWeight.w800, color: _C.ink)),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        Text(steps[i].$4, style: const TextStyle(fontSize: 13.5, color: _C.muted, height: 1.45)),
+                        const SizedBox(height: 10),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                          color: _C.emeraldSoft,
+                          child: Text(steps[i].$5.toUpperCase(),
+                              style: const TextStyle(
+                                  fontSize: 11, fontWeight: FontWeight.w800, color: _C.emerald, letterSpacing: 0.8)),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        const SizedBox(height: 4),
+        _linkButton(_tr('Explore Detailed Investment Guide', 'বিস্তারিত গাইড দেখুন'),
+                () => _openWeb(_tr('How it works', 'কীভাবে কাজ করে'), '$_site/how-it-works')),
+      ],
+    );
+  }
+
+  // ─── 07 Business groups preview ───────────────────────────
+  Widget _groupsPreview() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _heading(
+          eyebrow: _tr('Our portfolio', 'আমাদের পোর্টফোলিও'),
+          title: _tr('Explore the Businesses', 'সুযোগের পেছনের'),
+          highlight: _tr('Behind the Opportunities', 'ব্যবসাগুলো দেখুন'),
+          description: _tr(
+            'Partner with vetted corporate enterprises and multi-sector groups driving growth across Bangladesh.',
+            'বাংলাদেশজুড়ে প্রবৃদ্ধি আনা যাচাই করা প্রতিষ্ঠান ও বহুমুখী গ্রুপের অংশীদার হোন।',
+          ),
+        ),
+        const SizedBox(height: 18),
+        for (final g in _groups.take(3)) _groupCard(g),
+        const SizedBox(height: 4),
+        _linkButton(_tr('View All Groups', 'সব গ্রুপ দেখুন'), () => setState(() => _tab = 2)),
+      ],
+    );
+  }
+
+  int _projectsInGroup(String groupId) => _projects.where((p) => p['groupId'] == groupId).length;
+
+  Widget _groupCard(Map<String, dynamic> g) {
+    final entities = ((g['entities'] as List?) ?? []).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+    final tiers = [
+      for (final e in entities) ...((e['tiers'] as List?) ?? []).map((t) => Map<String, dynamic>.from(t as Map)),
+    ];
+    // Bank ache + unit shesh hoyni — tobei invest kora jay
+    final openTiers = tiers.where((t) {
+      final b = t['bank'];
+      final u = t['availableUnits'];
+      return b is Map && (b['accountNumber']?.toString() ?? '').isNotEmpty && !(u is num && u <= 0);
+    }).length;
+    final mins = tiers.map((t) => _num(t['minAmountBdt'])).where((v) => v > 0).toList();
+    final minAmt = mins.isEmpty ? 0.0 : mins.reduce(math.min);
+    final logo = g['logoUrl']?.toString() ?? '';
+    final localLogo = _A.groupLogo(g['slug']?.toString() ?? '');
+    final hasLogo = localLogo != null || logo.startsWith('http');
+    final tagline = (g['tagline']?.toString() ?? '').trim();
+    final desc = (g['description']?.toString() ?? '').trim();
+    final projectsCount = _projectsInGroup(g['id']?.toString() ?? '');
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(color: Colors.white, border: Border.all(color: _C.line)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Website er card er motoi: shada background e logo (3:1),
+          // logo na thakle group er cover chobi
+          hasLogo
+              ? DecoratedBox(
+            decoration: const BoxDecoration(color: Colors.white),
+            child: Container(
+              decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: _C.line))),
+              child: AspectRatio(
+                aspectRatio: 3,
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: localLogo != null
+                      ? _assetImage(localLogo, fit: BoxFit.contain, fallback: _groupTitle(g))
+                      : Image.network(logo, fit: BoxFit.contain, errorBuilder: (_, __, ___) => _groupTitle(g)),
+                ),
+              ),
+            ),
+          )
+              : SizedBox(
+            height: 150,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                _assetImage(_A.groupCover(g['slug']?.toString() ?? '')),
+                const DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [Colors.transparent, Color(0xCC00463A)], // BC.brand800 er moto
+                    ),
+                  ),
+                ),
+                Positioned(
+                  left: 14,
+                  right: 14,
+                  bottom: 12,
+                  child: Text(
+                    g['name']?.toString() ?? '',
+                    style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (hasLogo)
+                  Text(g['name']?.toString() ?? '',
+                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: _C.ink)),
+                if (tagline.isNotEmpty || desc.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    tagline.isNotEmpty ? tagline : desc,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 13.5, color: _C.muted, height: 1.4),
+                  ),
+                ],
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    if (entities.isNotEmpty)
+                      _chip(Icons.business_outlined, _tr('${entities.length} companies', '${entities.length}টি প্রতিষ্ঠান')),
+                    if (tiers.isNotEmpty) _chip(Icons.layers_outlined, _tr('${tiers.length} tiers', '${tiers.length}টি টিয়ার')),
+                    if (projectsCount > 0)
+                      _chip(Icons.workspaces_outline, _tr('$projectsCount projects', '$projectsCount প্রজেক্ট')),
+                    if (minAmt > 0) _chip(Icons.payments_outlined, _tr('From ${_bdtShort(minAmt)}', '${_bdtShort(minAmt)} থেকে')),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: openTiers > 0
+                      ? FilledButton(
+                    onPressed: () => _open(const BrowseGroupsPage()),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: _C.emerald,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                    child: Text(_tr('Explore ${g['name'] ?? ''} Tiers', '${g['name'] ?? ''} টিয়ার দেখুন'),
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.w700)),
+                  )
+                      : Container(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(color: _C.emeraldSoft, border: Border.all(color: _C.emeraldBright.withAlpha(90))),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(Icons.schedule_rounded, size: 15, color: _C.emerald),
+                        const SizedBox(width: 6),
+                        Text(_tr('Coming Soon', 'শীঘ্রই আসছে'),
+                            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: _C.emerald)),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _groupTitle(Map<String, dynamic> g) => Text(
+    g['name']?.toString() ?? '',
+    textAlign: TextAlign.center,
+    style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: _C.emerald),
+  );
+
+  Widget _chip(IconData icon, String text) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+      decoration: BoxDecoration(color: _C.ivory, border: Border.all(color: _C.line)),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: _C.emerald),
+          const SizedBox(width: 5),
+          Text(text, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: _C.ink)),
+        ],
+      ),
+    );
+  }
+
+  // ─── 08 Transparency ──────────────────────────────────────
+  Widget _transparency() {
+    final items = <(IconData, String, String)>[
+      (
+      Icons.lock_outline_rounded,
+      _tr('Double-Entry Ledger', 'ডাবল-এন্ট্রি লেজার'),
+      _tr('Every transaction is recorded with debit-credit balance checks — no phantom balances.',
+          'প্রতিটি লেনদেন ডেবিট-ক্রেডিট মিলিয়ে লেখা হয় — কোনো ভুয়া ব্যালান্স নয়।'),
+      ),
+      (
+      Icons.fact_check_outlined,
+      _tr('Legally Binding Agreements', 'আইনি চুক্তি'),
+      _tr('Every confirmed allocation is backed by a timestamped agreement under the Contract Act of Bangladesh.',
+          'প্রতিটি নিশ্চিত বিনিয়োগ বাংলাদেশের চুক্তি আইনের অধীনে তারিখসহ চুক্তি দ্বারা সমর্থিত।'),
+      ),
+      (
+      Icons.shield_outlined,
+      _tr('Segregated Capital', 'আলাদা রাখা মূলধন'),
+      _tr('Investor capital is tracked per project and kept separate from company operations.',
+          'বিনিয়োগকারীর টাকা প্রজেক্ট অনুযায়ী আলাদা রাখা হয়, কোম্পানির খরচের সাথে মেশানো হয় না।'),
+      ),
+      (
+      Icons.verified_user_outlined,
+      _tr('Finance Officer Checks', 'ফাইন্যান্স অফিসারের যাচাই'),
+      _tr('Bank, cash and cheque payments are checked and approved by finance officers before allocation.',
+          'ব্যাংক, ক্যাশ ও চেক পেমেন্ট ফাইন্যান্স অফিসার যাচাই ও অনুমোদন করেন।'),
+      ),
+      (
+      Icons.dns_outlined,
+      _tr('Data Confidentiality', 'তথ্যের গোপনীয়তা'),
+      _tr('Personal records are encrypted and only visible to authorised staff.',
+          'ব্যক্তিগত তথ্য এনক্রিপ্টেড, শুধু অনুমোদিত কর্মীরা দেখতে পারেন।'),
+      ),
+    ];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _heading(
+          eyebrow: _tr('Transparency', 'স্বচ্ছতা'),
+          title: _tr('Clarity, Accountability', 'স্পষ্টতা, জবাবদিহিতা'),
+          highlight: _tr('& Informed Decisions', 'ও সচেতন সিদ্ধান্ত'),
+          description: _tr(
+            'Biniyog Club pairs ledger precision with enforceable legal contracts to safeguard your capital at every step.',
+            'লেজারের নির্ভুলতা আর আইনি চুক্তি দিয়ে প্রতিটি ধাপে আপনার টাকা সুরক্ষিত রাখা হয়।',
+          ),
+        ),
+        const SizedBox(height: 18),
+        for (final it in items)
+          Container(
+            margin: const EdgeInsets.only(bottom: 10),
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(color: Colors.white, border: Border.all(color: _C.line)),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _iconBox(it.$1, size: 36),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(it.$2, style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w800, color: _C.ink)),
+                      const SizedBox(height: 3),
+                      Text(it.$3, style: const TextStyle(fontSize: 13.5, color: _C.muted, height: 1.45)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        const SizedBox(height: 10),
+        // Website er transparency infographic — chap dile boro kore dekha jay
+        GestureDetector(
+          onTap: () => _showImage(_A.transparency),
+          child: Container(
+            decoration: BoxDecoration(
+              border: Border.all(color: _C.line),
+              boxShadow: [BoxShadow(color: _C.emeraldDeep.withAlpha(22), blurRadius: 18, offset: const Offset(0, 8))],
+            ),
+            child: AspectRatio(aspectRatio: 1122 / 1402, child: _assetImage(_A.transparency)),
+          ),
+        ),
+        const SizedBox(height: 16),
+        _linkButton(_tr('Our Due Diligence Approach', 'আমাদের যাচাই পদ্ধতি'),
+                () => _openWeb(_tr('About', 'আমাদের সম্পর্কে'), '$_site/about'),
+            filled: true),
+      ],
+    );
+  }
+
+  /// Chobi puro screen e — pinch kore zoom
+  void _showImage(String asset) {
+    showDialog<void>(
+      context: context,
+      barrierColor: Colors.black.withAlpha(220),
+      builder: (ctx) => Stack(
+        children: [
+          Positioned.fill(
+            child: InteractiveViewer(
+              minScale: 1,
+              maxScale: 4,
+              child: Center(child: _assetImage(asset, fit: BoxFit.contain)),
+            ),
+          ),
+          Positioned(
+            top: MediaQuery.of(ctx).padding.top + 8,
+            right: 8,
+            child: IconButton(
+              onPressed: () => Navigator.pop(ctx),
+              icon: const Icon(Icons.close_rounded, color: Colors.white, size: 28),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ─── 09 Governance ────────────────────────────────────────
+  Widget _governance() {
+    final stages = <(IconData, String, String, String, List<String>)>[
+      (
+      Icons.search_rounded,
+      '01',
+      _tr('Sourcing', 'উৎস নির্বাচন'),
+      _tr('Opportunities originate inside our operating groups, where management already runs the business.',
+          'সুযোগগুলো আমাদের নিজস্ব গ্রুপ থেকে আসে, যেখানে ব্যবস্থাপনা আগে থেকেই ব্যবসা চালায়।'),
+      [_tr('Business plan & capital need', 'ব্যবসা পরিকল্পনা ও মূলধন'), _tr('Asset and location review', 'সম্পদ ও লোকেশন যাচাই')],
+      ),
+      (
+      Icons.fact_check_outlined,
+      '02',
+      _tr('Due diligence', 'যাচাই-বাছাই'),
+      _tr('Financials, ownership documents and projected cash flows are examined first.',
+          'আর্থিক হিসাব, মালিকানার কাগজ ও সম্ভাব্য আয় আগে পরীক্ষা করা হয়।'),
+      [_tr('Legal & title documents', 'আইনি ও মালিকানার কাগজ'), _tr('Return and risk assessment', 'লাভ ও ঝুঁকি মূল্যায়ন')],
+      ),
+      (
+      Icons.gavel_rounded,
+      '03',
+      _tr('Approval & listing', 'অনুমোদন ও প্রকাশ'),
+      _tr('Each project is approved internally, then published with its terms, tiers and bank details.',
+          'প্রতিটি প্রজেক্ট অনুমোদনের পর শর্ত, টিয়ার ও ব্যাংক তথ্যসহ প্রকাশ করা হয়।'),
+      [_tr('Fixed minimums & durations', 'নির্দিষ্ট সর্বনিম্ন ও মেয়াদ'), _tr('Dedicated payment accounts', 'আলাদা পেমেন্ট অ্যাকাউন্ট')],
+      ),
+      (
+      Icons.bar_chart_rounded,
+      '04',
+      _tr('Monitoring & reporting', 'পর্যবেক্ষণ ও রিপোর্ট'),
+      _tr('Funded projects publish milestone updates and investors track every taka from their dashboard.',
+          'প্রজেক্ট মাইলস্টোন আপডেট দেয়, বিনিয়োগকারী ড্যাশবোর্ডে প্রতিটি টাকা দেখেন।'),
+      [_tr('Project updates & disclosures', 'আপডেট ও তথ্য প্রকাশ'), _tr('Receipts and deed certificates', 'রসিদ ও ডিড সার্টিফিকেট')],
+      ),
+    ];
+
+    final principles = <(IconData, String, String)>[
+      (Icons.balance_rounded, _tr('Segregated capital', 'আলাদা মূলধন'),
+      _tr('Funds are tracked per project, never pooled with operating expenses.', 'টাকা প্রজেক্ট অনুযায়ী আলাদা থাকে।')),
+      (Icons.visibility_outlined, _tr('Full disclosure', 'পূর্ণ তথ্য প্রকাশ'),
+      _tr('Terms, risks and progress are visible to every investor.', 'শর্ত, ঝুঁকি ও অগ্রগতি সবাই দেখতে পান।')),
+      (Icons.account_balance_outlined, _tr('Documented ownership', 'নথিভুক্ত মালিকানা'),
+      _tr('Every confirmed investment has a receipt and a numbered deed.', 'প্রতিটি নিশ্চিত বিনিয়োগে রসিদ ও নম্বরসহ ডিড।')),
+    ];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _heading(
+          eyebrow: _tr('Governance', 'গভর্ন্যান্স'),
+          title: _tr('A disciplined', 'একটি সুশৃঙ্খল'),
+          highlight: _tr('investment lifecycle', 'বিনিয়োগ প্রক্রিয়া'),
+          description: _tr(
+            'Every opportunity follows the same four-stage process, so you can judge each one on a consistent standard.',
+            'প্রতিটি সুযোগ একই চার ধাপ পার হয়, তাই সব একই মানদণ্ডে বিচার করা যায়।',
+          ),
+        ),
+        const SizedBox(height: 18),
+        // Grid er fixed uchchotay lekha kete jeto — tai ek column e, puro lekha
+        for (final s in stages)
+          Container(
+            margin: const EdgeInsets.only(bottom: 8),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(color: Colors.white, border: Border.all(color: _C.line)),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _iconBox(s.$1, size: 34),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(s.$3,
+                                style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w800, color: _C.ink)),
+                          ),
+                          Text(s.$2,
+                              style: const TextStyle(
+                                  fontSize: 19, fontWeight: FontWeight.w300, color: _C.line)),
+                        ],
+                      ),
+                      const SizedBox(height: 3),
+                      Text(s.$4, style: const TextStyle(fontSize: 13, color: _C.muted, height: 1.45)),
+                      const SizedBox(height: 7),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: [
+                          for (final pt in s.$5)
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                              color: _C.emeraldSoft,
+                              child: Text(pt,
+                                  style: const TextStyle(
+                                      fontSize: 12, fontWeight: FontWeight.w700, color: _C.emerald)),
+                            ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        const SizedBox(height: 14),
+        for (final p in principles)
+          Container(
+            margin: const EdgeInsets.only(bottom: 8),
+            padding: const EdgeInsets.all(13),
+            decoration: BoxDecoration(color: _C.ivory, border: Border.all(color: _C.line)),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(p.$1, size: 19, color: _C.emerald),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(p.$2, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: _C.ink)),
+                      const SizedBox(height: 2),
+                      Text(p.$3, style: const TextStyle(fontSize: 13, color: _C.muted, height: 1.4)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+
+  // ─── 11 Latest updates (DB) ───────────────────────────────
+  Widget _latestUpdates() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _heading(
+          eyebrow: _tr('Latest updates', 'সর্বশেষ আপডেট'),
+          title: _tr('Live project', 'প্রজেক্টের'),
+          highlight: _tr('disclosures', 'সর্বশেষ খবর'),
+          description: _tr('Milestones, results and operational reports directly from active ventures.',
+              'চলমান প্রজেক্ট থেকে সরাসরি মাইলস্টোন ও রিপোর্ট।'),
+        ),
+        const SizedBox(height: 18),
+        for (final u in _updates)
+          InkWell(
+            onTap: (u['projectId']?.toString() ?? '').isEmpty
+                ? null
+                : () => _open(ProjectDetailPage(projectIdOrSlug: u['projectId'].toString())),
+            child: Container(
+              margin: const EdgeInsets.only(bottom: 12),
+              decoration: BoxDecoration(color: Colors.white, border: Border.all(color: _C.line)),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if ((u['coverImageUrl']?.toString() ?? '').startsWith('http'))
+                    SizedBox(
+                      height: 130,
+                      child: Image.network(u['coverImageUrl'].toString(),
+                          fit: BoxFit.cover, errorBuilder: (_, __, ___) => _imagePlaceholder()),
+                    ),
+                  Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                              color: _C.emeraldSoft,
+                              child: Text(_categoryLabel(u['type']?.toString() ?? 'GENERAL'),
+                                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: _C.emerald)),
+                            ),
+                            const Spacer(),
+                            Text(_fmtDate(u['publishedAt']?.toString() ?? ''),
+                                style: const TextStyle(fontSize: 12.5, color: _C.muted)),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Text(u['title']?.toString() ?? '',
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 15.5, fontWeight: FontWeight.w800, color: _C.ink)),
+                        const SizedBox(height: 4),
+                        Text(u['content']?.toString() ?? '',
+                            maxLines: 3,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 13.5, color: _C.muted, height: 1.45)),
+                        const SizedBox(height: 8),
+                        Text(u['projectTitle']?.toString() ?? '',
+                            style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: _C.emerald)),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  // ─── 12 FAQ ───────────────────────────────────────────────
+  Widget _faq() {
+    final minEntry = _minEntry;
+    final faqs = <(String, String)>[
+      (
+      _tr('Who can invest?', 'কারা বিনিয়োগ করতে পারবেন?'),
+      _tr(
+          'Anyone aged 18 or over, from Bangladesh or abroad. Sign up with your name, phone number, date of birth and a password. Your NID, address and nominee can be added later from your profile.',
+          '১৮ বছর বা তার বেশি বয়সী যে কেউ, দেশ বা বিদেশ থেকে। নাম, মোবাইল নম্বর, জন্ম তারিখ ও পাসওয়ার্ড দিয়ে রেজিস্টার করুন। এনআইডি, ঠিকানা ও নমিনী পরে প্রোফাইল থেকে দেওয়া যাবে।'),
+      ),
+      (
+      _tr('What is the minimum investment?', 'সর্বনিম্ন কত টাকা বিনিয়োগ করা যায়?'),
+      minEntry > 0
+          ? _tr('Each project sets its own minimum. Right now projects open from ${_bdtShort(minEntry)}.',
+          'প্রতিটি প্রজেক্টের নিজস্ব সর্বনিম্ন আছে। এখন ${_bdtShort(minEntry)} থেকে শুরু।')
+          : _tr('Each project and tier sets its own minimum, shown on its page.',
+          'প্রতিটি প্রজেক্ট ও টিয়ারের নিজস্ব সর্বনিম্ন তার পেজে দেখানো থাকে।'),
+      ),
+      (
+      _tr('How do I pay?', 'কীভাবে টাকা দেব?'),
+      _tr(
+          'By bank transfer, cash or cheque — or a mix. For bank, add the transaction number and receipt photo; for cash, choose who received it; for cheque, upload a photo of the cheque.',
+          'ব্যাংক, ক্যাশ বা চেক — বা একসাথে কয়েকটি। ব্যাংকে ট্রানজেকশন নম্বর ও রসিদের ছবি, ক্যাশে কে নিয়েছেন তা, আর চেকে চেকের ছবি দিন।'),
+      ),
+      (
+      _tr('When does my investment become active?', 'বিনিয়োগ কখন চালু হয়?'),
+      _tr(
+          'It shows as pending until a finance officer verifies your payment. Once approved it becomes active and appears on your dashboard.',
+          'ফাইন্যান্স অফিসার পেমেন্ট যাচাই না করা পর্যন্ত পেন্ডিং থাকে। অনুমোদনের পর চালু হয়ে ড্যাশবোর্ডে দেখা যায়।'),
+      ),
+      (
+      _tr('Are returns guaranteed?', 'লাভ কি নিশ্চিত?'),
+      _tr(
+          'No. Each project shows its expected return range, set by its agreement. Actual returns depend on the business’s performance.',
+          'না। প্রতিটি প্রজেক্ট চুক্তি অনুযায়ী প্রত্যাশিত লাভের হার দেখায়। আসল লাভ ব্যবসার ফলাফলের ওপর নির্ভর করে।'),
+      ),
+      (
+      _tr('What documents do I get?', 'কী কী কাগজ পাব?'),
+      _tr('A receipt number and a numbered deed certificate for every confirmed investment, available in Documents.',
+          'প্রতিটি নিশ্চিত বিনিয়োগের রসিদ নম্বর ও নম্বরসহ ডিড সার্টিফিকেট, ডকুমেন্টস-এ পাবেন।'),
+      ),
+    ];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _heading(
+          eyebrow: 'FAQ',
+          title: _tr('Everything you need to', 'যা জানা দরকার'),
+          highlight: _tr('know', 'সবকিছু'),
+          description: _tr('Clear answers on payments, returns and documents.', 'পেমেন্ট, লাভ ও কাগজপত্র নিয়ে পরিষ্কার উত্তর।'),
+        ),
+        const SizedBox(height: 16),
+        // ExpansionTile er bhitore ListTile — tai Container na, Material
+        Material(
+          color: Colors.white,
+          shape: const RoundedRectangleBorder(side: BorderSide(color: _C.line)),
+          clipBehavior: Clip.antiAlias,
+          child: Theme(
+            data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+            child: Column(
+              children: [
+                for (int i = 0; i < faqs.length; i++) ...[
+                  if (i > 0) const Divider(height: 1, color: _C.line),
+                  ExpansionTile(
+                    tilePadding: const EdgeInsets.symmetric(horizontal: 14),
+                    childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+                    iconColor: _C.emerald,
+                    collapsedIconColor: _C.muted,
+                    expandedAlignment: Alignment.centerLeft,
+                    title: Text(faqs[i].$1,
+                        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _C.ink)),
+                    children: [
+                      Text(faqs[i].$2, style: const TextStyle(fontSize: 13, color: _C.muted, height: 1.5)),
+                    ],
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(color: Colors.white, border: Border.all(color: _C.line)),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(_tr('Still have questions?', 'আরও প্রশ্ন আছে?'),
+                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: _C.ink)),
+              const SizedBox(height: 4),
+              Text(
+                _tr('Our investor relations team can help with contracts, bank transfers and deeds.',
+                    'চুক্তি, ব্যাংক ট্রান্সফার ও ডিড নিয়ে আমাদের টিম সাহায্য করবে।'),
+                style: const TextStyle(fontSize: 13.5, color: _C.muted, height: 1.45),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: () => _openWeb(_tr('Contact', 'যোগাযোগ'), '$_site/contact'),
+                      icon: const Icon(Icons.phone_in_talk_outlined, size: 16),
+                      label: Text(_tr('Talk to an advisor', 'পরামর্শ নিন'), overflow: TextOverflow.ellipsis),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: _C.emerald,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => _openWeb('FAQ', '$_site/faq'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: _C.ink,
+                        side: const BorderSide(color: _C.line),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                      child: Text(_tr('All FAQs', 'সব প্রশ্ন')),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ─── 13 Final CTA (dark) ──────────────────────────────────
+  Widget _finalCta() {
+    return Container(
+      color: _C.emerald,
+      child: Stack(
+        children: [
+          // Website er motoi: khamar er chobi halka kore, upore gaRho gradient
+          Positioned.fill(child: Opacity(opacity: 0.25, child: _assetImage(_A.agro))),
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.bottomCenter,
+                  end: Alignment.topCenter,
+                  colors: [_C.emerald, _C.emerald.withAlpha(230), _C.emeraldBright.withAlpha(205)],
+                ),
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 40, 20, 40),
+            child: Column(
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                  decoration: BoxDecoration(
+                    color: _C.emerald.withAlpha(160),
+                    border: Border.all(color: _C.onDark.withAlpha(80)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(width: 7, height: 7, decoration: const BoxDecoration(color: _C.onDark, shape: BoxShape.circle)),
+                      const SizedBox(width: 8),
+                      Flexible(
+                        child: Text(
+                          _investors > 0
+                              ? _tr('Join $_investors investors on Biniyog Club', 'বিনিয়োগ ক্লাবের $_investors জন বিনিয়োগকারীর সাথে যোগ দিন')
+                              : _tr('Now accepting investors', 'এখন বিনিয়োগকারী নেওয়া হচ্ছে'),
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: _C.onDark, fontSize: 13, fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 18),
+                Text(_tr('Join the Biniyog Club', 'যোগ দিন বিনিয়োগ ক্লাব'),
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.w300)),
+                Text(_tr('Ecosystem', 'ইকোসিস্টেমে'),
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: _C.onDark, fontSize: 30, fontWeight: FontWeight.w800)),
+                const SizedBox(height: 12),
+                Text(
+                  _tr(
+                    'Create your investor account in under 2 minutes and get direct access to admin-vetted projects, business groups and legally protected contracts.',
+                    '২ মিনিটে বিনিয়োগকারী অ্যাকাউন্ট খুলুন — যাচাই করা প্রজেক্ট, বিজনেস গ্রুপ আর আইনি সুরক্ষিত চুক্তিতে সরাসরি প্রবেশ।',
+                  ),
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.white.withAlpha(190), fontSize: 14.5, height: 1.55),
+                ),
+                const SizedBox(height: 22),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton(
+                    onPressed: _loggedIn ? _goDashboard : _goRegister,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: Colors.white,
+                      foregroundColor: _C.emerald,
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    child: Text(
+                      _loggedIn
+                          ? _tr('Go to my dashboard', 'আমার ড্যাশবোর্ডে যান')
+                          : _tr('Create Free Investor Account', 'ফ্রি অ্যাকাউন্ট খুলুন'),
+                      style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton(
+                    onPressed: () => _openWeb(_tr('Contact', 'যোগাযোগ'), '$_site/contact'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.white,
+                      side: BorderSide(color: Colors.white.withAlpha(80)),
+                      padding: const EdgeInsets.symmetric(vertical: 15),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    child: Text(_tr('Talk to Our Advisory Team', 'আমাদের টিমের সাথে কথা বলুন')),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _footer() {
+    Widget link(String t, String path) => InkWell(
+      onTap: () => _openWeb(t, '$_site$path'),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        child: Text(t, style: const TextStyle(fontSize: 13, color: _C.muted, fontWeight: FontWeight.w600)),
+      ),
+    );
+    return Container(
+      color: Colors.white,
+      // Niche curved nav bar er pichone jate lekha na lukay
+      padding: const EdgeInsets.fromLTRB(16, 18, 16, 100),
+      child: Column(
+        children: [
+          Wrap(
+            alignment: WrapAlignment.center,
+            children: [
+              link(_tr('About', 'আমাদের সম্পর্কে'), '/about'),
+              link(_tr('Terms', 'শর্তাবলী'), '/terms'),
+              link(_tr('Privacy', 'প্রাইভেসি'), '/privacy'),
+              link(_tr('Contact', 'যোগাযোগ'), '/contact'),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text('© ${DateTime.now().year} Biniyog Club · biniyogclub.com',
+              style: const TextStyle(fontSize: 12.5, color: _C.muted)),
+        ],
+      ),
+    );
+  }
+
+  // ═════════════════════════════════════════════════════════
+  // PROJECTS TAB — shob public project, filter shoho
+  // ═════════════════════════════════════════════════════════
+  Widget _buildProjectsTab() {
+    final filters = <(String, String)>[
+      ('ALL', _tr('All', 'সব')),
+      ('FUNDRAISING', _tr('Open', 'চলমান ফান্ড')),
+      ('ACTIVE', _tr('Active', 'চলমান')),
+      ('FUNDED', _tr('Funded', 'ফান্ড পূর্ণ')),
+      ('COMPLETED', _tr('Completed', 'সম্পন্ন')),
+    ];
+    // "Open" = ekhon invest kora jay (deadline periye gele ar "Open" na)
+    final list = _projectFilter == 'ALL'
+        ? _projects
+        : _projectFilter == 'FUNDRAISING'
+        ? _projects.where((p) => p['acceptingInvestment'] == true).toList()
+        : _projects.where((p) => p['status'] == _projectFilter).toList();
+
+    return RefreshIndicator(
+      onRefresh: _load,
+      color: _C.emerald,
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(16, 18, 16, 110), // niche nav bar er jayga
+        children: [
+          _heading(
+            eyebrow: _tr('Investment opportunities', 'বিনিয়োগের সুযোগ'),
+            title: _tr('All', 'সব'),
+            highlight: _tr('Projects', 'প্রজেক্ট'),
+          ),
+          const SizedBox(height: 14),
+          SizedBox(
+            height: 36,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: filters.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 8),
+              itemBuilder: (_, i) {
+                final f = filters[i];
+                final on = f.$1 == _projectFilter;
+                final count = f.$1 == 'ALL'
+                    ? _projects.length
+                    : f.$1 == 'FUNDRAISING'
+                    ? _projects.where((p) => p['acceptingInvestment'] == true).length
+                    : _projects.where((p) => p['status'] == f.$1).length;
+                return ChoiceChip(
+                  label: Text('${f.$2} ($count)'),
+                  selected: on,
+                  showCheckmark: false,
+                  onSelected: (_) => setState(() => _projectFilter = f.$1),
+                  selectedColor: _C.emerald,
+                  backgroundColor: Colors.white,
+                  side: BorderSide(color: on ? _C.emerald : _C.line),
+                  labelStyle: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700, color: on ? Colors.white : _C.ink),
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 16),
+          if (list.isEmpty)
+            _emptyBox(_projects.isEmpty
+                ? _tr('No projects are listed right now.', 'এই মুহূর্তে কোনো প্রজেক্ট নেই।')
+                : _tr('No projects in this filter.', 'এই ফিল্টারে কোনো প্রজেক্ট নেই।'))
+          else
+            for (final p in list)
+              Padding(padding: const EdgeInsets.only(bottom: 14), child: _projectCard(p, full: true)),
+        ],
+      ),
+    );
+  }
+
+  // ═════════════════════════════════════════════════════════
+  // GROUPS TAB
+  // ═════════════════════════════════════════════════════════
+  Widget _buildGroupsTab() {
+    return RefreshIndicator(
+      onRefresh: _load,
+      color: _C.emerald,
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(16, 18, 16, 110), // niche nav bar er jayga
+        children: [
+          _heading(
+            eyebrow: _tr('Our portfolio', 'আমাদের পোর্টফোলিও'),
+            title: _tr('Business', 'বিজনেস'),
+            highlight: _tr('Groups', 'গ্রুপ'),
+            description: _tr('Invest at the group level through tiers with their own terms.',
+                'নিজস্ব শর্তসহ টিয়ারের মাধ্যমে গ্রুপে বিনিয়োগ করুন।'),
+          ),
+          const SizedBox(height: 16),
+          if (_groups.isEmpty)
+            _emptyBox(_tr('Business groups will appear here.', 'বিজনেস গ্রুপ এখানে দেখা যাবে।'))
+          else
+            for (final g in _groups) _groupCard(g),
+        ],
+      ),
+    );
+  }
+
+  // ═════════════════════════════════════════════════════════
+  // ACCOUNT TAB
+  // ═════════════════════════════════════════════════════════
+  Widget _buildAccountTab() {
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 22, 16, 110),
+      children: [
+        Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              colors: [_C.emeraldBright, _C.emerald],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+          ),
+          child: Stack(
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      width: 52,
+                      height: 52,
+                      padding: const EdgeInsets.all(9),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: _C.onDark.withAlpha(150)),
+                      ),
+                      child: _assetImage(_A.logoIcon,
+                          fit: BoxFit.contain,
+                          fallback: const Icon(Icons.account_circle_outlined, color: _C.emerald, size: 30)),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      _loggedIn
+                          ? _tr('You are signed in', 'আপনি সাইন ইন করা আছেন')
+                          : _tr('Start investing today', 'আজই বিনিয়োগ শুরু করুন'),
+                      style: const TextStyle(color: Colors.white, fontSize: 21, fontWeight: FontWeight.w800),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      _loggedIn
+                          ? _tr('Open your dashboard to see your investments, payments and returns.',
+                          'বিনিয়োগ, পেমেন্ট ও লাভ দেখতে ড্যাশবোর্ড খুলুন।')
+                          : _tr('Create a free account or sign in to invest, submit payments and track returns.',
+                          'বিনিয়োগ, পেমেন্ট ও লাভ দেখতে ফ্রি অ্যাকাউন্ট খুলুন বা সাইন ইন করুন।'),
+                      style: TextStyle(color: Colors.white.withAlpha(195), fontSize: 14, height: 1.5),
                     ),
                   ],
                 ),
@@ -2987,328 +2277,76 @@ class _SecuritySection extends StatelessWidget {
             ],
           ),
         ),
-      ]),
-    );
-  }
-}
-
-// ============================================================================
-//  08 REGISTRATION / FINAL CTA (dark)
-// ============================================================================
-class _FinalCtaSection extends StatelessWidget {
-  final VoidCallback onAction;
-  final VoidCallback onRegister;
-  final int totalInvestors;
-  const _FinalCtaSection(
-      {required this.onAction, required this.onRegister, this.totalInvestors = 0});
-
-  @override
-  Widget build(BuildContext context) {
-    final assurances = [
-      (Icons.check_circle_outline, _t('Start from ৳5,000', '৳৫,০০০ থেকে শুরু')),
-      (Icons.verified_user_outlined,
-      _t('Legally Enforceable Contracts', 'আইনত কার্যকর চুক্তি')),
-      (Icons.check_circle_outline,
-      _t('Direct Bank & MFS Payouts', 'সরাসরি ব্যাংক ও মোবাইল ব্যাংকিংয়ে মুনাফা')),
-    ];
-
-    return Container(
-      color: const Color(0xFF030906),
-      child: Stack(children: [
-        Positioned.fill(
-          child: Opacity(
-            opacity: 0.25,
-            child: _NetImage(_asset('/images/smart-agro-farm.jpg')),
-          ),
-        ),
-        const Positioned.fill(
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.bottomCenter,
-                end: Alignment.topCenter,
-                colors: [Color(0xFF030906), Color(0xE6030906), Color(0xCC030906)],
-              ),
-            ),
-          ),
-        ),
-        _Pattern(color: _C.gold.withValues(alpha: 0.06), cell: 56),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(20, 56, 20, 56),
+        const SizedBox(height: 16),
+        if (_loggedIn)
+          _linkButton(_tr('Go to my dashboard', 'আমার ড্যাশবোর্ডে যান'), _goDashboard, filled: true)
+        else ...[
+          _linkButton(_tr('Create Free Investor Account', 'ফ্রি অ্যাকাউন্ট খুলুন'), _goRegister, filled: true),
+          const SizedBox(height: 10),
+          _linkButton(_tr('Sign in', 'সাইন ইন'), _goLogin),
+        ],
+        if (_loggedIn) ...[
+          const SizedBox(height: 10),
+          _linkButton(_tr('Help Center', 'হেল্প সেন্টার'), () => _open(const HelpCenterPage())),
+        ],
+        const SizedBox(height: 22),
+        Text(_tr('MORE', 'আরও'),
+            style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w800, color: _C.muted, letterSpacing: 1.4)),
+        const SizedBox(height: 8),
+        // Material (Container na) — ListTile er background ar tap er ripple
+        // nikotsho Material e aanka hoy; Container e rakhle Flutter error dey
+        Material(
+          color: Colors.white,
+          shape: const RoundedRectangleBorder(side: BorderSide(color: _C.line)),
+          clipBehavior: Clip.antiAlias,
           child: Column(
             children: [
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-                decoration: BoxDecoration(
-                  color: _C.emeraldDeep.withValues(alpha: 0.85),
-                  border: Border.all(color: _C.gold.withValues(alpha: 0.35)),
-                  borderRadius: BorderRadius.circular(2),
-                ),
-                child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  Container(
-                      width: 7,
-                      height: 7,
-                      decoration: const BoxDecoration(
-                          color: _C.goldLight, shape: BoxShape.circle)),
-                  const SizedBox(width: 8),
-                  Flexible(
-                    child: Text(
-                        totalInvestors > 0
-                            ? _t('Join ${_count(totalInvestors)} verified investors earning scheduled returns',
-                            '${_count(totalInvestors)} জন যাচাইকৃত বিনিয়োগকারীর সাথে যুক্ত হোন')
-                            : _t('Now accepting verified investors',
-                            'এখন যাচাইকৃত বিনিয়োগকারী নেওয়া হচ্ছে'),
-                        style: const TextStyle(
-                            color: _C.goldLight,
-                            fontSize: 12.5,
-                            fontWeight: FontWeight.w500)),
-                  ),
-                ]),
-              ),
-              const SizedBox(height: 22),
-              Text.rich(
-                TextSpan(children: [
-                  TextSpan(
-                      text: _t('Join the Biniyog Club\n', 'যুক্ত হোন বিনিয়োগ ক্লাব\n'),
-                      style: const TextStyle(fontWeight: FontWeight.w300)),
-                  TextSpan(
-                    text: _t('Ecosystem', 'ইকোসিস্টেমে'),
-                    style: const TextStyle(
-                        fontWeight: FontWeight.w700, color: _C.goldLight),
-                  ),
-                ]),
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 32,
-                    height: 1.2,
-                    letterSpacing: -0.4),
-              ),
-              const SizedBox(height: 18),
-              Text(
-                _t(
-                    'Create your investor account in under 2 minutes. Gain direct access to admin-vetted business groups, institutional transparency, and legally protected digital contracts.',
-                    '২ মিনিটেরও কম সময়ে বিনিয়োগকারী অ্যাকাউন্ট খুলুন। যাচাইকৃত ব্যবসায়িক গ্রুপ, প্রাতিষ্ঠানিক স্বচ্ছতা ও আইনিভাবে সুরক্ষিত ডিজিটাল চুক্তিতে সরাসরি প্রবেশাধিকার পান।'),
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                    color: Color(0xFFC9D3CE), fontSize: 15, height: 1.6),
-              ),
-              const SizedBox(height: 24),
-              Wrap(
-                alignment: WrapAlignment.center,
-                spacing: 16,
-                runSpacing: 10,
-                children: [
-                  for (final a in assurances)
-                    Row(mainAxisSize: MainAxisSize.min, children: [
-                      Icon(a.$1, size: 16, color: _C.goldLight),
-                      const SizedBox(width: 6),
-                      Text(a.$2,
-                          style: const TextStyle(
-                              color: Color(0xFFD5DDD9), fontSize: 12.5)),
-                    ]),
-                ],
-              ),
-              const SizedBox(height: 30),
-              _Btn(_t('Create Free Investor Account', 'বিনামূল্যে অ্যাকাউন্ট খুলুন'),
-                  onTap: onRegister, style: _BtnStyle.gold, icon: Icons.chevron_right),
-              const SizedBox(height: 12),
-              _Btn(_t('Talk to Our Advisory Team', 'আমাদের পরামর্শক টিমের সাথে কথা বলুন'),
-                  onTap: onAction, style: _BtnStyle.ghostDark),
+              _menuRow(Icons.info_outline_rounded, _tr('About Biniyog Club', 'বিনিয়োগ ক্লাব সম্পর্কে'), '/about'),
+              const Divider(height: 1, color: _C.line),
+              _menuRow(Icons.help_outline_rounded, _tr('How it works', 'কীভাবে কাজ করে'), '/how-it-works'),
+              const Divider(height: 1, color: _C.line),
+              _menuRow(Icons.quiz_outlined, 'FAQ', '/faq'),
+              const Divider(height: 1, color: _C.line),
+              _menuRow(Icons.support_agent_outlined, _tr('Contact us', 'যোগাযোগ'), '/contact'),
+              const Divider(height: 1, color: _C.line),
+              _menuRow(Icons.description_outlined, _tr('Terms of Service', 'শর্তাবলী'), '/terms'),
+              const Divider(height: 1, color: _C.line),
+              _menuRow(Icons.privacy_tip_outlined, _tr('Privacy Policy', 'প্রাইভেসি পলিসি'), '/privacy'),
             ],
           ),
         ),
-      ]),
+      ],
+    );
+  }
+
+  Widget _menuRow(IconData icon, String title, String path) {
+    return ListTile(
+      dense: true,
+      leading: Icon(icon, color: _C.emerald, size: 19),
+      title: Text(title, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: _C.ink)),
+      trailing: const Icon(Icons.chevron_right_rounded, color: _C.muted),
+      onTap: () => _openWeb(title, '$_site$path'),
     );
   }
 }
 
-// ============================================================================
-//  FOOTER
-// ============================================================================
-class _Footer extends StatelessWidget {
-  final VoidCallback onAction;
-  final VoidCallback onRegister;
-  const _Footer({required this.onAction, required this.onRegister});
-
-  void _copy(BuildContext context, String value) {
-    Clipboard.setData(ClipboardData(text: value));
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(_t('Copied: $value', 'কপি হয়েছে: $value')),
-      behavior: SnackBarBehavior.floating,
-      duration: const Duration(seconds: 2),
-    ));
-  }
-
-  static String get _createAccountLabel => _t('Create Account', 'অ্যাকাউন্ট খুলুন');
+// ═══════════════════════════════════════════════════════════
+// Chobi na pele shudhu sobuj box (kono pattern nei)
+// ═══════════════════════════════════════════════════════════
+class _ImageFallbackBox extends StatelessWidget {
+  const _ImageFallbackBox();
 
   @override
   Widget build(BuildContext context) {
-    final columns = [
-      (
-      _t('Platform', 'প্ল্যাটফর্ম'),
-      [
-        _t('Business Groups', 'ব্যবসায়িক গ্রুপ'),
-        _t('Browse Projects', 'প্রকল্প দেখুন'),
-        _t('How It Works', 'কীভাবে কাজ করে'),
-        _createAccountLabel,
-      ],
-      ),
-      (
-      _t('Company', 'প্রতিষ্ঠান'),
-      [
-        _t('Project Updates', 'প্রকল্পের আপডেট'),
-        _t('About Us', 'আমাদের সম্পর্কে'),
-        _t('Frequently Asked', 'সাধারণ প্রশ্ন'),
-        _t('Investor Relations', 'বিনিয়োগকারী সম্পর্ক'),
-      ],
-      ),
-      (
-      _t('Legal', 'আইনি'),
-      [
-        _t('Privacy Policy', 'গোপনীয়তা নীতি'),
-        _t('Terms of Service', 'সেবার শর্তাবলি'),
-        _t('Risk Disclosures', 'ঝুঁকির তথ্য'),
-        _t('Compliance & KYC', 'কমপ্লায়েন্স ও KYC'),
-      ],
-      ),
-    ];
-
-    const linkStyle = TextStyle(color: Color(0xFFB9C4BF), fontSize: 13);
-
     return Container(
       decoration: const BoxDecoration(
         gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [Color(0xFF091511), Color(0xFF06100D), Color(0xFF030806)],
+          colors: [_C.emeraldBright, _C.emerald],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
         ),
-        border: Border(top: BorderSide(color: Color(0x6614532D))),
       ),
-      padding: const EdgeInsets.fromLTRB(20, 40, 20, 28),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            color: Colors.white,
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            child: Image.asset(
-              'assets/images/logo_full.png',
-              height: 34,
-              errorBuilder: (_, __, ___) => const Text('Biniyog Club',
-                  style: TextStyle(
-                      color: _C.emerald,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 18)),
-            ),
-          ),
-          const SizedBox(height: 16),
-          Text(
-            _t(
-                'Empowering co-investors across Bangladesh to fund verified business groups and projects with complete legal security and radical transparency.',
-                'সম্পূর্ণ আইনি নিরাপত্তা ও পূর্ণ স্বচ্ছতার সাথে যাচাইকৃত ব্যবসায়িক গ্রুপ ও প্রকল্পে বিনিয়োগে সারা বাংলাদেশের সহ-বিনিয়োগকারীদের পাশে।'),
-            style: const TextStyle(
-                color: Color(0xFF9AA7A1), fontSize: 13.5, height: 1.6),
-          ),
-          const SizedBox(height: 14),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: BoxDecoration(
-              color: _C.emeraldDeep.withValues(alpha: 0.7),
-              border: Border.all(color: _C.gold.withValues(alpha: 0.3)),
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              const Icon(Icons.verified_user_outlined,
-                  size: 14, color: _C.goldLight),
-              const SizedBox(width: 6),
-              Text(
-                  _t('Immutable Ledger & Digital Contracts',
-                      'অপরিবর্তনীয় লেজার ও ডিজিটাল চুক্তি'),
-                  style: const TextStyle(color: _C.goldLight, fontSize: 12)),
-            ]),
-          ),
-          const SizedBox(height: 28),
-          Wrap(
-            spacing: 24,
-            runSpacing: 24,
-            children: [
-              for (final col in columns)
-                SizedBox(
-                  width: 140,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(col.$1.toUpperCase(),
-                          style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 11.5,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: 1.6)),
-                      const SizedBox(height: 12),
-                      for (final link in col.$2)
-                        InkWell(
-                          onTap: link == _createAccountLabel ? onRegister : onAction,
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 6),
-                            child: Text(link, style: linkStyle),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-            ],
-          ),
-          const SizedBox(height: 28),
-          Text(_t('CONTACT', 'যোগাযোগ'),
-              style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 1.6)),
-          const SizedBox(height: 12),
-          _contactRow(context, Icons.place_outlined,
-              'MG SAM Center, 12 Mohakhali C/A, Dhaka-1212, Bangladesh'),
-          _contactRow(context, Icons.phone_outlined, '+8801335149033'),
-          _contactRow(context, Icons.mail_outline, 'info@biniyogclub.com'),
-          const SizedBox(height: 26),
-          Container(height: 1, color: Colors.white12),
-          const SizedBox(height: 18),
-          Text(
-            _t(
-                '© ${DateTime.now().year} Biniyog Club Ltd. All rights reserved. Registered in Bangladesh.',
-                '© ${DateTime.now().year} বিনিয়োগ ক্লাব লিমিটেড। সর্বস্বত্ব সংরক্ষিত। বাংলাদেশে নিবন্ধিত।'),
-            style: const TextStyle(color: Color(0xFF8A9690), fontSize: 11.5),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            _t('Investment carries commercial risk. Past payouts do not guarantee future returns.',
-                'বিনিয়োগে বাণিজ্যিক ঝুঁকি রয়েছে। অতীতের মুনাফা ভবিষ্যতের রিটার্নের নিশ্চয়তা দেয় না।'),
-            style: const TextStyle(
-                color: Color(0xFF8A9690), fontSize: 11.5, height: 1.5),
-          ),
-        ],
-      ),
+      child: Center(child: Icon(Icons.image_outlined, color: Colors.white.withAlpha(120), size: 30)),
     );
   }
-
-  Widget _contactRow(BuildContext context, IconData icon, String value) =>
-      InkWell(
-        onTap: () => _copy(context, value),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 6),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Icon(icon, size: 16, color: _C.goldLight),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(value,
-                    style: const TextStyle(
-                        color: Color(0xFFCBD5D1), fontSize: 13, height: 1.4)),
-              ),
-            ],
-          ),
-        ),
-      );
 }

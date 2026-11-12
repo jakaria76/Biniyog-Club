@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
+import 'dart:typed_data';
 import 'package:bcrypt/bcrypt.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
@@ -52,13 +53,48 @@ class DatabaseService {
 
   static String _nowIso() => DateTime.now().toUtc().toIso8601String();
 
+  /// Website er deadline.ts: Dhaka (UTC+6) er calendar din hishebe deadline
+  /// er tarikh — aj theke koto din. 0 = aj shesh din, -1 = gotokal shesh hoyeche.
+  /// Deadline na thakle null.
+  static int? deadlineDaysDhaka(dynamic deadline) {
+    final raw = deadline?.toString().trim() ?? '';
+    if (raw.isEmpty) return null;
+    DateTime dhakaDay(DateTime x) {
+      final d = x.toUtc().add(const Duration(hours: 6));
+      return DateTime.utc(d.year, d.month, d.day);
+    }
+
+    DateTime? day;
+    if (RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(raw)) {
+      // Shudhu tarikh — sheta-i Dhaka er tarikh
+      final p = raw.split('-').map(int.parse).toList();
+      day = DateTime.utc(p[0], p[1], p[2]);
+    } else {
+      var t = raw.replaceFirst(' ', 'T');
+      // DB er timestamp UTC te thake, timezone lekha thake na
+      if (!RegExp(r'(Z|[+-]\d{2}:?\d{2})$').hasMatch(t)) t = '${t}Z';
+      final d = DateTime.tryParse(t);
+      if (d == null) return null;
+      day = dhakaDay(d);
+    }
+    return day.difference(dhakaDay(DateTime.now())).inDays;
+  }
+
+  /// Deadline er din periye geche? (deadline er din porjonto invest kora jay)
+  static bool deadlinePassed(dynamic deadline) {
+    final d = deadlineDaysDhaka(deadline);
+    return d != null && d < 0;
+  }
+
   /// Deadline na thakle 0 — banano "116 days" r dekhabo na
   static int _daysLeft(String? deadline) {
-    if (deadline == null || deadline.isEmpty) return 0;
-    final d = DateTime.tryParse(deadline);
-    if (d == null) return 0;
-    return d.difference(DateTime.now()).inDays.clamp(0, 3650);
+    final d = deadlineDaysDhaka(deadline);
+    return d == null ? 0 : d.clamp(0, 3650);
   }
+
+  /// SQL: deadline nei, ba Dhaka er aj-er tarikh porjonto ache
+  static const String _deadlineOpenSql =
+  '''(p."fundingDeadline" IS NULL OR (p."fundingDeadline" AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Dhaka')::date >= (NOW() AT TIME ZONE 'Asia/Dhaka')::date)''';
 
   static String _mimeFromDataUri(String s) {
     final m = RegExp(r'^data:([^;,]+)[;,]').firstMatch(s);
@@ -291,24 +327,33 @@ class DatabaseService {
     return '${s.substring(0, 8)}-${s.substring(8, 12)}-${s.substring(12, 16)}-${s.substring(16, 20)}-${s.substring(20, 32)}';
   }
 
-  // Helper to ensure investorProfile and emailVerified exist in Neon DB for Website Compatibility
+  /// Website er investor.data.ts resolveProfile: profile na thakle shudhu
+  /// KYC VERIFIED hole KYC er tottho diye banay, sathe wallet.
+  /// (Age eta shobar profile banato ar "emailVerified" = true kore dito —
+  /// verify chara. Seta website er niyom na, tai bad.)
   static Future<void> _ensureInvestorProfileExists(String userId) async {
     if (userId.isEmpty) return;
     try {
       final nowStr = _nowIso();
-      final profileId = _generateUuid();
-
       await executeNeonHttp('''
-        INSERT INTO investor_profiles ("id", "userId", "country", "createdAt", "updatedAt")
-        VALUES (\$1, \$2, 'BD', \$3, \$3)
-        ON CONFLICT ("userId") DO NOTHING;
-      ''', [profileId, userId, nowStr]);
-
-      await executeNeonHttp('''
-        UPDATE users
-        SET "emailVerified" = true
-        WHERE "id" = \$1 AND ("emailVerified" IS NOT TRUE OR "emailVerified" IS NULL);
-      ''', [userId]);
+        WITH k AS (
+          SELECT "documentNumber", "dateOfBirth", "addressLine", "city", "nationality"
+          FROM kyc
+          WHERE "userId" = \$2 AND "status"::text = 'VERIFIED'
+            AND NOT EXISTS (SELECT 1 FROM investor_profiles WHERE "userId" = \$2)
+        ),
+        p AS (
+          INSERT INTO investor_profiles ("id", "userId", "nationalId", "dateOfBirth", "address", "city", "country", "createdAt", "updatedAt")
+          SELECT \$1, \$2, k."documentNumber", k."dateOfBirth", k."addressLine", k."city", COALESCE(k."nationality", 'BD'), \$3, \$3
+          FROM k
+          ON CONFLICT ("userId") DO NOTHING
+          RETURNING "id"
+        )
+        INSERT INTO wallets ("id", "userId", "type", "cachedBalance", "currency", "isActive", "createdAt", "updatedAt")
+        SELECT \$4, \$2, 'INVESTOR'::"WalletType", 0.00, 'BDT', true, \$3, \$3
+        WHERE EXISTS (SELECT 1 FROM p)
+        ON CONFLICT ("userId") DO NOTHING
+      ''', [_generateUuid(), userId, nowStr, _generateUuid()]);
     } catch (e) {
       debugPrint("Ensure Investor Profile Error: $e");
     }
@@ -348,9 +393,59 @@ class DatabaseService {
     return isPlaceholderEmail(s) ? '' : s;
   }
 
-  /// +8801… / 01… — duita-i 01… e ani
+  /// +8801… / 01… — duita-i 01… e ani (purono code er jonno rakha)
   static String normalizeBdPhone(String v) =>
       v.replaceAll(RegExp(r'[\s-]'), '').replaceFirst(RegExp(r'^\+?88(?=01)'), '');
+
+  // ═════════════════════════════════════════════════════════
+  // PHONE — je kono desh (website er "BD +880" input er motoi)
+  // DB te ekhon international format e rakhi: +8801712345678, +447911123456
+  // Purono '01…' bhabe save thaka account o khuje pay.
+  // ═════════════════════════════════════════════════════════
+
+  /// Desh er code + local number → +E.164 (shamner trunk '0' bad)
+  static String toE164(String dialCode, String localNumber) {
+    final dial = dialCode.replaceAll(RegExp(r'\D'), '');
+    var local = localNumber.replaceAll(RegExp(r'\D'), '');
+    // Keu pura number (code shoho) likhe dile abar code boshabo na
+    if (local.startsWith(dial) && local.length > dial.length + 6) local = local.substring(dial.length);
+    // Italy chara onno desh e local number er shuru te '0' thake na
+    if (dial != '39') local = local.replaceFirst(RegExp(r'^0+'), '');
+    return '+$dial$local';
+  }
+
+  /// Je kono lekha (01…, +880…, 00 44…, +1 (555)…) → +E.164
+  static String canonicalPhone(String raw) {
+    var v = raw.trim().replaceAll(RegExp(r'[\s\-().]'), '');
+    if (v.startsWith('00')) v = '+${v.substring(2)}';
+    if (v.startsWith('+')) return '+${v.substring(1).replaceAll(RegExp(r'\D'), '')}';
+    if (RegExp(r'^01\d{9}$').hasMatch(v)) return '+880${v.substring(1)}'; // BD local
+    if (RegExp(r'^8801\d{9}$').hasMatch(v)) return '+$v';
+    return v;
+  }
+
+  /// Number ta ki thik? BD hole BD er niyom, onno desh hole 8–15 digit
+  static bool isValidPhone(String e164) {
+    if (e164.startsWith('+880')) return RegExp(r'^\+8801[3-9]\d{8}$').hasMatch(e164);
+    return RegExp(r'^\+[1-9]\d{7,14}$').hasMatch(e164);
+  }
+
+  /// DB te je je bhabe save thakte pare (exactly 3 ta — SQL e \$a, \$b, \$c)
+  static List<String> phoneVariants(String raw) {
+    final e = canonicalPhone(raw);
+    final set = <String>{e};
+    if (e.startsWith('+8801')) {
+      set.add('0${e.substring(4)}'); // 01712345678
+      set.add(e.substring(1)); // 8801712345678
+    } else if (e.startsWith('+')) {
+      set.add(e.substring(1));
+    }
+    final list = set.toList();
+    while (list.length < 3) {
+      list.add(list.first);
+    }
+    return list.take(3).toList();
+  }
 
   // Register User — website er users + investor_profiles + wallets e
   static Future<Map<String, dynamic>> registerUser({
@@ -358,8 +453,7 @@ class DatabaseService {
     String? email,
     required String phone,
     required String password,
-    // Nullable rakhi jate purono AuthService.register compile kore —
-    // kintu khali hole register hobe na
+    // Website er motoi — NID, thikana, nominee pore Profile theke (optional)
     String? nidNumber,
     DateTime? dateOfBirth,
     String? address,
@@ -369,14 +463,29 @@ class DatabaseService {
   }) async {
     try {
       final cleanEmail = (email ?? '').trim().toLowerCase();
-      final cleanPhone = normalizeBdPhone(phone.trim());
+      final cleanPhone = canonicalPhone(phone);
+      final phoneVars = phoneVariants(cleanPhone);
       final cleanNid = (nidNumber ?? '').trim();
       final cleanAddress = (address ?? '').trim();
       final nomineeNid = (nomineeNidNumber ?? '').trim();
       final nomineeRel = (nomineeRelation ?? '').trim();
       // NID, thikana, nominee — pore profile theke deya jay (website er motoi)
-      if (name.trim().isEmpty || cleanPhone.isEmpty || dateOfBirth == null) {
+      if (name.trim().length < 2 || cleanPhone.isEmpty || dateOfBirth == null) {
         return {'success': false, 'message': 'Please fill in all required fields.'};
+      }
+      // App er check server eo — website er form er niyom
+      if (!isValidPhone(cleanPhone)) {
+        return {'success': false, 'message': 'Please enter a valid phone number for the selected country.'};
+      }
+      if (cleanEmail.isNotEmpty && !RegExp(r'^[\w.+-]+@([\w-]+\.)+[A-Za-z]{2,}$').hasMatch(cleanEmail)) {
+        return {'success': false, 'message': 'Please enter a valid email address.'};
+      }
+      if (password.length < 6) {
+        return {'success': false, 'message': 'Password must be at least 6 characters.'};
+      }
+      final today = DateTime.now();
+      if (dateOfBirth.isAfter(DateTime(today.year - 18, today.month, today.day))) {
+        return {'success': false, 'message': 'You must be at least 18 years old.'};
       }
 
       final metas = await Future.wait([_columnsOf('users'), _columnsOf('investor_profiles')]);
@@ -406,11 +515,13 @@ class DatabaseService {
         WITH existing_check_user AS (
           SELECT "id", "email", "phone" FROM users
           WHERE (\$2::text IS NOT NULL AND LOWER("email") = LOWER(\$2::text))
-             OR "phone" = \$3::text
+             -- +8801… / 01… / 8801… — je bhabe save thakuk dhora porbe
+             OR "phone" IN (\$3::text, \$15::text, \$16::text)
           LIMIT 1
         ),
         existing_check_nid AS (
-          SELECT "nationalId" FROM investor_profiles WHERE "nationalId" = \$8::text LIMIT 1
+          SELECT "nationalId" FROM investor_profiles
+          WHERE \$8::text IS NOT NULL AND "nationalId" = \$8::text LIMIT 1
         ),
         new_user AS (
           INSERT INTO users (
@@ -455,6 +566,8 @@ class DatabaseService {
         cleanEmail.isNotEmpty, // 12
         cleanAddress.isEmpty ? null : cleanAddress, // 13
         (city ?? '').trim().isEmpty ? null : city!.trim(), // 14
+        phoneVars[1], // 15
+        phoneVars[2], // 16
       ]);
 
       if (res.isEmpty) {
@@ -475,7 +588,7 @@ class DatabaseService {
       if (existingNid.isNotEmpty) {
         return {'success': false, 'message': 'An account with this NID number already exists.'};
       }
-      if (existingPhone.isNotEmpty && existingPhone == cleanPhone) {
+      if (existingPhone.isNotEmpty && canonicalPhone(existingPhone) == cleanPhone) {
         return {'success': false, 'message': 'An account with this phone number already exists. Please log in.'};
       }
       if (existingEmail.isNotEmpty) {
@@ -503,7 +616,9 @@ class DatabaseService {
       }
 
       // Welcome mail (forgot password er motoi Resend) — registration atkabe na
-      unawaited(EmailService.sendWelcome(userId: userId, name: name.trim(), email: cleanEmail));
+      if (cleanEmail.isNotEmpty) {
+        unawaited(EmailService.sendWelcome(userId: userId, name: name.trim(), email: cleanEmail));
+      }
 
       return {
         'success': true,
@@ -530,13 +645,15 @@ class DatabaseService {
     try {
       final raw = email.trim();
       // Phone diye login: +8801… / 01… duita-i
-      final cleanInput = RegExp(r'^[+\d\s-]+$').hasMatch(raw) ? normalizeBdPhone(raw) : raw;
+      final isPhone = RegExp(r'^[+\d\s\-().]+$').hasMatch(raw);
+      final vars = isPhone ? phoneVariants(raw) : [raw, raw, raw];
 
       final result = await queryNeonHttp('''
         SELECT "id", "name", "email", "phone", "passwordHash", "avatarUrl", "status"::text AS "status", "updatedAt"
         FROM users 
-        WHERE LOWER("email") = LOWER(\$1) OR "phone" = \$1
-      ''', [cleanInput]);
+        WHERE LOWER("email") = LOWER(\$1) OR "phone" IN (\$1, \$2, \$3)
+        LIMIT 1
+      ''', vars);
 
       if (result.isEmpty) {
         return {
@@ -999,8 +1116,8 @@ class DatabaseService {
     required String newPassword,
   }) async {
     try {
-      if (newPassword.length < 8) {
-        return {'success': false, 'message': 'Password must be at least 8 characters.'};
+      if (newPassword.length < 6) {
+        return {'success': false, 'message': 'Password must be at least 6 characters.'};
       }
 
       final verifyRes = await verifyResetOtp(email, otp);
@@ -1109,33 +1226,51 @@ class DatabaseService {
     if (userId.isEmpty) return {'success': false, 'message': _loginRequiredMsg};
 
     try {
-      // KYC ar lage na — account thakle-i invest kora jay
-      String profileId;
+      // Website er resolveProfile: profile na thakle KYC VERIFIED hole KYC er
+      // tottho diye banay (+ wallet); na hole invest kora jay na
       final profRes = await queryNeonHttp(
-          'SELECT "id" FROM investor_profiles WHERE "userId" = \$1',
-          [userId]);
+          'SELECT "id" FROM investor_profiles WHERE "userId" = \$1', [userId]);
+      if (profRes.isEmpty && lastRequestFailed) return {'success': false, 'message': _connectionErrorMsg()};
+      String profileId;
       if (profRes.isNotEmpty) {
         profileId = profRes.first['id'].toString();
       } else {
-        profileId = _generateUuid();
         final nowStr = _nowIso();
-        await executeNeonHttp('''
-          INSERT INTO investor_profiles ("id", "userId", "createdAt", "updatedAt")
-          VALUES (\$1, \$2, \$3, \$3)
-          ON CONFLICT ("userId") DO NOTHING
-        ''', [profileId, userId, nowStr]);
-        final again = await queryNeonHttp(
-            'SELECT "id" FROM investor_profiles WHERE "userId" = \$1', [userId]);
-        if (again.isEmpty) {
-          return {'success': false, 'message': _saveFailMsg('Could not set up your investor profile.')};
+        final made = await queryNeonHttp('''
+          WITH k AS (
+            SELECT "documentNumber", "dateOfBirth", "addressLine", "city", "nationality"
+            FROM kyc WHERE "userId" = \$2 AND "status"::text = 'VERIFIED'
+          ),
+          p AS (
+            INSERT INTO investor_profiles ("id", "userId", "nationalId", "dateOfBirth", "address", "city", "country", "createdAt", "updatedAt")
+            SELECT \$1, \$2, k."documentNumber", k."dateOfBirth", k."addressLine", k."city", COALESCE(k."nationality", 'BD'), \$3, \$3
+            FROM k
+            ON CONFLICT ("userId") DO UPDATE SET "updatedAt" = investor_profiles."updatedAt"
+            RETURNING "id"
+          ),
+          w AS (
+            INSERT INTO wallets ("id", "userId", "type", "cachedBalance", "currency", "isActive", "createdAt", "updatedAt")
+            SELECT \$4, \$2, 'INVESTOR'::"WalletType", 0.00, 'BDT', true, \$3, \$3
+            WHERE EXISTS (SELECT 1 FROM p)
+            ON CONFLICT ("userId") DO NOTHING
+          )
+          SELECT "id" FROM p
+        ''', [_generateUuid(), userId, nowStr, _generateUuid()]);
+        if (made.isEmpty) {
+          return {
+            'success': false,
+            'message': lastRequestFailed
+                ? _connectionErrorMsg()
+                : 'Investor profile not found. Please complete your profile setup.',
+          };
         }
-        profileId = again.first['id'].toString();
+        profileId = made.first['id'].toString();
       }
 
       final projRes = await queryNeonHttp('''
         SELECT "id", "status"::text AS "status", "fundingGoalBdt", "fundedAmountBdt", "minInvestmentBdt",
                "maxInvestmentBdt", "expectedReturnPct", "returnPctMin", "returnPctMax",
-               "returnType"::text AS "returnType"
+               "returnType"::text AS "returnType", "fundingDeadline"
         FROM projects
         WHERE "id" = \$1
       ''', [projectId]);
@@ -1155,15 +1290,21 @@ class DatabaseService {
           'message': 'Project is not currently open for fundraising (Status: $status).',
         };
       }
+      // Website er motoi: deadline er din periye gele notun invest bondho
+      if (deadlinePassed(p['fundingDeadline'])) {
+        return {
+          'success': false,
+          'message': 'The funding deadline for this project has passed. New investments are closed.',
+        };
+      }
 
       final goal = _toDouble(p['fundingGoalBdt'], 1.0);
       final funded = _toDouble(p['fundedAmountBdt']);
       final minInv = _toDouble(p['minInvestmentBdt']);
       final maxInv = _toDoubleOrNull(p['maxInvestmentBdt']);
-      // 16 ba 0.16 — duitai 0.16. Project e nirdishto % na thakle range er
-      // nicher ta (conservative) — banano 15% ar na
-      final setPct = _normalizePct(p['expectedReturnPct']);
-      final returnPct = setPct > 0 ? setPct : projectReturnRange(p)['returnMin']!;
+      // Website er calculateExpectedReturn: amount × expectedReturnPct ÷ 100,
+      // 2 dosomik e round (16 ba 0.16 — duitai 0.16)
+      final returnPct = _normalizePct(p['expectedReturnPct']);
       final returnType = p['returnType']?.toString() ?? 'FIXED_RETURN';
 
       if (minInv > 0 && amountBdt < minInv) {
@@ -1192,18 +1333,18 @@ class DatabaseService {
       }
 
       final investmentId = _generateUuid();
-      final certNo = 'BC-${investmentId.substring(0, min(12, investmentId.length)).toUpperCase()}';
       final nowStr = _nowIso();
+      final expectedReturn = (amountBdt * returnPct * 100).round() / 100;
 
       // ON CONFLICT: network retry hole duplicate row hobe na, r RETURNING diye
       // nishchit hoi je row asolei save hoyeche
       final ins = await queryNeonHttp('''
         INSERT INTO investments (
           "id", "investorProfileId", "projectId", "status", "amountBdt",
-          "expectedReturnBdt", "returnType", "idempotencyKey", "receiptNumber", "createdAt", "updatedAt"
+          "expectedReturnBdt", "returnType", "idempotencyKey", "createdAt", "updatedAt"
         ) VALUES (
           \$1, \$2, \$3, 'PENDING'::"InvestmentStatus", \$4,
-          \$5, \$6::"ReturnType", \$7, \$8, \$9, \$9
+          \$5, \$6::"ReturnType", \$7, \$8, \$8
         )
         ON CONFLICT ("id") DO UPDATE SET "updatedAt" = EXCLUDED."updatedAt"
         RETURNING "id"
@@ -1212,10 +1353,9 @@ class DatabaseService {
         profileId,
         projectId,
         amountBdt,
-        amountBdt * returnPct,
+        expectedReturn,
         returnType,
         _generateUuid(),
-        certNo,
         nowStr,
       ]);
 
@@ -1381,12 +1521,279 @@ class DatabaseService {
     return 'BDT $b';
   }
 
-  /// methods: 'BANK', 'CASH', 'CHEQUE' (ek ba ekadhik)
+  // ═════════════════════════════════════════════════════════
+  // PAYMENT PARTS — website er motoi: protita madhyom (Bank / Cash / Cheque)
+  // alada row, ek "batch" e. paymentMethod = BANK_TRANSFER / CASH / CHEQUE,
+  // cash e cashReceivedBy. Admin protita part alada approve/reject kore,
+  // approve hoye pura taka mille investment ACTIVE (website e).
+  // Kisti (INSTALLMENT) hole ekbare puro taka lage na.
+  // ═════════════════════════════════════════════════════════
+
+  static String _mimeFromUrl(String url) {
+    final u = url.toLowerCase().split('?').first;
+    if (u.endsWith('.png')) return 'image/png';
+    if (u.endsWith('.webp')) return 'image/webp';
+    if (u.endsWith('.heic')) return 'image/heic';
+    if (u.endsWith('.pdf')) return 'application/pdf';
+    return 'image/jpeg';
+  }
+
+  /// Investment er payment er hishab: mot, jachai hoye geche, jachai cholche, baki
+  static Future<Map<String, dynamic>?> getPaymentProgress({
+    required bool group,
+    required String id,
+    required String userId,
+  }) async {
+    final rows = group
+        ? await queryNeonHttp('''
+            SELECT gi."status"::text AS "status", gi."amountBdt" AS "total",
+                   COALESCE(to_jsonb(gi) ->> 'paymentPlan', 'FULL') AS "plan",
+                   gt."bankAccountId" AS "fallbackBankId",
+                   COALESCE((SELECT SUM(x."amountBdt") FROM group_investment_payments x
+                             WHERE x."groupInvestmentId" = gi."id" AND x."status"::text = 'APPROVED'), 0) AS "approved",
+                   COALESCE((SELECT SUM(x."amountBdt") FROM group_investment_payments x
+                             WHERE x."groupInvestmentId" = gi."id"
+                               AND x."status"::text IN ('SUBMITTED', 'UNDER_REVIEW')), 0) AS "pending"
+            FROM group_investments gi
+            JOIN group_tiers gt ON gt."id" = gi."tierId"
+            WHERE gi."id" = \$1 AND gi."investorUserId" = \$2
+          ''', [id, userId])
+        : await queryNeonHttp('''
+            SELECT i."status"::text AS "status", i."amountBdt" AS "total",
+                   COALESCE(to_jsonb(i) ->> 'paymentPlan', 'FULL') AS "plan",
+                   (SELECT b."id" FROM project_bank_accounts b
+                    WHERE b."projectId" = i."projectId" AND b."isActive" = true
+                    ORDER BY b."createdAt" ASC LIMIT 1) AS "fallbackBankId",
+                   COALESCE((SELECT SUM(x."amountBdt") FROM manual_payment_submissions x
+                             WHERE x."investmentId" = i."id" AND x."status"::text = 'APPROVED'), 0) AS "approved",
+                   COALESCE((SELECT SUM(x."amountBdt") FROM manual_payment_submissions x
+                             WHERE x."investmentId" = i."id"
+                               AND x."status"::text IN ('SUBMITTED', 'UNDER_REVIEW')), 0) AS "pending"
+            FROM investments i
+            JOIN investor_profiles p ON p."id" = i."investorProfileId"
+            WHERE i."id" = \$1 AND p."userId" = \$2
+          ''', [id, userId]);
+    if (rows.isEmpty) return null;
+    final r = rows.first;
+    final total = _toDouble(r['total']);
+    final approved = _toDouble(r['approved']);
+    final pending = _toDouble(r['pending']);
+    final outstanding = max(0.0, total - approved - pending);
+    return {
+      'status': r['status']?.toString() ?? '',
+      'plan': (r['plan']?.toString() ?? 'FULL').toUpperCase(),
+      'total': total,
+      'approved': approved,
+      'pending': pending,
+      'outstanding': outstanding,
+      'fallbackBankId': r['fallbackBankId']?.toString(),
+    };
+  }
+
+  /// Protita madhyom er jonno alada row (ek INSERT e). Fire: prothom row er id.
+  static Future<Map<String, dynamic>> _insertPaymentParts({
+    required bool group,
+    required String parentId,
+    required String userId,
+    required Set<String> m,
+    required double payNowBdt,
+    required double bankAmount,
+    required double cashAmount,
+    required double chequeAmount,
+    String? bankAccountId,
+    String? fallbackBankId,
+    String? bankAccountLabel,
+    String? bankTransactionId,
+    List<String> bankProofUrls = const [],
+    String? cashReceiver,
+    List<String> chequeProofUrls = const [],
+    List<String> cashProofUrls = const [],
+    String? chequeNumber,
+    String? cashReceiptNo,
+    String? note,
+  }) async {
+    final table = group ? 'group_investment_payments' : 'manual_payment_submissions';
+    final fk = group ? 'groupInvestmentId' : 'investmentId';
+    final metas = await Future.wait([_paymentMethodMeta(table), _columnsOf(table)]);
+    final pm = metas[0] as ({String cast, Set<String> labels});
+    final cols = metas[1] as Map<String, bool>;
+    if (cols.isEmpty) return {'success': false, 'message': _connectionErrorMsg()};
+
+    // paymentMethod enum hole (purono schema) DB je value nay tar moddhe theke
+    String method(String key) {
+      final wanted = switch (key) {
+        'BANK' => ['BANK_TRANSFER', 'BANK_DEPOSIT', 'BANK'],
+        'CASH' => ['CASH', 'CASH_DEPOSIT', 'CASH_PAYMENT'],
+        _ => ['CHECK', 'CHEQUE', 'BANK_CHEQUE'], // website: CHECK
+      };
+      if (pm.labels.isEmpty) return wanted.first;
+      for (final w in wanted) {
+        if (pm.labels.contains(w)) return w;
+      }
+      return pm.labels.contains('BANK_TRANSFER') ? 'BANK_TRANSFER' : pm.labels.first;
+    }
+
+    final single = m.length == 1;
+    final parts = <({String key, double amount})>[
+      if (m.contains('BANK')) (key: 'BANK', amount: single ? payNowBdt : bankAmount),
+      if (m.contains('CASH')) (key: 'CASH', amount: single ? payNowBdt : cashAmount),
+      if (m.contains('CHEQUE')) (key: 'CHEQUE', amount: single ? payNowBdt : chequeAmount),
+    ];
+    final label = [if (m.contains('BANK')) 'Bank', if (m.contains('CASH')) 'Cash', if (m.contains('CHEQUE')) 'Cheque']
+        .join(' + ');
+    final batchId = cols.containsKey('batchId') ? _generateUuid() : null;
+    final hasExtra = cols.containsKey('extraProofs');
+    final receiver = cashReceiverValue(cashReceiver);
+
+    // Protita madhyom er reference: Bank = TxID, Cheque = cheque number, Cash = money receipt no
+    String refOf(String key) => switch (key) {
+      'BANK' => (bankTransactionId ?? '').trim(),
+      'CHEQUE' => (chequeNumber ?? '').trim(),
+      _ => (cashReceiptNo ?? '').trim(),
+    };
+    List<String> proofsOf(String key) => switch (key) {
+      'BANK' => bankProofUrls,
+      'CHEQUE' => chequeProofUrls,
+      _ => cashProofUrls,
+    };
+
+    // Ek-i reference dui bar na (website er assertRefsUnused er motoi) — rejected gulo bade
+    final refs = parts.map((x) => refOf(x.key)).where((r) => r.isNotEmpty && r.toUpperCase() != 'CASH').toList();
+    if (refs.map((r) => r.toLowerCase()).toSet().length != refs.length) {
+      return {'success': false, 'message': 'Each payment part needs its own reference number.'};
+    }
+    for (final r in refs) {
+      final used = await queryNeonHttp('''
+        SELECT 1 AS "x" FROM manual_payment_submissions WHERE LOWER("transactionRef") = LOWER(\$1) AND "status"::text <> 'REJECTED'
+        UNION ALL
+        SELECT 1 AS "x" FROM group_investment_payments WHERE LOWER("transactionRef") = LOWER(\$1) AND "status"::text <> 'REJECTED'
+        LIMIT 1
+      ''', [r]);
+      if (used.isNotEmpty) {
+        return {'success': false, 'message': 'Reference "$r" has already been used for another payment.'};
+      }
+    }
+    // Website: BANK_TRANSFER e je account e taka pathiyechen seta bachai korte hobe
+    if (m.contains('BANK') && (bankAccountId ?? '').isEmpty) {
+      return {'success': false, 'message': 'Bank Transfer: select the bank account you paid into.'};
+    }
+    final nowStr = _nowIso();
+    final bankNullable = cols['bankAccountId'] ?? true;
+
+    final names = <String>[
+      'id', fk, 'submittedBy', 'status', 'amountBdt', 'bankAccountId', 'paymentMethod',
+      'transactionRef', 'proofFileUrl', 'proofMimeType', 'notes', 'createdAt', 'updatedAt',
+      if (cols.containsKey('cashReceivedBy')) 'cashReceivedBy',
+      if (batchId != null) 'batchId',
+      if (hasExtra) 'extraProofs',
+    ].where((c) => cols.containsKey(c)).toList();
+
+    final params = <dynamic>[];
+    String p(dynamic v, [String cast = '']) {
+      params.add(v);
+      return '\$${params.length}$cast';
+    }
+
+    final tuples = <String>[];
+    final ids = <String>[];
+    for (int i = 0; i < parts.length; i++) {
+      final part = parts[i];
+      final id = _generateUuid();
+      ids.add(id);
+      final files = proofsOf(part.key);
+      final proof = files.isEmpty ? '' : files.first;
+      final extra = files.length > 1
+          ? jsonEncode(files.skip(1).map((u) => {'url': u, 'mimeType': _mimeFromUrl(u)}).toList())
+          : null;
+      String? bankId = part.key == 'BANK' && (bankAccountId ?? '').isNotEmpty ? bankAccountId : null;
+      if (bankId == null && !bankNullable) bankId = (fallbackBankId ?? '').isNotEmpty ? fallbackBankId : null;
+      if (bankId == null && !bankNullable) {
+        return {'success': false, 'message': 'Payment account is not set yet. Please contact support.'};
+      }
+      // Website er partRowData: cash er reference na thakle "CASH"
+      final ref = refOf(part.key).isNotEmpty ? refOf(part.key) : (part.key == 'CASH' ? 'CASH' : '');
+      final noteLines = <String>[
+        if ((note ?? '').trim().isNotEmpty) note!.trim(),
+        if (part.key == 'BANK' && (bankAccountLabel ?? '').isNotEmpty) 'Paid into $bankAccountLabel',
+        // cashReceivedBy column na thakle (purono DB) notes e
+        if (part.key == 'CASH' && !cols.containsKey('cashReceivedBy')) 'Cash handed to ${receiver ?? cashReceiver}',
+        if (!single) 'Part ${i + 1} of ${parts.length} · $label · ${_fmtTk(payNowBdt)} in total',
+        'Submitted from the Biniyog Club app',
+      ];
+
+      // Shudhu je column ache tar value — parameter shonkha thik rakhte
+      final raw = <String, dynamic>{
+        'id': id,
+        fk: parentId,
+        'submittedBy': userId,
+        'amountBdt': part.amount,
+        'bankAccountId': bankId,
+        'paymentMethod': method(part.key),
+        'transactionRef': ref,
+        'proofFileUrl': proof,
+        'proofMimeType': proof.isEmpty ? '' : _mimeFromUrl(proof),
+        'notes': noteLines.join('\n'),
+        'createdAt': nowStr,
+        'updatedAt': nowStr,
+        'cashReceivedBy': part.key == 'CASH' ? receiver : null,
+        'batchId': batchId,
+        'extraProofs': extra,
+      };
+      final slots = names.map((n) {
+        if (n == 'status') return "'SUBMITTED'::\"ManualPaymentStatus\"";
+        if (n == 'extraProofs') return p(raw[n], '::jsonb');
+        return p(raw[n], n == 'paymentMethod' ? pm.cast : '');
+      }).join(', ');
+      tuples.add('($slots)');
+    }
+
+    final ins = await queryNeonHttp('''
+      INSERT INTO $table (${names.map((n) => '"$n"').join(', ')})
+      VALUES ${tuples.join(', ')}
+      RETURNING "id"
+    ''', params);
+
+    if (ins.isEmpty) {
+      return {'success': false, 'message': 'Could not save your payment details. (${_shortDbError()})'};
+    }
+
+    await executeNeonHttp(
+      group
+          ? '''
+            UPDATE group_investments
+            SET "status" = 'PAYMENT_PENDING'::"GroupInvestmentStatus", "updatedAt" = \$1
+            WHERE "id" = \$2
+          '''
+          : '''
+            UPDATE investments
+            SET "status" = 'PAYMENT_PENDING'::"InvestmentStatus",
+                "paymentPendingAt" = COALESCE("paymentPendingAt", \$1::timestamp), "updatedAt" = \$1::timestamp
+            WHERE "id" = \$2
+          ''',
+      [nowStr, parentId],
+    );
+
+    return {'success': true, 'submissionId': ids.first, 'submissionIds': ids};
+  }
+
+  /// Investment er paymentPlan (FULL / INSTALLMENT) — column thakle
+  static Future<void> _setPaymentPlan({required bool group, required String id, required String plan}) async {
+    final table = group ? 'group_investments' : 'investments';
+    final cols = await _columnsOf(table);
+    if (!cols.containsKey('paymentPlan')) return;
+    await executeNeonHttp('UPDATE $table SET "paymentPlan" = \$1 WHERE "id" = \$2', [plan, id]);
+  }
+
+  /// Notun project investment + prothom payment.
+  /// methods: 'BANK', 'CASH', 'CHEQUE' (ek ba ekadhik).
+  /// paymentPlan 'INSTALLMENT' hole payNowBdt (ekhon joto) mot er cheye kom hote pare.
   static Future<Map<String, dynamic>> investWithPayment({
     required String userId,
     required String projectId,
     required double amountBdt,
     required List<String> methods,
+    double? payNowBdt,
+    String paymentPlan = 'FULL',
     double bankAmount = 0,
     double cashAmount = 0,
     double chequeAmount = 0,
@@ -1396,31 +1803,38 @@ class DatabaseService {
     String? bankReceiptUrl,
     String? cashReceiver,
     String? chequeImageUrl,
+    List<String> bankProofUrls = const [],
+    List<String> chequeProofUrls = const [],
+    List<String> cashProofUrls = const [],
+    String? chequeNumber,
+    String? cashReceiptNo,
     /// Cash/cheque hole-o bankAccountId column NOT NULL thakle project er account
     String? defaultBankAccountId,
   }) async {
     if (userId.isEmpty) return {'success': false, 'message': _loginRequiredMsg};
     final m = methods.toSet();
-    if (m.isEmpty) return {'success': false, 'message': 'Please choose a payment method.'};
+    final plan = paymentPlan == 'INSTALLMENT' ? 'INSTALLMENT' : 'FULL';
+    final payNow = plan == 'FULL' ? amountBdt : (payNowBdt ?? amountBdt);
     _lastDbFailure = null;
 
-    // App er check server eo — kichu miss gele investment-i hobe na
-    if (m.contains('BANK') &&
-        ((bankTransactionId ?? '').trim().isEmpty || (bankReceiptUrl ?? '').isEmpty)) {
-      return {'success': false, 'message': 'Bank payment needs the transaction number and receipt image.'};
+    if (payNow <= 0 || (payNow * 100).round() > (amountBdt * 100).round()) {
+      return {'success': false, 'message': 'The amount you pay now must be between 1 and ${_fmtTk(amountBdt)}.'};
     }
-    if (m.contains('CASH') && (cashReceiver ?? '').trim().isEmpty) {
-      return {'success': false, 'message': 'Please select who received the cash.'};
-    }
-    if (m.contains('CHEQUE') && (chequeImageUrl ?? '').isEmpty) {
-      return {'success': false, 'message': 'Please upload the cheque image.'};
-    }
-    final parts = (m.contains('BANK') ? bankAmount : 0) +
-        (m.contains('CASH') ? cashAmount : 0) +
-        (m.contains('CHEQUE') ? chequeAmount : 0);
-    if (m.length > 1 && (parts - amountBdt).abs() > 0.5) {
-      return {'success': false, 'message': 'The split amounts must add up to the total.'};
-    }
+    final problem = _checkPaymentParts(
+      m: m,
+      amountBdt: payNow,
+      bankAmount: bankAmount,
+      cashAmount: cashAmount,
+      chequeAmount: chequeAmount,
+      bankTransactionId: bankTransactionId,
+      bankProofUrls: [...bankProofUrls, if ((bankReceiptUrl ?? '').isNotEmpty) bankReceiptUrl!],
+      cashReceiver: cashReceiver,
+      chequeProofUrls: [...chequeProofUrls, if ((chequeImageUrl ?? '').isNotEmpty) chequeImageUrl!],
+      cashProofUrls: cashProofUrls,
+      chequeNumber: chequeNumber,
+      cashReceiptNo: cashReceiptNo,
+    );
+    if (problem != null) return {'success': false, 'message': problem};
 
     // ধাপ ১: investment (min/max/baki/status — shob createInvestment e check hoy)
     final inv = await createInvestment(userId: userId, projectId: projectId, amountBdt: amountBdt);
@@ -1432,100 +1846,38 @@ class DatabaseService {
       await executeNeonHttp('''
         DELETE FROM investments i USING investor_profiles p
         WHERE i."id" = \$1 AND i."investorProfileId" = p."id" AND p."userId" = \$2
-          AND i."status"::text = 'PENDING'
+          AND i."status"::text IN ('PENDING', 'PAYMENT_PENDING')
+          AND NOT EXISTS (SELECT 1 FROM manual_payment_submissions x WHERE x."investmentId" = i."id")
       ''', [investmentId, userId]);
       return {'success': false, 'message': msg};
     }
 
     try {
-      final metas = await Future.wait([
-        _paymentMethodMeta(),
-        _columnsOf('manual_payment_submissions'),
-      ]);
-      final pm = metas[0] as ({String cast, Set<String> labels});
-      final cols = metas[1] as Map<String, bool>;
-
-      // paymentMethod — DB je value nite pare tar moddhe theke
-      String pick(List<String> candidates, String fallback) {
-        if (pm.labels.isEmpty) return candidates.first;
-        for (final c in candidates) {
-          if (pm.labels.contains(c)) return c;
-        }
-        return pm.labels.contains(fallback) ? fallback : pm.labels.first;
+      await _setPaymentPlan(group: false, id: investmentId, plan: plan);
+      final res = await _insertPaymentParts(
+        group: false,
+        parentId: investmentId,
+        userId: userId,
+        m: m,
+        payNowBdt: payNow,
+        bankAmount: bankAmount,
+        cashAmount: cashAmount,
+        chequeAmount: chequeAmount,
+        bankAccountId: bankAccountId,
+        fallbackBankId: defaultBankAccountId,
+        bankAccountLabel: bankAccountLabel,
+        bankTransactionId: bankTransactionId,
+        bankProofUrls: [...bankProofUrls, if ((bankReceiptUrl ?? '').isNotEmpty) bankReceiptUrl!],
+        cashReceiver: cashReceiver,
+        chequeProofUrls: [...chequeProofUrls, if ((chequeImageUrl ?? '').isNotEmpty) chequeImageUrl!],
+        cashProofUrls: cashProofUrls,
+        chequeNumber: chequeNumber,
+        cashReceiptNo: cashReceiptNo,
+        note: plan == 'INSTALLMENT' ? 'Installment 1 · commitment ${_fmtTk(amountBdt)}' : null,
+      );
+      if (res['success'] != true) {
+        return await undo(res['message']?.toString() ?? 'Could not save your payment details.');
       }
-
-      final String method;
-      if (m.length > 1) {
-        method = pick(['MIXED', 'MULTIPLE', 'OTHER'], m.contains('BANK') ? 'BANK_TRANSFER' : 'CASH');
-      } else if (m.contains('BANK')) {
-        method = pick(['BANK_TRANSFER', 'BANK_DEPOSIT', 'BANK'], 'BANK_TRANSFER');
-      } else if (m.contains('CASH')) {
-        method = pick(['CASH', 'CASH_DEPOSIT', 'CASH_PAYMENT'], 'BANK_TRANSFER');
-      } else {
-        method = pick(['CHEQUE', 'CHECK', 'BANK_CHEQUE'], 'BANK_TRANSFER');
-      }
-
-      // Admin ek nojore shob dekhte pay — notes e pura bhag
-      final lines = <String>[
-        'Payment: ${[if (m.contains('BANK')) 'Bank', if (m.contains('CASH')) 'Cash', if (m.contains('CHEQUE')) 'Cheque'].join(' + ')}'
-            ' — total ${_fmtTk(amountBdt)}',
-        if (m.contains('BANK'))
-          'Bank: ${_fmtTk(m.length > 1 ? bankAmount : amountBdt)}'
-              '${(bankAccountLabel ?? '').isNotEmpty ? ' to $bankAccountLabel' : ''}'
-              ', TRX ${bankTransactionId!.trim()}, receipt: $bankReceiptUrl',
-        if (m.contains('CASH'))
-          'Cash: ${_fmtTk(m.length > 1 ? cashAmount : amountBdt)} handed to ${cashReceiver!.trim()}',
-        if (m.contains('CHEQUE'))
-          'Cheque: ${_fmtTk(m.length > 1 ? chequeAmount : amountBdt)}, image: $chequeImageUrl',
-      ];
-
-      final proofUrl = m.contains('BANK') ? bankReceiptUrl! : (m.contains('CHEQUE') ? chequeImageUrl! : '');
-      final ref = m.contains('BANK')
-          ? bankTransactionId!.trim()
-          : (m.contains('CASH') ? 'CASH - ${cashReceiver!.trim()}' : 'CHEQUE');
-      String? bankId = (m.contains('BANK') && (bankAccountId ?? '').isNotEmpty) ? bankAccountId : null;
-      if (bankId == null && cols['bankAccountId'] == false && (defaultBankAccountId ?? '').isNotEmpty) {
-        bankId = defaultBankAccountId;
-      }
-      final nowStr = _nowIso();
-
-      String? orEmpty(String? v, String col) =>
-          (v == null || v.isEmpty) ? ((cols[col] ?? true) ? null : '') : v;
-
-      final ins = await queryNeonHttp('''
-        INSERT INTO manual_payment_submissions (
-          "id", "investmentId", "submittedBy", "status", "amountBdt",
-          "bankAccountId", "paymentMethod", "transactionRef", "proofFileUrl",
-          "proofMimeType", "notes", "createdAt", "updatedAt"
-        ) VALUES (
-          \$1, \$2, \$3, 'SUBMITTED'::"ManualPaymentStatus", \$4,
-          \$5, \$6${pm.cast}, \$7, \$8,
-          \$9, \$10, \$11, \$11
-        )
-        RETURNING "id"
-      ''', [
-        _generateUuid(),
-        investmentId,
-        userId,
-        amountBdt,
-        bankId,
-        method,
-        ref,
-        orEmpty(proofUrl, 'proofFileUrl'),
-        orEmpty(proofUrl.isEmpty ? '' : 'image/jpeg', 'proofMimeType'),
-        lines.join('\n'),
-        nowStr,
-      ]);
-
-      if (ins.isEmpty) {
-        return await undo('Could not save your payment details. (${_shortDbError()})');
-      }
-
-      await executeNeonHttp('''
-        UPDATE investments
-        SET "status" = 'PAYMENT_PENDING'::"InvestmentStatus", "paymentPendingAt" = \$1, "updatedAt" = \$1
-        WHERE "id" = \$2
-      ''', [nowStr, investmentId]);
 
       // User er notification page e "Pending" (mail worker pathabe)
       await _notifyProjectPending(userId: userId, investmentId: investmentId, amountBdt: amountBdt);
@@ -1540,6 +1892,127 @@ class DatabaseService {
       debugPrint('investWithPayment error: $e');
       return await undo('Could not save your payment details. ($e)');
     }
+  }
+
+  /// Age theke thaka project investment e (baki taka / kisti / reject howa part) payment —
+  /// website er "/dashboard/investments/[id]/pay" er motoi
+  static Future<Map<String, dynamic>> submitProjectPaymentMulti({
+    required String investmentId,
+    required String userId,
+    required double amountBdt,
+    required List<String> methods,
+    double bankAmount = 0,
+    double cashAmount = 0,
+    double chequeAmount = 0,
+    String? bankAccountId,
+    String? bankAccountLabel,
+    String? bankTransactionId,
+    String? bankReceiptUrl,
+    String? cashReceiver,
+    String? chequeImageUrl,
+    List<String> bankProofUrls = const [],
+    List<String> chequeProofUrls = const [],
+    List<String> cashProofUrls = const [],
+    String? chequeNumber,
+    String? cashReceiptNo,
+    String? defaultBankAccountId,
+  }) async {
+    if (userId.isEmpty) return {'success': false, 'message': _loginRequiredMsg};
+    final m = methods.toSet();
+    _lastDbFailure = null;
+    final problem = _checkPaymentParts(
+      m: m,
+      amountBdt: amountBdt,
+      bankAmount: bankAmount,
+      cashAmount: cashAmount,
+      chequeAmount: chequeAmount,
+      bankTransactionId: bankTransactionId,
+      bankProofUrls: [...bankProofUrls, if ((bankReceiptUrl ?? '').isNotEmpty) bankReceiptUrl!],
+      cashReceiver: cashReceiver,
+      chequeProofUrls: [...chequeProofUrls, if ((chequeImageUrl ?? '').isNotEmpty) chequeImageUrl!],
+      cashProofUrls: cashProofUrls,
+      chequeNumber: chequeNumber,
+      cashReceiptNo: cashReceiptNo,
+    );
+    if (problem != null) return {'success': false, 'message': problem};
+
+    try {
+      final prog = await getPaymentProgress(group: false, id: investmentId, userId: userId);
+      if (prog == null) {
+        return {
+          'success': false,
+          'message': _lastConnectionError != null ? _connectionErrorMsg() : 'Investment not found.',
+        };
+      }
+      final pay = _checkPayable(prog, amountBdt);
+      if (pay != null) return {'success': false, 'message': pay};
+
+      final res = await _insertPaymentParts(
+        group: false,
+        parentId: investmentId,
+        userId: userId,
+        m: m,
+        payNowBdt: amountBdt,
+        bankAmount: bankAmount,
+        cashAmount: cashAmount,
+        chequeAmount: chequeAmount,
+        bankAccountId: bankAccountId,
+        fallbackBankId: defaultBankAccountId ?? prog['fallbackBankId']?.toString(),
+        bankAccountLabel: bankAccountLabel,
+        bankTransactionId: bankTransactionId,
+        bankProofUrls: [...bankProofUrls, if ((bankReceiptUrl ?? '').isNotEmpty) bankReceiptUrl!],
+        cashReceiver: cashReceiver,
+        chequeProofUrls: [...chequeProofUrls, if ((chequeImageUrl ?? '').isNotEmpty) chequeImageUrl!],
+        cashProofUrls: cashProofUrls,
+        chequeNumber: chequeNumber,
+        cashReceiptNo: cashReceiptNo,
+        note: prog['plan'] == 'INSTALLMENT' ? 'Installment · commitment ${_fmtTk(_toDouble(prog['total']))}' : null,
+      );
+      if (res['success'] != true) return res;
+
+      try {
+        unawaited(EmailService.sendProjectPaymentSubmitted(res['submissionId'].toString()));
+        unawaited(PushService.showLocal(
+          title: 'Payment Submitted',
+          body: 'Your payment of ${_fmtTk(amountBdt)} has been submitted. It will be checked by admin.',
+          kind: 'PENDING',
+          group: false,
+        ));
+      } catch (_) {}
+
+      return <String, dynamic>{
+        'success': true,
+        'message': 'Payment submitted! It will be checked by admin.',
+      };
+    } catch (e) {
+      debugPrint('submitProjectPaymentMulti error: $e');
+      return {'success': false, 'message': 'Could not save your payment details. Please try again.'};
+    }
+  }
+
+  /// Ekhon koto deya jay — website er "Available to pay now" er niyom
+  static String? _checkPayable(Map<String, dynamic> prog, double amount) {
+    final st = prog['status']?.toString() ?? '';
+    if (st != 'PENDING' && st != 'PAYMENT_PENDING') {
+      return 'This investment is not awaiting payment.';
+    }
+    final outstanding = _toDouble(prog['outstanding']);
+    final outP = (outstanding * 100).round();
+    final amtP = (amount * 100).round();
+    if (outP <= 0) {
+      return 'Payments for the full amount are already under review.';
+    }
+    if (amtP > outP) {
+      return 'Only ${_fmtTk(outstanding)} is left to pay (you entered ${_fmtTk(amount)}).';
+    }
+    // Ekbare (FULL) hole baki puro taka-i, paisa porjonto
+    if (prog['plan'] != 'INSTALLMENT' && amtP != outP) {
+      return 'The amounts must add up to ${_fmtTk(outstanding)} (you entered ${_fmtTk(amount)}).';
+    }
+    // Website: kisti kompokkhe ৳1,000 (baki er cheye kom hole puro baki)
+    final minInst = outstanding < 1000 ? outstanding : 1000.0;
+    if (amount + 0.5 < minInst) return 'An installment must be at least ${_fmtTk(minInst)}.';
+    return null;
   }
 
   // ═════════════════════════════════════════════════════════
@@ -1644,10 +2117,10 @@ class DatabaseService {
   // ═════════════════════════════════════════════════════════
   // PROJECT RETURN RANGE — website er motoi prottek project er nijer
   // returnPctMin–returnPctMax. Na thakle expectedReturnPct. Tao na thakle
-  // platform er sadharon 16–22% (age app e shob jaygay eta hardcode chilo).
+  // 0 — tokhon app "—" dekhay (banano 16–22% ar na).
   // ═════════════════════════════════════════════════════════
-  static const double platformReturnMin = 0.16;
-  static const double platformReturnMax = 0.22;
+  static const double platformReturnMin = 0;
+  static const double platformReturnMax = 0;
 
   static Map<String, double> projectReturnRange(Map<String, dynamic> r) {
     final lo = _normalizePct(r['returnPctMin']);
@@ -1682,8 +2155,20 @@ class DatabaseService {
     // na thakle 0 ba '', page sheta lukabe
     return {
       'id': r['id'].toString(),
+      'slug': r['slug']?.toString() ?? '',
       'title': r['title']?.toString() ?? '',
       'category': r['category']?.toString() ?? '',
+      // Category OTHER hole admin je nam likheche
+      'customCategory': r['customCategory']?.toString() ?? '',
+      'returnType': r['returnType']?.toString() ?? '',
+      'groupName': r['groupName']?.toString() ?? '',
+      'groupSlug': r['groupSlug']?.toString() ?? '',
+      'fundingDeadline': deadline,
+      'createdAt': r['createdAt']?.toString() ?? '',
+      'imageUrls': [
+        for (final img in _parseTextArray(r['imageUrls']))
+          if (_projectImage(img).isNotEmpty) _projectImage(img),
+      ],
       'description': r['description']?.toString() ?? '',
       'fundingGoalBdt': goal,
       'fundedAmountBdt': funded,
@@ -1698,25 +2183,39 @@ class DatabaseService {
       'location': r['location']?.toString() ?? '',
       'hasDeadline': deadline.isNotEmpty,
       'daysLeft': _daysLeft(deadline),
+      'deadlineDays': deadlineDaysDhaka(deadline),
+      'deadlinePassed': deadlinePassed(deadline),
+      // Ekhon invest kora jay: FUNDRAISING + deadline periye jayni + taka baki
+      'acceptingInvestment': (r['status']?.toString() ?? '') == 'FUNDRAISING' &&
+          !deadlinePassed(deadline) &&
+          funded < goal,
       'investorsCount': _toInt(r['investorsCount']),
     };
   }
 
   // Fetch Full Single Project Detail
-  static Future<Map<String, dynamic>> getProjectDetail(String projectIdOrSlug) async {
+  /// Website er /projects/[slug] page er data. [userId] dile oi investor er
+  /// ei project e age kora investment (website er "Investment status") o ane.
+  static Future<Map<String, dynamic>> getProjectDetail(String projectIdOrSlug, {String? userId}) async {
     try {
       final projRes = await queryNeonHttp('''
         SELECT p."id", p."title", p."slug", p."description", p."category"::text AS "category",
+               to_jsonb(p) ->> 'customCategory' AS "customCategory",
                p."status"::text AS "status", p."riskInfo", p."location", p."fundingGoalBdt",
                p."fundingMinBdt", p."fundedAmountBdt", p."minInvestmentBdt", p."maxInvestmentBdt",
                p."expectedReturnPct", p."returnPctMin", p."returnPctMax",
                p."returnType"::text AS "returnType", p."durationDays",
                p."fundingDeadline", p."startDate", p."endDate", p."coverImageUrl",
-               p."imageUrls", bg."name" as "groupName",
-               (SELECT COUNT(DISTINCT i."investorProfileId") FROM investments i WHERE i."projectId" = p."id") as "investorsCount"
+               p."imageUrls", bg."name" as "groupName", bg."slug"::text AS "groupSlug",
+               -- Website er notun field (column na thakle null)
+               to_jsonb(p) ->> 'riskLevel' AS "riskLevel",
+               to_jsonb(p) ->> 'payoutPeriodMonths' AS "payoutPeriodMonths",
+               -- Website er _count.investments ("Investors so far")
+               (SELECT COUNT(*) FROM investments i WHERE i."projectId" = p."id") as "investorsCount"
         FROM projects p
         LEFT JOIN business_groups bg ON p."groupId" = bg."id"
         WHERE (p."id" = \$1 OR p."slug" = \$1)
+          AND p."deletedAt" IS NULL
           AND p."status"::text IN $_publicProjectStatuses
       ''', [projectIdOrSlug]);
 
@@ -1730,15 +2229,18 @@ class DatabaseService {
       final goal = _toDouble(r['fundingGoalBdt'], 1.0);
       final funded = _toDouble(r['fundedAmountBdt']);
 
+      // Website er motoi: cover + baki chobi, shorbochcho 5 ta
       final coverUrl = _projectImage(r['coverImageUrl']);
       final List<String> imageUrls = [if (coverUrl.isNotEmpty) coverUrl];
       for (final img in _parseTextArray(r['imageUrls'])) {
         final formatted = _projectImage(img);
         if (formatted.isNotEmpty && !imageUrls.contains(formatted)) imageUrls.add(formatted);
       }
+      if (imageUrls.length > 5) imageUrls.removeRange(5, imageUrls.length);
 
       final deadlineStr = r['fundingDeadline']?.toString() ?? '';
       final range = projectReturnRange(r);
+      final uid = userId?.trim() ?? '';
 
       final extra = await Future.wait([
         queryNeonHttp('''
@@ -1748,19 +2250,101 @@ class DatabaseService {
           WHERE "projectId" = \$1 AND "isActive" = true
           ORDER BY "createdAt" ASC
         ''', [projectId]),
-        // Ei project er prokashito update (website e admin je gulo dey)
+        // Ei project er prokashito update — website er moto publishedAt diye
         queryNeonHttp('''
-          SELECT u."id", u."title", u."content", u."type"::text AS "type", u."createdAt"
+          SELECT u."id", u."title", u."content", u."type"::text AS "type",
+                 u."publishedAt", u."createdAt"
           FROM project_updates u
           WHERE u."projectId" = \$1 AND u."isPublished" = true
-          ORDER BY u."createdAt" DESC
+          ORDER BY u."publishedAt" DESC NULLS LAST, u."createdAt" DESC
           LIMIT 20
         ''', [projectId]),
+        // Brochure — website er brochure.data.ts: description = "Project brochure"
+        // tag kora PROJECT_DOCUMENT, muche na fela notun ta
+        queryNeonHttp('''
+          SELECT d."id", d."name", d."fileUrl", d."mimeType", d."sizeBytes"
+          FROM documents d
+          WHERE d."entityType"::text = 'PROJECT'
+            AND d."entityId" = \$1
+            AND d."category"::text = 'PROJECT_DOCUMENT'
+            AND d."description" = '$projectBrochureTag'
+            AND d."deletedAt" IS NULL
+          ORDER BY d."createdAt" DESC
+          LIMIT 1
+        ''', [projectId]),
+        // "Project documents" — website e project er public document gulo
+        queryNeonHttp('''
+          SELECT d."id", d."name", d."fileUrl", d."mimeType", d."sizeBytes", d."createdAt"
+          FROM documents d
+          WHERE d."entityId" = \$1
+            AND d."isPublic" = true
+            AND d."deletedAt" IS NULL
+            AND COALESCE(d."description", '') <> '$projectBrochureTag'
+          ORDER BY d."createdAt" DESC
+        ''', [projectId]),
+        // Ei investor er ei project e shesh investment (CANCELLED / REFUNDED chara)
+        if (uid.isNotEmpty)
+          queryNeonHttp('''
+            SELECT i."id", i."status"::text AS "status", i."amountBdt", i."expectedReturnBdt",
+                   i."paymentPlan",
+                   (SELECT COALESCE(SUM(m."amountBdt"), 0) FROM manual_payment_submissions m
+                     WHERE m."investmentId" = i."id" AND m."submittedBy" = \$2
+                       AND m."status"::text = 'APPROVED') AS "approvedBdt",
+                   (SELECT COALESCE(SUM(m."amountBdt"), 0) FROM manual_payment_submissions m
+                     WHERE m."investmentId" = i."id" AND m."submittedBy" = \$2
+                       AND m."status"::text IN ('SUBMITTED', 'UNDER_REVIEW')) AS "pendingBdt",
+                   ls."subStatus", ls."transactionRef", ls."rejectionReason"
+            FROM investments i
+            JOIN investor_profiles ip ON ip."id" = i."investorProfileId"
+            LEFT JOIN LATERAL (
+              SELECT m."status"::text AS "subStatus", m."transactionRef", m."rejectionReason"
+              FROM manual_payment_submissions m
+              WHERE m."investmentId" = i."id" AND m."submittedBy" = \$2
+              ORDER BY m."createdAt" DESC
+              LIMIT 1
+            ) ls ON true
+            WHERE i."projectId" = \$1
+              AND ip."userId" = \$2
+              AND i."status"::text NOT IN ('CANCELLED', 'REFUNDED')
+            ORDER BY i."createdAt" DESC
+            LIMIT 1
+          ''', [projectId, uid])
+        else
+          Future.value(<Map<String, dynamic>>[]),
       ]);
       final bankRes = extra[0];
+      final brochureRes = extra[2];
+      final docsRes = extra[3];
+      final myInvRes = extra[4];
 
       // Tarikh raw (ISO) pathai — page nijer bhashay sajabe; na thakle ''
       String dateOrEmpty(dynamic v) => v?.toString() ?? '';
+
+      Map<String, dynamic> docMap(Map<String, dynamic> d) => <String, dynamic>{
+        'id': d['id'].toString(),
+        'name': d['name']?.toString() ?? '',
+        'fileUrl': d['fileUrl']?.toString() ?? '',
+        'mimeType': d['mimeType']?.toString() ?? '',
+        'sizeBytes': _toInt(d['sizeBytes']),
+      };
+
+      Map<String, dynamic>? myInvestment;
+      if (myInvRes.isNotEmpty) {
+        final m = myInvRes.first;
+        myInvestment = {
+          'id': m['id'].toString(),
+          'status': m['status']?.toString() ?? 'PENDING',
+          'amountBdt': _toDouble(m['amountBdt']),
+          'expectedReturnBdt': _toDouble(m['expectedReturnBdt']),
+          'paymentPlan': m['paymentPlan']?.toString() ?? 'FULL',
+          'approvedBdt': _toDouble(m['approvedBdt']),
+          'pendingBdt': _toDouble(m['pendingBdt']),
+          // Shesh payment proof — na thakle null
+          'lastSubmissionStatus': m['subStatus']?.toString(),
+          'lastTransactionRef': m['transactionRef']?.toString() ?? '',
+          'lastRejectionReason': m['rejectionReason']?.toString() ?? '',
+        };
+      }
 
       return {
         'id': projectId,
@@ -1768,8 +2352,12 @@ class DatabaseService {
         'slug': r['slug']?.toString() ?? '',
         'description': r['description']?.toString() ?? '',
         'category': r['category']?.toString() ?? '',
+        'customCategory': r['customCategory']?.toString() ?? '',
         'status': r['status']?.toString() ?? '',
         'riskInfo': r['riskInfo']?.toString() ?? '',
+        'riskLevel': (r['riskLevel']?.toString() ?? '').toUpperCase(),
+        // 1 / 3 / 6 / 9 mash por por lav; 0 = meyad sheshe ekbare
+        'payoutPeriodMonths': _toInt(r['payoutPeriodMonths']),
         'location': r['location']?.toString() ?? '',
         'fundingGoalBdt': goal,
         'fundingMinBdt': _toDouble(r['fundingMinBdt']),
@@ -1790,16 +2378,30 @@ class DatabaseService {
           'title': u['title']?.toString() ?? '',
           'content': u['content']?.toString() ?? '',
           'type': u['type']?.toString() ?? '',
+          'publishedAt': u['publishedAt']?.toString() ?? '',
           'createdAt': u['createdAt']?.toString() ?? '',
         }).toList(),
         'coverImageUrl': coverUrl,
         'imageUrls': imageUrls,
         'groupName': r['groupName']?.toString() ?? '',
+        'groupSlug': r['groupSlug']?.toString() ?? '',
         'investorsCount': _toInt(r['investorsCount']),
         'remainingBdt': (goal - funded).clamp(0.0, double.infinity).toDouble(),
         'progress': goal > 0 ? (funded / goal).clamp(0.0, 1.0).toDouble() : 0.0,
         'daysLeft': _daysLeft(deadlineStr),
+        'deadlineDays': deadlineDaysDhaka(deadlineStr),
+        'deadlinePassed': deadlinePassed(deadlineStr),
+        // Website er investment.service: shudhu FUNDRAISING, deadline er din
+        // shesh hoyni, ar taka baki
+        'acceptingInvestment': (r['status']?.toString() ?? '') == 'FUNDRAISING' &&
+            !deadlinePassed(deadlineStr) &&
+            funded < goal,
         'bankAccounts': bankRes.map(_mapProjectBank).toList(),
+        // Brochure na thakle null — page e card dekhabe na
+        'brochure': brochureRes.isEmpty ? null : docMap(brochureRes.first),
+        'documents': docsRes.map(docMap).toList(),
+        // Investor er ei project e investment — na thakle null
+        'myInvestment': myInvestment,
       };
     } catch (e) {
       debugPrint("Get Project Detail Error: $e");
@@ -1807,26 +2409,160 @@ class DatabaseService {
     }
   }
 
+  // ═════════════════════════════════════════════════════════
+  // WEBSITE DOCUMENT DOWNLOAD
+  // Website document (brochure, deed ityadi) Cloudinary te "authenticated" —
+  // fileUrl ashole storage key, sorasori link na. Website er
+  // /api/documents/[id]/download login cookie (bc_session) chay, tai app
+  // website er sessions table e nijer ekta session rakhe ar oi cookie pathay.
+  // Website tokhon nijei permission check kore, signed link baniye file dey.
+  // ═════════════════════════════════════════════════════════
+  static const String projectBrochureTag = 'Project brochure';
+  static const String _websiteApiBase = 'https://www.biniyogclub.com';
+  static const String _appSessionAgent = 'BiniyogClub App';
+  static String? _webSessionToken;
+  static String? _webSessionUserId;
+
+  static String _secureToken() {
+    final rnd = Random.secure();
+    return List<int>.generate(32, (_) => rnd.nextInt(256))
+        .map((b) => b.toRadixString(16).padLeft(2, '0'))
+        .join();
+  }
+
+  /// Website er moto 64 hex token er session — ager ta (1 ghontar beshi
+  /// meyad baki) thakle oita-i, na hole notun (7 din)
+  static Future<String?> _websiteSession(String userId, {bool forceNew = false}) async {
+    if (!forceNew && _webSessionToken != null && _webSessionUserId == userId) return _webSessionToken;
+    if (!forceNew) {
+      final rows = await queryNeonHttp('''
+        SELECT "token" FROM sessions
+        WHERE "userId" = \$1 AND "userAgent" = \$2
+          AND "expiresAt" > NOW() + INTERVAL '1 hour'
+        ORDER BY "expiresAt" DESC
+        LIMIT 1
+      ''', [userId, _appSessionAgent]);
+      if (rows.isNotEmpty) {
+        _webSessionToken = rows.first['token']?.toString();
+        _webSessionUserId = userId;
+        return _webSessionToken;
+      }
+    }
+    final token = _secureToken();
+    final ok = await executeNeonHttp('''
+      INSERT INTO sessions ("id", "userId", "token", "userAgent", "expiresAt", "createdAt")
+      VALUES (\$1, \$2, \$3, \$4, NOW() + INTERVAL '7 days', NOW())
+    ''', [_generateUuid(), userId, token, _appSessionAgent]);
+    if (!ok) return null;
+    _webSessionToken = token;
+    _webSessionUserId = userId;
+    return token;
+  }
+
+  /// Logout er shomoy dakle app er website session muche jay (optional)
+  static Future<void> clearWebsiteSession(String userId) async {
+    _webSessionToken = null;
+    _webSessionUserId = null;
+    if (userId.isEmpty) return;
+    await executeNeonHttp('''
+      DELETE FROM sessions WHERE "userId" = \$1 AND "userAgent" = \$2
+    ''', [userId, _appSessionAgent]);
+  }
+
+  /// Content-Disposition theke file er nam (UTF-8 nam age)
+  static String? _fileNameFromDisposition(String? header) {
+    if (header == null || header.isEmpty) return null;
+    final star = RegExp(r"filename\*=UTF-8''([^;]+)", caseSensitive: false).firstMatch(header);
+    if (star != null) {
+      try {
+        return Uri.decodeComponent(star.group(1)!.trim());
+      } catch (_) {}
+    }
+    final plain = RegExp(r'filename="?([^";]+)"?', caseSensitive: false).firstMatch(header);
+    return plain?.group(1)?.trim();
+  }
+
+  /// Website theke document download — login thaka investor er jonno.
+  /// Shofol hole bytes, file er nam ar mime; na hole null + [lastDownloadError]
+  static String? lastDownloadError;
+
+  static Future<({Uint8List bytes, String fileName, String mimeType})?> downloadWebsiteDocument({
+    required String userId,
+    required String documentId,
+  }) async {
+    lastDownloadError = null;
+    if (userId.isEmpty) {
+      lastDownloadError = _loginRequiredMsg;
+      return null;
+    }
+    for (int attempt = 1; attempt <= 2; attempt++) {
+      final token = await _websiteSession(userId, forceNew: attempt == 2);
+      if (token == null) {
+        lastDownloadError = 'Could not connect. Please check your internet.';
+        return null;
+      }
+      try {
+        final res = await _httpClient.get(
+          Uri.parse('$_websiteApiBase/api/documents/$documentId/download'),
+          headers: {'Cookie': 'bc_session=$token'},
+        ).timeout(const Duration(seconds: 45));
+
+        if (res.statusCode == 200 && res.bodyBytes.isNotEmpty) {
+          final mime = (res.headers['content-type'] ?? 'application/octet-stream').split(';').first.trim();
+          final name = _fileNameFromDisposition(res.headers['content-disposition']) ?? 'document';
+          return (bytes: res.bodyBytes, fileName: name, mimeType: mime);
+        }
+        // Session meyad shesh / muche gele ekbar notun session diye abar
+        if (res.statusCode == 401 && attempt == 1) {
+          _webSessionToken = null;
+          continue;
+        }
+        debugPrint('Website document download ${res.statusCode}: ${res.body}');
+        lastDownloadError = res.statusCode == 404
+            ? 'This file is no longer available.'
+            : res.statusCode == 403
+            ? 'You do not have access to this file.'
+            : 'Download failed. Please try again.';
+        return null;
+      } catch (e) {
+        debugPrint('Website document download error: $e');
+        lastDownloadError = 'Download failed. Check your internet.';
+        return null;
+      }
+    }
+    lastDownloadError = 'Download failed. Please try again.';
+    return null;
+  }
+
   // Fetch Projects Data
+  /// Website er /projects page er moto: muche fela (deletedAt) project bad,
+  /// notun project age (website er "Newest"). Sort / search / category page
+  /// nije kore — website er moto.
   static Future<Map<String, dynamic>> getProjectsData() async {
     try {
       final results = await Future.wait([
         queryNeonHttp('''
-          SELECT p."id", p."title", p."category"::text AS "category", p."description", p."fundingGoalBdt",
+          SELECT p."id", p."slug", p."title", p."category"::text AS "category",
+                 to_jsonb(p) ->> 'customCategory' AS "customCategory",
+                 p."description", p."fundingGoalBdt",
                  p."fundedAmountBdt", p."minInvestmentBdt", p."expectedReturnPct",
-                 p."returnPctMin", p."returnPctMax", p."durationDays",
-                 p."coverImageUrl", p."status"::text AS "status", p."location", p."fundingDeadline",
-                 (SELECT COUNT(DISTINCT i."investorProfileId") FROM investments i WHERE i."projectId" = p."id") as "investorsCount"
+                 p."returnPctMin", p."returnPctMax", p."returnType"::text AS "returnType", p."durationDays",
+                 p."coverImageUrl", p."imageUrls", p."status"::text AS "status", p."location", p."fundingDeadline",
+                 p."createdAt", bg."name" AS "groupName", bg."slug"::text AS "groupSlug",
+                 -- Website er _count.investments: oi project er shob investment
+                 (SELECT COUNT(*) FROM investments i WHERE i."projectId" = p."id") AS "investorsCount"
           FROM projects p
-          WHERE p."status"::text IN $_publicProjectStatuses
-          ORDER BY (p."status"::text = 'FUNDRAISING') DESC, p."createdAt" DESC
+          LEFT JOIN business_groups bg ON bg."id" = p."groupId"
+          WHERE p."deletedAt" IS NULL
+            AND p."status"::text IN $_publicProjectStatuses
+          ORDER BY p."createdAt" DESC
         '''),
         queryNeonHttp('''
           SELECT u."id", u."title", u."content", u."type"::text AS "type", u."createdAt", p."title" as "projectTitle"
           FROM project_updates u
           JOIN projects p ON u."projectId" = p."id"
-          WHERE u."isPublished" = true
-          ORDER BY u."createdAt" DESC
+          WHERE u."isPublished" = true AND p."deletedAt" IS NULL
+          ORDER BY COALESCE(u."publishedAt", u."createdAt") DESC
           LIMIT 10
         '''),
       ]);
@@ -1877,6 +2613,26 @@ class DatabaseService {
           SELECT COUNT(*) AS "n" FROM users
           WHERE "role"::text = 'INVESTOR' AND "deletedAt" IS NULL AND "status"::text = 'ACTIVE'
         '''),
+        // Landing page er shotti hishab — kono banano shonkha na
+        queryNeonHttp('''
+          SELECT COUNT(*) AS "projects",
+                 COUNT(*) FILTER (WHERE p."status"::text = 'COMPLETED') AS "completed",
+                 COALESCE(SUM(p."fundedAmountBdt"), 0) AS "funded"
+          FROM projects p
+          WHERE p."deletedAt" IS NULL AND p."status"::text IN $_publicProjectStatuses
+        '''),
+        // Website er "Latest updates" — published project update (shesh 3 ta)
+        queryNeonHttp('''
+          SELECT u."id", u."title", u."content", u."type"::text AS "type",
+                 COALESCE(u."publishedAt", u."createdAt") AS "publishedAt",
+                 p."id" AS "projectId", p."title" AS "projectTitle", p."coverImageUrl"
+          FROM project_updates u
+          JOIN projects p ON p."id" = u."projectId"
+          WHERE u."isPublished" = true AND p."deletedAt" IS NULL
+            AND p."status"::text IN $_publicProjectStatuses
+          ORDER BY COALESCE(u."publishedAt", u."createdAt") DESC
+          LIMIT 3
+        '''),
       ]);
 
       final projects = results[0].map((r) {
@@ -1888,13 +2644,40 @@ class DatabaseService {
         };
       }).toList();
 
+      final st = results[2].isEmpty ? <String, dynamic>{} : results[2].first;
+      final updates = results[3]
+          .map((r) => <String, dynamic>{
+        'id': r['id'].toString(),
+        'title': r['title']?.toString() ?? '',
+        'content': r['content']?.toString() ?? '',
+        'type': r['type']?.toString() ?? 'GENERAL',
+        'publishedAt': r['publishedAt']?.toString() ?? '',
+        'projectId': r['projectId']?.toString() ?? '',
+        'projectTitle': r['projectTitle']?.toString() ?? '',
+        'coverImageUrl': _projectImage(r['coverImageUrl']),
+      })
+          .toList();
+
       return {
+        'ok': results[0].isNotEmpty || _lastConnectionError == null,
         'projects': projects,
         'totalInvestors': results[1].isEmpty ? 0 : _toInt(results[1].first['n']),
+        'totalProjects': _toInt(st['projects']),
+        'completedProjects': _toInt(st['completed']),
+        'totalFundedBdt': _toDouble(st['funded']),
+        'updates': updates,
       };
     } catch (e) {
       debugPrint("Get Landing Data Error: $e");
-      return {'projects': <Map<String, dynamic>>[], 'totalInvestors': 0};
+      return {
+        'ok': false,
+        'projects': <Map<String, dynamic>>[],
+        'totalInvestors': 0,
+        'totalProjects': 0,
+        'completedProjects': 0,
+        'totalFundedBdt': 0.0,
+        'updates': <Map<String, dynamic>>[],
+      };
     }
   }
 
@@ -1942,11 +2725,12 @@ class DatabaseService {
     if (userId.isEmpty) return {'success': false, 'message': _loginRequiredMsg};
     try {
       final cleanName = name.trim();
-      final cleanPhone = normalizeBdPhone(phone.trim());
+      final cleanPhone = canonicalPhone(phone);
+      final pv = phoneVariants(cleanPhone);
       final cleanEmail = (email ?? '').trim().toLowerCase();
-      if (cleanName.length < 3) return {'success': false, 'message': 'Please enter your full name.'};
-      if (!RegExp(r'^01[3-9]\d{8}$').hasMatch(cleanPhone)) {
-        return {'success': false, 'message': 'Please enter a valid mobile number (01XXXXXXXXX).'};
+      if (cleanName.length < 2) return {'success': false, 'message': 'Please enter your full name.'};
+      if (!isValidPhone(cleanPhone)) {
+        return {'success': false, 'message': 'Please enter a valid mobile number with country code.'};
       }
 
       final vals = <String, String?>{
@@ -1964,11 +2748,11 @@ class DatabaseService {
       // Onno karo sathe mile jay kina
       final dup = await queryNeonHttp('''
         SELECT
-          (SELECT 1 FROM users WHERE "id" <> \$1 AND "phone" = \$2 LIMIT 1) AS "phoneTaken",
+          (SELECT 1 FROM users WHERE "id" <> \$1 AND "phone" IN (\$2, \$5, \$6) LIMIT 1) AS "phoneTaken",
           (SELECT 1 FROM users WHERE "id" <> \$1 AND \$3::text IS NOT NULL AND LOWER("email") = LOWER(\$3::text) LIMIT 1) AS "emailTaken",
           (SELECT 1 FROM investor_profiles WHERE "userId" <> \$1 AND \$4::text IS NOT NULL AND "nationalId" = \$4::text LIMIT 1) AS "nidTaken",
           (SELECT "email" FROM users WHERE "id" = \$1) AS "oldEmail"
-      ''', [userId, cleanPhone, cleanEmail.isEmpty ? null : cleanEmail, nid]);
+      ''', [userId, cleanPhone, cleanEmail.isEmpty ? null : cleanEmail, nid, pv[1], pv[2]]);
       if (dup.isEmpty) return {'success': false, 'message': _connectionErrorMsg()};
       final d = dup.first;
       if (d['phoneTaken'] != null) {
@@ -2129,20 +2913,41 @@ class DatabaseService {
           SELECT
             (SELECT "avatarUrl" FROM users WHERE "id" = \$1) as avatar_url,
             (SELECT COUNT(*) FROM notifications WHERE "userId" = \$1 AND "isRead" = false) as unread_notif_count,
+            -- Website: activeCount = shudhu ACTIVE
             (SELECT COUNT(*) FROM investments i JOIN investor_profiles p ON i."investorProfileId" = p."id"
-             WHERE p."userId" = \$1 AND i."status"::text IN ('ACTIVE', 'MATURED', 'COMPLETED')) as active_inv_count,
+             WHERE p."userId" = \$1 AND i."status"::text = 'ACTIVE') as active_inv_count,
+            (SELECT COUNT(*) FROM investments i JOIN investor_profiles p ON i."investorProfileId" = p."id"
+             WHERE p."userId" = \$1 AND i."status"::text IN ('ACTIVE', 'MATURED', 'COMPLETED')) as live_inv_count,
+            -- Website: kisti cholche (PAYMENT_PENDING) emon investment e finance je taka APPROVED korechhe
+            (SELECT COALESCE(SUM(m."amountBdt"), 0) FROM manual_payment_submissions m
+             JOIN investments i ON i."id" = m."investmentId"
+             JOIN investor_profiles p ON i."investorProfileId" = p."id"
+             WHERE p."userId" = \$1 AND i."status"::text = 'PAYMENT_PENDING' AND m."status"::text = 'APPROVED') as proj_verified_partial,
+            (SELECT COALESCE(SUM(m."amountBdt"), 0) FROM manual_payment_submissions m
+             JOIN investments i ON i."id" = m."investmentId"
+             JOIN investor_profiles p ON i."investorProfileId" = p."id"
+             WHERE p."userId" = \$1 AND i."status"::text = 'PAYMENT_PENDING' AND m."status"::text IN ('SUBMITTED', 'UNDER_REVIEW')) as proj_under_review,
+            (SELECT COALESCE(SUM(i."amountBdt"), 0) FROM investments i JOIN investor_profiles p ON i."investorProfileId" = p."id"
+             WHERE p."userId" = \$1 AND i."status"::text = 'PAYMENT_PENDING') as proj_unpaid_committed,
+            (SELECT COALESCE(SUM(x."amountBdt"), 0) FROM group_investment_payments x
+             JOIN group_investments gi ON gi."id" = x."groupInvestmentId"
+             WHERE gi."investorUserId" = \$1 AND gi."status"::text = 'PAYMENT_PENDING' AND x."status"::text = 'APPROVED') as grp_verified_partial,
+            (SELECT COALESCE(SUM(x."amountBdt"), 0) FROM group_investment_payments x
+             JOIN group_investments gi ON gi."id" = x."groupInvestmentId"
+             WHERE gi."investorUserId" = \$1 AND gi."status"::text = 'PAYMENT_PENDING' AND x."status"::text IN ('SUBMITTED', 'UNDER_REVIEW')) as grp_under_review,
+            (SELECT COALESCE(SUM(gi."amountBdt"), 0) FROM group_investments gi
+             WHERE gi."investorUserId" = \$1 AND gi."status"::text = 'PAYMENT_PENDING') as grp_unpaid_committed,
             (SELECT COALESCE(SUM(i."amountBdt"), 0) FROM investments i JOIN investor_profiles p ON i."investorProfileId" = p."id"
              WHERE p."userId" = \$1 AND i."status"::text IN ('ACTIVE', 'MATURED', 'COMPLETED')) as total_invested_amt,
+            -- Payment baki / jachai cholche: PENDING ba PAYMENT_PENDING obosthay thaka sob investment
             (SELECT COUNT(*) FROM investments i JOIN investor_profiles p ON i."investorProfileId" = p."id"
-             WHERE p."userId" = \$1 AND i."status"::text IN ('PENDING', 'PAYMENT_PENDING')
-             AND NOT EXISTS (SELECT 1 FROM manual_payment_submissions m WHERE m."investmentId" = i."id" AND m."status"::text IN ('REJECTED', 'APPROVED'))) as pending_tx_count,
+             WHERE p."userId" = \$1 AND i."status"::text IN ('PENDING', 'PAYMENT_PENDING')) as pending_tx_count,
             (SELECT COALESCE(SUM(i."amountBdt"), 0) FROM investments i JOIN investor_profiles p ON i."investorProfileId" = p."id"
-             WHERE p."userId" = \$1 AND i."status"::text IN ('PENDING', 'PAYMENT_PENDING')
-             AND NOT EXISTS (SELECT 1 FROM manual_payment_submissions m WHERE m."investmentId" = i."id" AND m."status"::text IN ('REJECTED', 'APPROVED'))) as pending_inv_amt,
+             WHERE p."userId" = \$1 AND i."status"::text IN ('PENDING', 'PAYMENT_PENDING')) as pending_inv_amt,
             (SELECT COALESCE(SUM(gi."amountBdt"), 0) FROM group_investments gi
              WHERE gi."investorUserId" = \$1 AND gi."status"::text IN ('ACTIVE', 'COMPLETED')) as group_invested_amt,
             (SELECT COUNT(*) FROM group_investments gi
-             WHERE gi."investorUserId" = \$1 AND gi."status"::text IN ('ACTIVE', 'COMPLETED')) as active_group_count,
+             WHERE gi."investorUserId" = \$1 AND gi."status"::text = 'ACTIVE') as active_group_count,
             (SELECT COUNT(*) FROM group_investments gi
              WHERE gi."investorUserId" = \$1 AND gi."status"::text IN ('PENDING', 'PAYMENT_PENDING')) as pending_group_count,
             (SELECT COALESCE(SUM(gi."amountBdt"), 0) FROM group_investments gi
@@ -2162,19 +2967,31 @@ class DatabaseService {
                  (SELECT COUNT(DISTINCT i."investorProfileId") FROM investments i WHERE i."projectId" = p."id") as "investorsCount"
           FROM projects p
           WHERE p."status"::text = 'FUNDRAISING'
+            AND p."deletedAt" IS NULL
+            AND $_deadlineOpenSql
           ORDER BY p."createdAt" DESC
-          LIMIT 5;
+          LIMIT 6;
         '''),
 
-        // 3. Recent investments
+        // 3. Recent investments — project ar group duitai, notun theke purono
         queryNeonHttp('''
-          SELECT i."id", pr."title", i."amountBdt", i."expectedReturnBdt", i."status"::text AS "status", i."createdAt"
-          FROM investments i
-          JOIN investor_profiles p ON i."investorProfileId" = p."id"
-          JOIN projects pr ON i."projectId" = pr."id"
-          WHERE p."userId" = \$1
-          ORDER BY i."createdAt" DESC
-          LIMIT 5;
+          SELECT * FROM (
+            SELECT i."id", pr."title" AS "title", NULL::text AS "subtitle", i."amountBdt",
+                   i."status"::text AS "status", i."createdAt", 'PROJECT' AS "kind"
+            FROM investments i
+            JOIN investor_profiles p ON i."investorProfileId" = p."id"
+            JOIN projects pr ON i."projectId" = pr."id"
+            WHERE p."userId" = \$1
+            UNION ALL
+            SELECT gi."id", ge."name" AS "title", gt."name" AS "subtitle", gi."amountBdt",
+                   gi."status"::text AS "status", gi."createdAt", 'GROUP' AS "kind"
+            FROM group_investments gi
+            JOIN group_tiers gt    ON gt."id" = gi."tierId"
+            JOIN group_entities ge ON ge."id" = gt."entityId"
+            WHERE gi."investorUserId" = \$1
+          ) x
+          ORDER BY x."createdAt" DESC
+          LIMIT 8;
         ''', [activeUserId]),
       ]);
 
@@ -2191,6 +3008,10 @@ class DatabaseService {
       double pendingProjAmt = 0.0;
       double pendingGroupAmt = 0.0;
       double totalReturns = 0.0;
+      int liveProjCount = 0;
+      double verifiedPartial = 0.0;
+      double underReview = 0.0;
+      double unpaidCommitted = 0.0;
 
       if (userStatsRes.isNotEmpty) {
         final row = userStatsRes.first;
@@ -2206,15 +3027,21 @@ class DatabaseService {
         pendingProjAmt = _toDouble(row['pending_inv_amt']);
         pendingGroupAmt = _toDouble(row['pending_group_amt']);
         totalReturns = _toDouble(row['total_returns_amt']);
+        liveProjCount = _toInt(row['live_inv_count']);
+        verifiedPartial = _toDouble(row['proj_verified_partial']) + _toDouble(row['grp_verified_partial']);
+        underReview = _toDouble(row['proj_under_review']) + _toDouble(row['grp_under_review']);
+        unpaidCommitted = _toDouble(row['proj_unpaid_committed']) + _toDouble(row['grp_unpaid_committed']);
       }
+      final fullyPaid = projectInvested + groupInvested;
 
       final recentInvestments = results[2].map((row) {
-        return {
+        return <String, dynamic>{
           'id': row['id'].toString(),
-          'title': row['title']?.toString() ?? 'Investment',
+          'title': row['title']?.toString() ?? '',
+          'subtitle': row['subtitle']?.toString() ?? '',
+          'kind': row['kind']?.toString() ?? 'PROJECT',
           'amountBdt': _toDouble(row['amountBdt']),
-          'expectedReturnBdt': _toDouble(row['expectedReturnBdt']),
-          'status': row['status']?.toString() ?? 'PENDING',
+          'status': row['status']?.toString() ?? '',
           'createdAt': row['createdAt']?.toString() ?? '',
         };
       }).toList();
@@ -2222,7 +3049,14 @@ class DatabaseService {
       return {
         'avatarUrl': avatarUrl,
         'unreadNotificationCount': unreadNotifCount,
-        'totalInvested': projectInvested + groupInvested,
+        // Website: totalInvested = puro taka verify howa + kistir APPROVED ongsho
+        'totalInvested': fullyPaid + verifiedPartial,
+        'fullyPaidInvested': fullyPaid,
+        'verifiedPartial': verifiedPartial,
+        'underReview': underReview,
+        'outstanding': max(0.0, unpaidCommitted - verifiedPartial - underReview),
+        'committedTotal': fullyPaid + unpaidCommitted,
+        'investmentCount': liveProjCount,
         'projectInvested': projectInvested,
         'groupInvested': groupInvested,
         'activeInvestmentsCount': activeProjCount + activeGroupCount,
@@ -2232,9 +3066,174 @@ class DatabaseService {
         'totalReturns': totalReturns,
         'openProjects': results[1].map(_mapProjectCard).toList(),
         'recentInvestments': recentInvestments,
+        'ok': true,
       };
     } catch (e) {
       debugPrint("Get Dashboard Summary Error: $e");
+      return {};
+    }
+  }
+
+  /// Ekta query fail korleo baki dashboard dekhabe — shudhu oi section khali thakbe
+  static Future<List<Map<String, dynamic>>> _safeQuery(String sql, List<dynamic> params) async {
+    try {
+      return await queryNeonHttp(sql, params);
+    } catch (e) {
+      debugPrint('Dashboard extra query failed: $e');
+      return [];
+    }
+  }
+
+  /// Website dashboard er baki sob section er data:
+  /// - investments: user er sob project + group investment (amount, status,
+  ///   approved / under review payment, category, tarikh) — chart, payment
+  ///   progress, fully paid, committed sob ekhan theke hishab hoy
+  /// - distributions: shesh 13 masher profit (netAmountBdt, distributedAt)
+  /// - groupRecent: group investment (group slug / nam / entity / tier)
+  /// - updates: user je project e invest koreche tar published update
+  /// - documents: confirmed investment er receipt / deed number
+  static Future<Map<String, dynamic>> getDashboardExtras(String userId, {String? email}) async {
+    try {
+      final uid = await _resolveUserId(userId, email);
+      if (uid.isEmpty) return {};
+
+      final r = await Future.wait([
+        _safeQuery('''
+          SELECT 'PROJECT' AS "kind", i."id", i."amountBdt", i."status"::text AS "status",
+                 i."createdAt", pr."category"::text AS "category",
+                 COALESCE((SELECT SUM(m."amountBdt") FROM manual_payment_submissions m
+                           WHERE m."investmentId" = i."id" AND m."status"::text = 'APPROVED'), 0) AS "approved",
+                 COALESCE((SELECT SUM(m."amountBdt") FROM manual_payment_submissions m
+                           WHERE m."investmentId" = i."id" AND m."status"::text IN ('SUBMITTED', 'UNDER_REVIEW')), 0) AS "review"
+          FROM investments i
+          JOIN investor_profiles p ON i."investorProfileId" = p."id"
+          JOIN projects pr ON pr."id" = i."projectId"
+          WHERE p."userId" = \$1
+          UNION ALL
+          SELECT 'GROUP' AS "kind", gi."id", gi."amountBdt", gi."status"::text AS "status",
+                 gi."createdAt", NULL::text AS "category",
+                 COALESCE((SELECT SUM(g."amountBdt") FROM group_investment_payments g
+                           WHERE g."groupInvestmentId" = gi."id" AND g."status"::text = 'APPROVED'), 0) AS "approved",
+                 COALESCE((SELECT SUM(g."amountBdt") FROM group_investment_payments g
+                           WHERE g."groupInvestmentId" = gi."id" AND g."status"::text IN ('SUBMITTED', 'UNDER_REVIEW')), 0) AS "review"
+          FROM group_investments gi
+          WHERE gi."investorUserId" = \$1
+        ''', [uid]),
+        _safeQuery('''
+          SELECT d."distributedAt", d."netAmountBdt"
+          FROM profit_distributions d
+          JOIN investments i ON d."investmentId" = i."id"
+          JOIN investor_profiles p ON i."investorProfileId" = p."id"
+          WHERE p."userId" = \$1 AND d."distributedAt" >= NOW() - INTERVAL '13 months'
+        ''', [uid]),
+        _safeQuery('''
+          SELECT gi."id", bg."slug"::text AS "slug", bg."name" AS "groupName",
+                 ge."name" AS "entityName", gt."name" AS "tierName",
+                 gi."amountBdt", gi."status"::text AS "status", gi."createdAt"
+          FROM group_investments gi
+          JOIN group_tiers gt     ON gt."id" = gi."tierId"
+          JOIN group_entities ge  ON ge."id" = gt."entityId"
+          JOIN business_groups bg ON bg."id" = ge."groupId"
+          WHERE gi."investorUserId" = \$1
+          ORDER BY gi."createdAt" DESC
+          LIMIT 5
+        ''', [uid]),
+        _safeQuery('''
+          SELECT u."id", u."title", u."type"::text AS "type",
+                 COALESCE(u."publishedAt", u."createdAt") AS "at",
+                 pr."id" AS "projectId", pr."title" AS "projectTitle"
+          FROM project_updates u
+          JOIN projects pr ON pr."id" = u."projectId"
+          WHERE u."isPublished" = true
+            AND u."projectId" IN (
+              SELECT i."projectId" FROM investments i
+              JOIN investor_profiles p ON i."investorProfileId" = p."id"
+              WHERE p."userId" = \$1)
+          ORDER BY COALESCE(u."publishedAt", u."createdAt") DESC
+          LIMIT 4
+        ''', [uid]),
+        _safeQuery('''
+          SELECT i."id", pr."title", i."amountBdt", i."receiptNumber", c."deedNumber"
+          FROM investments i
+          JOIN investor_profiles p ON i."investorProfileId" = p."id"
+          JOIN projects pr ON pr."id" = i."projectId"
+          LEFT JOIN investment_contracts c ON c."investmentId" = i."id"
+          WHERE p."userId" = \$1 AND i."status"::text IN ('ACTIVE', 'MATURED', 'COMPLETED')
+          ORDER BY i."confirmedAt" DESC NULLS LAST, i."createdAt" DESC
+          LIMIT 5
+        ''', [uid]),
+        // Prestige — website er prestige.data.ts er hubohu:
+        // Star    = confirmed (ACTIVE/MATURED/COMPLETED) investment ache emon protiti project
+        // Diamond = ACTIVE, directorship na emon group investment ache emon protiti business group (max 6)
+        // Crown   = ACTIVE directorship ache emon protiti company (group entity)
+        _safeQuery('''
+          SELECT
+            (SELECT COUNT(DISTINCT i."projectId") FROM investments i
+             JOIN investor_profiles p ON i."investorProfileId" = p."id"
+             WHERE p."userId" = \$1 AND i."status"::text IN ('ACTIVE', 'MATURED', 'COMPLETED')) AS "stars",
+            (SELECT COUNT(DISTINCT ge."groupId") FROM group_investments gi
+             JOIN group_tiers gt    ON gt."id" = gi."tierId"
+             JOIN group_entities ge ON ge."id" = gt."entityId"
+             WHERE gi."investorUserId" = \$1 AND gi."status"::text = 'ACTIVE'
+               AND gt."type"::text <> 'DIRECTORSHIP') AS "diamonds",
+            (SELECT COUNT(DISTINCT gt."entityId") FROM group_investments gi
+             JOIN group_tiers gt ON gt."id" = gi."tierId"
+             WHERE gi."investorUserId" = \$1 AND gi."status"::text = 'ACTIVE'
+               AND gt."type"::text = 'DIRECTORSHIP') AS "crowns"
+        ''', [uid]),
+      ]);
+
+      return {
+        'investments': r[0].map((x) => <String, dynamic>{
+          'kind': x['kind']?.toString() ?? 'PROJECT',
+          'id': x['id'].toString(),
+          'amount': _toDouble(x['amountBdt']),
+          'status': x['status']?.toString() ?? '',
+          'createdAt': x['createdAt']?.toString() ?? '',
+          'category': x['category']?.toString() ?? '',
+          'approved': _toDouble(x['approved']),
+          'review': _toDouble(x['review']),
+        }).toList(),
+        'distributions': r[1].map((x) => <String, dynamic>{
+          'at': x['distributedAt']?.toString() ?? '',
+          'amount': _toDouble(x['netAmountBdt']),
+        }).toList(),
+        'groupRecent': r[2].map((x) => <String, dynamic>{
+          'id': x['id'].toString(),
+          'slug': x['slug']?.toString() ?? '',
+          'groupName': x['groupName']?.toString() ?? '',
+          'entityName': x['entityName']?.toString() ?? '',
+          'tierName': x['tierName']?.toString() ?? '',
+          'amount': _toDouble(x['amountBdt']),
+          'status': x['status']?.toString() ?? '',
+          'createdAt': x['createdAt']?.toString() ?? '',
+        }).toList(),
+        'updates': r[3].map((x) => <String, dynamic>{
+          'id': x['id'].toString(),
+          'title': x['title']?.toString() ?? '',
+          'type': x['type']?.toString() ?? '',
+          'at': x['at']?.toString() ?? '',
+          'projectId': x['projectId']?.toString() ?? '',
+          'projectTitle': x['projectTitle']?.toString() ?? '',
+        }).toList(),
+        'documents': r[4].map((x) => <String, dynamic>{
+          'id': x['id'].toString(),
+          'title': x['title']?.toString() ?? '',
+          'amount': _toDouble(x['amountBdt']),
+          'receiptNumber': x['receiptNumber']?.toString() ?? '',
+          'deedNumber': x['deedNumber']?.toString() ?? '',
+        }).toList(),
+        'prestige': r[5].isEmpty
+            ? null
+            : <String, dynamic>{
+          'stars': _toInt(r[5].first['stars']),
+          'diamonds': _toInt(r[5].first['diamonds']),
+          'crowns': _toInt(r[5].first['crowns']),
+        },
+        'ok': true,
+      };
+    } catch (e) {
+      debugPrint('Get Dashboard Extras Error: $e');
       return {};
     }
   }
@@ -2244,6 +3243,903 @@ class DatabaseService {
   // ═════════════════════════════════════════════════════════
   /// Shesh request ta server e pouchate pareni kina (khali list mane
   /// "kichu nei" naki "net nei" — sheta alada korar jonno)
+  // ═════════════════════════════════════════════════════════
+  // HELP CENTER — website er support_tickets / support_ticket_messages
+  // Investor shudhu nijer ticket dekhe; internal note kokhono dekhe na.
+  // Ticket kokhono financial record bodlay na.
+  // ═════════════════════════════════════════════════════════
+
+  /// Website er reference: HC-YYMMDD-XXXXXX (Dhaka er tarikh)
+  static String _ticketReference() {
+    final d = DateTime.now().toUtc().add(const Duration(hours: 6));
+    String two(int v) => v.toString().padLeft(2, '0');
+    const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+    final rnd = Random.secure();
+    final tail = List.generate(6, (_) => chars[rnd.nextInt(chars.length)]).join();
+    return 'HC-${two(d.year % 100)}${two(d.month)}${two(d.day)}-$tail';
+  }
+
+  /// Website er lib/support/tickets.ts
+  static const List<String> profitIssueCategories = [
+    'PROFIT_CALCULATION_DISCREPANCY',
+    'INCORRECT_PROFIT_AMOUNT',
+    'INCORRECT_CALCULATION_DATE',
+    'MISSING_PROFIT_RECORD',
+    'PAYMENT_STATUS_ISSUE',
+    'MISSING_PROFIT_DISTRIBUTION',
+    'OTHER_PROFIT_ISSUE',
+  ];
+  static const List<String> ticketCategories = [...profitIssueCategories, 'GENERAL'];
+  static String get _profitCategorySql => profitIssueCategories.map((c) => "'$c'").join(', ');
+
+  static Map<String, dynamic> _jsonMap(dynamic v) {
+    if (v == null) return {};
+    if (v is Map) return Map<String, dynamic>.from(v);
+    try {
+      final d = jsonDecode(v.toString());
+      return d is Map ? Map<String, dynamic>.from(d) : {};
+    } catch (_) {
+      return {};
+    }
+  }
+
+  /// Website er "My requests": status filter + page (20 ta kore).
+  /// Protita ticket er shathe support er shesh reply (internal na).
+  /// Server e pouchate na parle 'ok': false.
+  static Future<Map<String, dynamic>> getInvestorTickets(String userId,
+      {String? status, int page = 1, int pageSize = 20, bool profitOnly = false}) async {
+    if (userId.isEmpty) return {'ok': false, 'items': <Map<String, dynamic>>[], 'total': 0, 'totalPages': 1};
+    final p = page < 1 ? 1 : page;
+    final params = <dynamic>[userId, pageSize, (p - 1) * pageSize];
+    var where = 't."userId" = \$1';
+    // Profit Returns page: website er motoi shudhu PROFIT_ISSUE_CATEGORIES
+    if (profitOnly) where += ' AND t."category" IN ($_profitCategorySql)';
+    if (status != null && status.isNotEmpty) {
+      params.add(status);
+      where += ' AND t."status" = \$4';
+    }
+
+    final rows = await queryNeonHttp('''
+      SELECT t."id", t."reference", t."category", t."subject", t."status", t."channel",
+             t."context", t."createdAt", t."lastActivityAt",
+             (SELECT m."body" FROM support_ticket_messages m
+               WHERE m."ticketId" = t."id" AND m."authorRole" = 'STAFF' AND m."internal" = false
+               ORDER BY m."createdAt" DESC LIMIT 1) AS "latestReply",
+             COUNT(*) OVER() AS "total"
+      FROM support_tickets t
+      WHERE $where
+      ORDER BY t."lastActivityAt" DESC
+      LIMIT \$2 OFFSET \$3
+    ''', params);
+
+    final failed = rows.isEmpty && lastRequestFailed;
+    var total = rows.isEmpty ? 0 : _toInt(rows.first['total']);
+    // Page er baire hole (jemon shesh page muche gele) total alada kore jani
+    if (rows.isEmpty && !failed && p > 1) {
+      final hasStatus = status != null && status.isNotEmpty;
+      final c = await queryNeonHttp(
+          'SELECT COUNT(*) AS n FROM support_tickets t WHERE t."userId" = \$1${profitOnly ? ' AND t."category" IN ($_profitCategorySql)' : ''}${hasStatus ? ' AND t."status" = \$2' : ''}',
+          hasStatus ? [userId, status] : [userId]);
+      total = c.isEmpty ? 0 : _toInt(c.first['n']);
+    }
+    return {
+      'ok': !failed,
+      'items': rows
+          .map((r) => {
+        'id': r['id']?.toString() ?? '',
+        'reference': r['reference']?.toString() ?? '',
+        'category': r['category']?.toString() ?? '',
+        'subject': r['subject']?.toString() ?? '',
+        'status': r['status']?.toString() ?? '',
+        'channel': r['channel']?.toString() ?? 'WEB',
+        'context': _jsonMap(r['context']),
+        'createdAt': r['createdAt']?.toString(),
+        'lastActivityAt': r['lastActivityAt']?.toString(),
+        'latestReply': r['latestReply']?.toString(),
+      })
+          .toList(),
+      'total': total,
+      'totalPages': total <= 0 ? 1 : ((total + pageSize - 1) ~/ pageSize),
+    };
+  }
+
+  /// Ekta ticket — shudhu oi investor er nijer. Na pele / onner hole null.
+  /// Internal note bad; attachment er link website er protected route.
+  static Future<Map<String, dynamic>?> getInvestorTicket(String userId, String ticketId) async {
+    if (userId.isEmpty || !RegExp(r'^[0-9a-fA-F-]{36}$').hasMatch(ticketId)) return null;
+    final results = await Future.wait([
+      queryNeonHttp('''
+        SELECT "id", "reference", "category", "subject", "status", "channel", "context",
+               "expectedAmountBdt", "profitRecordId", "resolution", "createdAt", "lastActivityAt"
+        FROM support_tickets
+        WHERE "id" = \$1 AND "userId" = \$2
+        LIMIT 1
+      ''', [ticketId, userId]),
+      queryNeonHttp('''
+        SELECT m."id", m."authorRole", m."body", m."attachmentUrl", m."attachmentName", m."createdAt"
+        FROM support_ticket_messages m
+        JOIN support_tickets t ON t."id" = m."ticketId"
+        WHERE m."ticketId" = \$1 AND t."userId" = \$2 AND m."internal" = false
+        ORDER BY m."createdAt" ASC
+      ''', [ticketId, userId]),
+    ]);
+    if (results[0].isEmpty) return lastRequestFailed ? {'error': 'network'} : null;
+    final t = results[0].first;
+    return {
+      'id': t['id']?.toString() ?? '',
+      'reference': t['reference']?.toString() ?? '',
+      'category': t['category']?.toString() ?? '',
+      'subject': t['subject']?.toString() ?? '',
+      'status': t['status']?.toString() ?? '',
+      'channel': t['channel']?.toString() ?? 'WEB',
+      'context': _jsonMap(t['context']),
+      'expectedAmountBdt': t['expectedAmountBdt'] == null ? null : _toDouble(t['expectedAmountBdt']),
+      'profitRecordId': t['profitRecordId']?.toString(),
+      'resolution': t['resolution']?.toString(),
+      'createdAt': t['createdAt']?.toString(),
+      'lastActivityAt': t['lastActivityAt']?.toString(),
+      'messages': results[1]
+          .map((m) => {
+        'id': m['id']?.toString() ?? '',
+        'authorRole': m['authorRole']?.toString() ?? '',
+        'body': m['body']?.toString() ?? '',
+        'hasAttachment': (m['attachmentUrl']?.toString() ?? '').isNotEmpty,
+        'attachmentName': m['attachmentName']?.toString(),
+        // Website er protected route — website e login thakle khule
+        'attachmentPath': '$websiteBaseUrl/api/payment-proofs/ticket/${m['id']}',
+        'createdAt': m['createdAt']?.toString(),
+      })
+          .toList(),
+    };
+  }
+
+  /// Ticket e jog korar jonno user er nijer project investment gulo
+  static Future<List<Map<String, dynamic>>> getTicketInvestmentOptions(String userId) async {
+    if (userId.isEmpty) return [];
+    final rows = await queryNeonHttp('''
+      SELECT i."id", i."receiptNumber", i."projectId", p."title"
+      FROM investments i
+      JOIN investor_profiles ip ON ip."id" = i."investorProfileId"
+      JOIN projects p ON p."id" = i."projectId"
+      WHERE ip."userId" = \$1
+      ORDER BY i."createdAt" DESC
+      LIMIT 50
+    ''', [userId]);
+    return rows
+        .map((r) => {
+      'investmentId': r['id']?.toString() ?? '',
+      'projectId': r['projectId']?.toString() ?? '',
+      'projectTitle': r['title']?.toString() ?? '',
+      'receiptNumber': r['receiptNumber']?.toString(),
+    })
+        .toList();
+  }
+
+  /// Notun request: ticket + prothom message (investor er lekha) ek SQL e.
+  /// Investment dile shudhu user er nijer hole-i jog hoy.
+  static Future<Map<String, dynamic>> createSupportTicket({
+    required String userId,
+    required String category,
+    required String subject,
+    required String body,
+    String? investmentId,
+    double? expectedAmountBdt,
+    String? profitRecordId,
+    String? distributionLineId,
+  }) async {
+    final s = subject.trim();
+    final b = body.trim();
+    if (userId.isEmpty) return {'success': false, 'message': _loginRequiredMsg};
+    if (s.length < 3) return {'success': false, 'message': 'Please write a short subject.'};
+    if (b.length < 10) return {'success': false, 'message': 'Please describe the issue in a little more detail.'};
+    if (s.length > 200 || b.length > 5000) return {'success': false, 'message': 'The text is too long.'};
+    if (!ticketCategories.contains(category)) return {'success': false, 'message': 'Please choose what the request is about.'};
+
+    // Investment er context (website er motoi projectTitle + receiptNumber)
+    String? projectId;
+    String? invId;
+    final context = <String, dynamic>{};
+    if (investmentId != null && investmentId.isNotEmpty) {
+      final opts = await getTicketInvestmentOptions(userId);
+      final m = opts.where((o) => o['investmentId'] == investmentId).toList();
+      if (m.isNotEmpty) {
+        invId = investmentId;
+        projectId = m.first['projectId'] as String;
+        context['projectTitle'] = m.first['projectTitle'];
+        if (m.first['receiptNumber'] != null) context['receiptNumber'] = m.first['receiptNumber'];
+      }
+    }
+
+    // Profit record (accrual) — shudhu nijer hole; tar tottho context e
+    // (website er motoi: period, calculated, paid, status — jemon dekhechilen)
+    String? recordId;
+    if (profitRecordId != null && profitRecordId.isNotEmpty) {
+      final rec = await getInvestorProfitRecord(userId, profitRecordId);
+      if (rec != null && rec['error'] == null) {
+        final r = rec['record'] as Map<String, dynamic>;
+        recordId = profitRecordId;
+        invId ??= r['investmentId'] as String?;
+        projectId ??= r['projectId'] as String?;
+        context['projectTitle'] = r['projectTitle'];
+        if (r['receiptNumber'] != null) context['receiptNumber'] = r['receiptNumber'];
+        context['periodStart'] = r['periodStart'];
+        context['periodEnd'] = r['periodEnd'];
+        context['calculatedBdt'] = r['calculatedBdt'];
+        context['paidBdt'] = r['paidBdt'];
+        context['status'] = r['status'];
+      }
+    }
+    // Payout line — shudhu nijer hole
+    String? lineId;
+    if (distributionLineId != null && distributionLineId.isNotEmpty) {
+      final l = await queryNeonHttp('''
+        SELECT li."id", p."id" AS "projectId", p."title"
+        FROM distribution_line_items li
+        JOIN distribution_batches b ON b."id" = li."batchId"
+        JOIN projects p ON p."id" = b."projectId"
+        WHERE li."id" = \$1 AND li."investorUserId" = \$2
+        LIMIT 1
+      ''', [distributionLineId, userId]);
+      if (l.isNotEmpty) {
+        lineId = distributionLineId;
+        projectId ??= l.first['projectId']?.toString();
+        context['projectTitle'] ??= l.first['title']?.toString();
+      }
+    }
+
+    final now = _nowIso();
+    for (int attempt = 0; attempt < 3; attempt++) {
+      final ticketId = _generateUuid();
+      final reference = _ticketReference();
+      final rows = await queryNeonHttp('''
+        WITH t AS (
+          INSERT INTO support_tickets
+            ("id", "reference", "userId", "category", "subject", "status", "channel",
+             "projectId", "investmentId", "profitRecordId", "distributionLineId", "context",
+             "expectedAmountBdt", "createdBy", "lastActivityAt", "createdAt", "updatedAt")
+          VALUES (\$1, \$2, \$3, \$4, \$5, 'OPEN', 'WEB', \$6, \$7, \$13, \$14, \$8::jsonb,
+                  \$9, \$3, \$10, \$10, \$10)
+          ON CONFLICT ("reference") DO NOTHING
+          RETURNING "id"
+        )
+        INSERT INTO support_ticket_messages ("id", "ticketId", "authorId", "authorRole", "body", "internal", "createdAt")
+        SELECT \$11, t."id", \$3, 'INVESTOR', \$12, false, \$10 FROM t
+        RETURNING "ticketId"
+      ''', [
+        ticketId,
+        reference,
+        userId,
+        category,
+        s,
+        projectId,
+        invId,
+        context.isEmpty ? null : jsonEncode(context),
+        expectedAmountBdt == null ? null : expectedAmountBdt.toStringAsFixed(2),
+        now,
+        _generateUuid(),
+        b,
+        recordId,
+        lineId,
+      ]);
+      if (rows.isNotEmpty) {
+        return {'success': true, 'ticketId': ticketId, 'reference': reference};
+      }
+      if (lastRequestFailed) {
+        return {'success': false, 'message': 'Could not reach the server. Please check your internet and try again.'};
+      }
+      // Reference mile gele (khub kom) notun reference diye abar
+    }
+    return {'success': false, 'message': 'Could not create the request. Please try again.'};
+  }
+
+  /// Investor er reply. CLOSED ticket e reply hoy na. Website er
+  /// statusAfterInvestorReply: WAITING_FOR_INVESTOR ba RESOLVED → IN_REVIEW.
+  static Future<Map<String, dynamic>> replySupportTicket({
+    required String userId,
+    required String ticketId,
+    required String body,
+  }) async {
+    final b = body.trim();
+    if (userId.isEmpty) return {'success': false, 'message': _loginRequiredMsg};
+    if (b.length < 2) return {'success': false, 'message': 'Please write your reply.'};
+    if (b.length > 5000) return {'success': false, 'message': 'The reply is too long.'};
+
+    final now = _nowIso();
+    final rows = await queryNeonHttp('''
+      WITH t AS (
+        UPDATE support_tickets
+        SET "lastActivityAt" = \$4, "updatedAt" = \$4,
+            "status" = CASE WHEN "status" IN ('WAITING_FOR_INVESTOR', 'RESOLVED') THEN 'IN_REVIEW' ELSE "status" END
+        WHERE "id" = \$1 AND "userId" = \$2 AND "status" <> 'CLOSED'
+        RETURNING "id"
+      )
+      INSERT INTO support_ticket_messages ("id", "ticketId", "authorId", "authorRole", "body", "internal", "createdAt")
+      SELECT \$3, t."id", \$2, 'INVESTOR', \$5, false, \$4 FROM t
+      RETURNING "id"
+    ''', [ticketId, userId, _generateUuid(), now, b]);
+
+    if (rows.isNotEmpty) return {'success': true};
+    if (lastRequestFailed) {
+      return {'success': false, 'message': 'Could not reach the server. Please check your internet and try again.'};
+    }
+    return {'success': false, 'message': 'This request is closed. Please open a new request.'};
+  }
+
+  // ═════════════════════════════════════════════════════════
+  // PROFIT RETURNS — website er profit-returns.data.ts + profit-returns.ts
+  // + payout-status.ts er hubohu app version (shudhu nijer row).
+  //  • record = ekta accrual: fixed-rate er mash (top-up shoho), profit-share
+  //    er period, ba cholti mash (ACCRUING, ekhono payable na)
+  //  • taka shob paisa (int) te hishab, website er motoi
+  //  • kichu recalculate / save hoy na — shudhu DB er row jog kora
+  // ═════════════════════════════════════════════════════════
+
+  /// Website er EARNING_STATUSES (profit hoy emon investment)
+  static const List<String> _earningStatuses = ['ACTIVE', 'MATURED', 'COMPLETED'];
+
+  static int _paisa(dynamic v) => (_toDouble(v) * 100).round();
+  static double _taka(int p) => p / 100.0;
+
+  /// @db.Date column → "YYYY-MM-DD"
+  static String _dbDay(dynamic v) {
+    final s = v?.toString() ?? '';
+    return s.length >= 10 ? s.substring(0, 10) : s;
+  }
+
+  /// Timestamp → Bangladesh er din "YYYY-MM-DD" (website er dhakaDay)
+  static String _dhakaDayOf(dynamic v) {
+    final raw = v?.toString().trim() ?? '';
+    if (raw.isEmpty) return '';
+    var t = raw.replaceFirst(' ', 'T');
+    if (!RegExp(r'(Z|[+-]\d{2}:?\d{2})$').hasMatch(t) && t.contains('T')) t = '${t}Z';
+    final d = DateTime.tryParse(t);
+    if (d == null) return _dbDay(raw);
+    return d.toUtc().add(const Duration(hours: 6)).toIso8601String().substring(0, 10);
+  }
+
+  static DateTime _dayUtc(String day) =>
+      DateTime.utc(int.parse(day.substring(0, 4)), int.parse(day.substring(5, 7)), int.parse(day.substring(8, 10)));
+  static String _dayStr(DateTime d) => d.toIso8601String().substring(0, 10);
+  static String _addDays(String day, int n) => _dayStr(_dayUtc(day).add(Duration(days: n)));
+  static int _daysInMonthOf(String day) => DateTime.utc(_dayUtc(day).year, _dayUtc(day).month + 1, 0).day;
+  static String _monthStartOf(String day) => '${day.substring(0, 8)}01';
+  static String _monthEndOf(String day) => '${day.substring(0, 8)}${_daysInMonthOf(day).toString().padLeft(2, '0')}';
+  static int _daysBetween(String a, String b) => _dayUtc(b).difference(_dayUtc(a)).inDays + 1;
+
+  /// Fixed-rate mash payable hoy mash shesher porer din
+  static String _monthMaturesOn(String periodEnd) => _addDays(_monthEndOf(periodEnd), 1);
+
+  /// MONTHLY_ACTUAL_DAYS_V1: annual × din ÷ (12 × mash er din), paisa te round
+  static int _periodProfitPaisa(int annualPaisa, int days, int dim) {
+    final den = 12 * dim;
+    return (annualPaisa * days * 2 + den) ~/ (2 * den);
+  }
+
+  /// Website er recordStatus
+  static String _recordStatusOf({
+    required bool running,
+    required int calc,
+    required int paid,
+    required int reserved,
+    required bool processing,
+  }) {
+    if (running) return 'ACCRUING';
+    if (calc > 0 && paid >= calc) return 'PAID';
+    if (reserved > 0) return processing ? 'AWAITING_PAYMENT' : 'IN_APPROVAL';
+    if (paid > 0) return 'PARTLY_PAID';
+    return 'MATURED';
+  }
+
+  /// Website er payoutStatus — finance nishchit korle-i "PAID"
+  static String payoutStatusKey(String lineStatus, String batchStatus) {
+    if (lineStatus == 'PAID' || lineStatus == 'POSTED') return 'PAID';
+    if (lineStatus == 'FAILED') return 'FAILED';
+    if (lineStatus == 'REVERSED') return 'REVERSED';
+    if (batchStatus == 'PROCESSING') return 'AWAITING_PAYMENT';
+    return 'IN_APPROVAL';
+  }
+
+  /// Investor er profit terms (je investment e profit hoy)
+  static Future<List<Map<String, dynamic>>> _loadProfitTerms(String userId) => queryNeonHttp('''
+        SELECT t."investmentId", t."projectId", t."principalBdt", t."annualRatePct", t."rateMaxPct",
+               t."annualProfitBdt", t."policy", t."effectiveDate", t."maturityDate",
+               i."status"::text AS "invStatus", i."receiptNumber", i."maturedAt",
+               p."title" AS "projectTitle", p."returnType"::text AS "returnType"
+        FROM investment_profit_terms t
+        JOIN investments i ON i."id" = t."investmentId"
+        JOIN projects p ON p."id" = i."projectId"
+        WHERE t."investorUserId" = \$1
+          AND i."status"::text IN ('ACTIVE', 'MATURED', 'COMPLETED')
+        ORDER BY t."effectiveDate" ASC
+      ''', [userId]);
+
+  /// Shesh je din profit hoy: contract maturity / investment matured — je ta age
+  static String? _lastEarningDay(Map<String, dynamic> t) {
+    final days = <String>[
+      if (t['maturityDate'] != null) _dbDay(t['maturityDate']),
+      if (t['maturedAt'] != null) _dhakaDayOf(t['maturedAt']),
+    ]..sort();
+    return days.isEmpty ? null : days.first;
+  }
+
+  /// Website er getInvestorProfitRecords: shob record (notun period age),
+  /// summary card ar ei mash er anuman.
+  /// Note: website page khulle accrual "sync" kore; app shudhu DB te ja ache
+  /// tai pore — tai shesh hoye jawa mash website sync na kora porjonto ashe na.
+  static Future<Map<String, dynamic>> getInvestorProfitRecords(String userId, {DateTime? now}) async {
+    if (userId.isEmpty) return {'ok': false};
+    final results = await Future.wait([
+      _loadProfitTerms(userId),
+      queryNeonHttp('''
+        SELECT a."id", a."investmentId", a."month", a."kind", a."periodStart", a."periodEnd",
+               a."eligibleDays", a."daysInMonth", a."annualRatePct", a."amountBdt", a."createdAt",
+               al."amountBdt" AS "alAmount", al."status" AS "alStatus",
+               li."id" AS "lineId", li."status"::text AS "lineStatus", li."paidAt", li."postedAt",
+               li."paymentMethod", li."paymentReference", (li."paymentProofUrl" IS NOT NULL) AS "hasProof",
+               b."status"::text AS "batchStatus"
+        FROM profit_accruals a
+        LEFT JOIN profit_allocations al ON al."accrualId" = a."id" AND al."status" IN ('RESERVED', 'PAID')
+        LEFT JOIN distribution_line_items li ON li."id" = al."lineItemId"
+        LEFT JOIN distribution_batches b ON b."id" = li."batchId"
+        WHERE a."investorUserId" = \$1 AND a."status" = 'ACCRUED'
+        ORDER BY a."month" ASC, a."kind" ASC
+      ''', [userId]),
+    ]);
+    final terms = results[0];
+    final rows = results[1];
+    if (terms.isEmpty) {
+      return {
+        'ok': !lastRequestFailed,
+        'records': <Map<String, dynamic>>[],
+        'summary': _summarize([], 0),
+        'upcoming': <Map<String, dynamic>>[],
+      };
+    }
+    final termsBy = {for (final t in terms) t['investmentId'].toString(): t};
+
+    // Accrual + tar allocation gulo ek jaygay
+    final accruals = <String, Map<String, dynamic>>{};
+    for (final r in rows) {
+      final id = r['id'].toString();
+      if (!termsBy.containsKey(r['investmentId']?.toString())) continue;
+      final a = accruals.putIfAbsent(id, () => {...r, 'allocs': <Map<String, dynamic>>[]});
+      if (r['lineId'] != null) (a['allocs'] as List).add(r);
+    }
+
+    final records = <String, Map<String, dynamic>>{};
+    final baseByMonth = <String, String>{};
+
+    Map<String, dynamic> newRecord(Map<String, dynamic> a, String kind) {
+      final t = termsBy[a['investmentId'].toString()]!;
+      final periodEnd = _dbDay(a['periodEnd']);
+      return {
+        'id': a['id'].toString(),
+        'kind': kind,
+        'investmentId': a['investmentId'].toString(),
+        'receiptNumber': t['receiptNumber']?.toString(),
+        'projectId': t['projectId']?.toString(),
+        'projectTitle': t['projectTitle']?.toString() ?? '',
+        'profitModel': t['returnType'] == 'PROFIT_SHARE' ? 'PROFIT_SHARE' : 'FIXED_RATE',
+        'principalBdt': _toDouble(t['principalBdt']),
+        'annualRatePct': _toDouble(t['annualRatePct']),
+        'rateMaxPct': t['rateMaxPct'] == null ? null : _toDouble(t['rateMaxPct']),
+        'periodStart': _dbDay(a['periodStart']),
+        'periodEnd': periodEnd,
+        'eligibleDays': _toInt(a['eligibleDays']),
+        'daysInMonth': kind == 'MONTH' ? _toInt(a['daysInMonth']) : null,
+        'maturesOn': kind == 'MONTH' ? _monthMaturesOn(periodEnd) : _dhakaDayOf(a['createdAt']),
+        'payments': <Map<String, dynamic>>[],
+        'accrualIds': <String>[],
+        '_base': 0,
+        '_topup': 0,
+        '_calc': 0,
+        '_paid': 0,
+        '_reserved': 0,
+        '_processing': false,
+      };
+    }
+
+    // Base / period row age, jate top-up tar mash khuje pay
+    final ordered = accruals.values.toList()
+      ..sort((x, y) {
+        final tx = x['kind'].toString().startsWith('TOPUP:') ? 1 : 0;
+        final ty = y['kind'].toString().startsWith('TOPUP:') ? 1 : 0;
+        return tx.compareTo(ty);
+      });
+    for (final a in ordered) {
+      final kind = a['kind'].toString();
+      final monthKey = '${a['investmentId']}|${_dbDay(a['month'])}';
+      final amount = _paisa(a['amountBdt']);
+      Map<String, dynamic> rec;
+      if (kind.startsWith('TOPUP:')) {
+        final baseId = baseByMonth[monthKey];
+        if (baseId != null) {
+          rec = records[baseId]!;
+        } else {
+          rec = newRecord(a, 'MONTH');
+          records[rec['id']] = rec;
+          baseByMonth[monthKey] = rec['id'];
+        }
+        rec['_topup'] = (rec['_topup'] as int) + amount;
+      } else {
+        rec = newRecord(a, kind.startsWith('PROJECT:') ? 'PERIOD' : 'MONTH');
+        records[rec['id']] = rec;
+        if (rec['kind'] == 'MONTH') baseByMonth[monthKey] = rec['id'];
+        rec['_base'] = amount;
+      }
+      (rec['accrualIds'] as List<String>).add(a['id'].toString());
+      rec['_calc'] = (rec['_calc'] as int) + amount;
+
+      for (final al in (a['allocs'] as List).cast<Map<String, dynamic>>()) {
+        final amt = _paisa(al['alAmount']);
+        final paid = al['alStatus'] == 'PAID';
+        if (paid) {
+          rec['_paid'] = (rec['_paid'] as int) + amt;
+        } else {
+          rec['_reserved'] = (rec['_reserved'] as int) + amt;
+          if (al['batchStatus'] == 'PROCESSING') rec['_processing'] = true;
+        }
+        final pays = rec['payments'] as List<Map<String, dynamic>>;
+        final existing = pays.where((p) => p['lineId'] == al['lineId'].toString()).toList();
+        if (existing.isNotEmpty) {
+          existing.first['_amt'] = (existing.first['_amt'] as int) + amt;
+          continue;
+        }
+        pays.add({
+          'lineId': al['lineId'].toString(),
+          '_amt': amt,
+          'allocationStatus': al['alStatus'],
+          'status': payoutStatusKey(al['lineStatus']?.toString() ?? '', al['batchStatus']?.toString() ?? ''),
+          'paidAt': paid ? (al['paidAt'] ?? al['postedAt'])?.toString() : null,
+          'paymentMethod': paid ? al['paymentMethod']?.toString() : null,
+          'paymentReference': paid ? al['paymentReference']?.toString() : null,
+          'hasReceipt': al['lineStatus'] == 'PAID',
+          'hasProof': al['lineStatus'] == 'PAID' && al['hasProof'] == true,
+        });
+      }
+    }
+
+    // Cholti fixed-rate mash (gotokal porjonto) + ei mash er anuman
+    final today = _dhakaDayOf((now ?? DateTime.now()).toUtc().toIso8601String());
+    final through = _addDays(today, -1);
+    final upcoming = <Map<String, dynamic>>[];
+    var upcomingPaisa = 0;
+    for (final t in terms) {
+      if (t['returnType'] == 'PROFIT_SHARE') continue;
+      final effective = _dbDay(t['effectiveDate']);
+      if (effective.length < 10) continue;
+      final earningStart = _addDays(effective, 1);
+      final last = _lastEarningDay(t);
+      final annual = _paisa(t['annualProfitBdt']);
+      final invId = t['investmentId'].toString();
+
+      // Gotokal je mash e, sheta shesh na hole — cholti record
+      if (through.compareTo(_monthEndOf(through)) < 0) {
+        final start = [_monthStartOf(through), earningStart]..sort();
+        final ends = [through, if (last != null) last]..sort();
+        final s = start.last, e = ends.first;
+        if (s.compareTo(e) <= 0) {
+          final dim = _daysInMonthOf(through);
+          final days = _daysBetween(s, e);
+          final amt = _periodProfitPaisa(annual, days, dim);
+          if (amt > 0) {
+            final id = 'current-$invId';
+            records[id] = {
+              'id': id,
+              'kind': 'RUNNING',
+              'investmentId': invId,
+              'receiptNumber': t['receiptNumber']?.toString(),
+              'projectId': t['projectId']?.toString(),
+              'projectTitle': t['projectTitle']?.toString() ?? '',
+              'profitModel': 'FIXED_RATE',
+              'principalBdt': _toDouble(t['principalBdt']),
+              'annualRatePct': _toDouble(t['annualRatePct']),
+              'rateMaxPct': t['rateMaxPct'] == null ? null : _toDouble(t['rateMaxPct']),
+              'periodStart': s,
+              'periodEnd': e,
+              'eligibleDays': days,
+              'daysInMonth': dim,
+              'maturesOn': _monthMaturesOn(e),
+              'payments': <Map<String, dynamic>>[],
+              'accrualIds': <String>[],
+              '_base': amt,
+              '_topup': 0,
+              '_calc': amt,
+              '_paid': 0,
+              '_reserved': 0,
+              '_processing': false,
+            };
+          }
+        }
+      }
+
+      // Ei calendar mash er anuman — investment mash shesh porjonto ACTIVE thakle
+      if (t['invStatus'] != 'ACTIVE') continue;
+      final pStart = ([_monthStartOf(today), earningStart]..sort()).last;
+      final pEnd = ([_monthEndOf(today), if (last != null) last]..sort()).first;
+      if (pStart.compareTo(pEnd) > 0) continue;
+      final est = _periodProfitPaisa(annual, _daysBetween(pStart, pEnd), _daysInMonthOf(today));
+      if (est > 0) {
+        upcomingPaisa += est;
+        upcoming.add({
+          'investmentId': invId,
+          'projectTitle': t['projectTitle']?.toString() ?? '',
+          'month': _monthStartOf(today),
+          'estimateBdt': _taka(est),
+          'maturesOn': _monthMaturesOn(pEnd),
+        });
+      }
+    }
+
+    final list = records.values.map((r) {
+      final calc = r['_calc'] as int, paid = r['_paid'] as int, reserved = r['_reserved'] as int;
+      r['status'] = _recordStatusOf(
+          running: r['kind'] == 'RUNNING', calc: calc, paid: paid, reserved: reserved, processing: r['_processing'] as bool);
+      r['baseBdt'] = _taka(r['_base'] as int);
+      r['topupBdt'] = _taka(r['_topup'] as int);
+      r['calculatedBdt'] = _taka(calc);
+      r['paidBdt'] = _taka(paid);
+      r['reservedBdt'] = _taka(reserved);
+      r['outstandingBdt'] = _taka(calc - (paid < calc ? paid : calc));
+      for (final p in r['payments'] as List<Map<String, dynamic>>) {
+        p['amountBdt'] = _taka(p.remove('_amt') as int);
+      }
+      return r;
+    }).toList();
+
+    final summary = _summarize(list, upcomingPaisa);
+    list.sort((a, b) {
+      final c = (b['periodStart'] as String).compareTo(a['periodStart'] as String);
+      return c != 0 ? c : (a['projectTitle'] as String).compareTo(b['projectTitle'] as String);
+    });
+    for (final r in list) {
+      r.removeWhere((k, _) => k.startsWith('_'));
+    }
+    return {'ok': true, 'records': list, 'summary': summary, 'upcoming': upcoming};
+  }
+
+  /// Website er summarizeRecords — protita taka ek bar:
+  /// earned = matured + accruing · matured = paid + pending ·
+  /// pending = awaiting + being approved + not yet in a disbursement
+  static Map<String, double> _summarize(List<Map<String, dynamic>> records, int upcomingPaisa) {
+    var matured = 0, accruing = 0, paid = 0, awaiting = 0, inApproval = 0;
+    for (final r in records) {
+      final calc = r['_calc'] as int;
+      if (r['kind'] == 'RUNNING') {
+        accruing += calc;
+        continue;
+      }
+      matured += calc;
+      final rp = r['_paid'] as int;
+      final p = rp < calc ? rp : calc;
+      paid += p;
+      final left = calc - p;
+      final rr = r['_reserved'] as int;
+      final held = rr < left ? rr : left;
+      if (r['_processing'] == true) {
+        awaiting += held;
+      } else {
+        inApproval += held;
+      }
+    }
+    final pending = matured - paid;
+    return {
+      'earnedBdt': _taka(matured + accruing),
+      'maturedBdt': _taka(matured),
+      'accruingBdt': _taka(accruing),
+      'paidBdt': _taka(paid),
+      'pendingBdt': _taka(pending),
+      'awaitingPaymentBdt': _taka(awaiting),
+      'inApprovalBdt': _taka(inApproval),
+      'notScheduledBdt': _taka(pending - awaiting - inApproval),
+      'upcomingEstimateBdt': _taka(upcomingPaisa),
+    };
+  }
+
+  /// Website er getInvestorProfitPayments: finance er payout line, notun age.
+  /// Filter app e hoy (website er motoi shob ane, tarpor chhake).
+  static Future<Map<String, dynamic>> getInvestorProfitPayments(String userId) async {
+    if (userId.isEmpty) return {'ok': false, 'items': <Map<String, dynamic>>[]};
+    final rows = await queryNeonHttp('''
+      SELECT li."id", li."status"::text AS "status", li."netAmountBdt", li."paidAt", li."postedAt", li."createdAt",
+             li."paymentMethod", li."paymentReference", (li."paymentProofUrl" IS NOT NULL) AS "hasProof",
+             i."receiptNumber",
+             b."status"::text AS "batchStatus", b."periodStart", b."periodEnd",
+             p."id" AS "projectId", p."title" AS "projectTitle",
+             (SELECT al."accrualId" FROM profit_allocations al
+               JOIN profit_accruals pa ON pa."id" = al."accrualId"
+               WHERE al."lineItemId" = li."id"
+               ORDER BY (pa."kind" LIKE 'TOPUP:%') ASC, pa."month" ASC LIMIT 1) AS "recordId"
+      FROM distribution_line_items li
+      JOIN distribution_batches b ON b."id" = li."batchId"
+      JOIN projects p ON p."id" = b."projectId"
+      LEFT JOIN investments i ON i."id" = li."investmentId"
+      WHERE li."investorUserId" = \$1
+        AND li."status"::text IN ('PENDING', 'PAID', 'POSTED', 'FAILED', 'REVERSED')
+        AND b."status"::text NOT IN ('DRAFT', 'CANCELLED', 'REJECTED')
+      ORDER BY li."createdAt" DESC
+    ''', [userId]);
+    final failed = rows.isEmpty && lastRequestFailed;
+    return {
+      'ok': !failed,
+      'items': rows.map((l) {
+        final key = payoutStatusKey(l['status']?.toString() ?? '', l['batchStatus']?.toString() ?? '');
+        final paid = key == 'PAID';
+        return {
+          'id': l['id'].toString(),
+          'date': (paid ? (l['paidAt'] ?? l['postedAt'] ?? l['createdAt']) : l['createdAt'])?.toString(),
+          'projectId': l['projectId']?.toString(),
+          'projectTitle': l['projectTitle']?.toString() ?? '',
+          'receiptNumber': l['receiptNumber']?.toString(),
+          'periodStart': l['periodStart'] == null ? null : _dbDay(l['periodStart']),
+          'periodEnd': l['periodEnd'] == null ? null : _dbDay(l['periodEnd']),
+          'amountBdt': _toDouble(l['netAmountBdt']),
+          'status': key,
+          'paymentMethod': paid ? l['paymentMethod']?.toString() : null,
+          'paymentReference': paid ? l['paymentReference']?.toString() : null,
+          'hasReceipt': l['status'] == 'PAID',
+          'hasProof': l['status'] == 'PAID' && l['hasProof'] == true,
+          'recordId': l['recordId']?.toString(),
+        };
+      }).toList(),
+    };
+  }
+
+  /// Ekta record + investment er tottho + hishaber bhag (website er getInvestorProfitRecord).
+  /// Onner record hole null.
+  static Future<Map<String, dynamic>?> getInvestorProfitRecord(String userId, String recordId) async {
+    if (userId.isEmpty || recordId.isEmpty || recordId.length > 80) return null;
+    final all = await getInvestorProfitRecords(userId);
+    if (all['ok'] != true) return {'error': 'network'};
+    final list = (all['records'] as List).cast<Map<String, dynamic>>();
+    final record = list.where((r) => r['id'] == recordId).toList();
+    if (record.isEmpty) return null;
+    final r = record.first;
+    final invId = r['investmentId'] as String;
+
+    final res = await Future.wait([
+      queryNeonHttp('''
+        SELECT t."principalBdt", t."annualRatePct", t."annualProfitBdt", t."policy", t."effectiveDate", t."maturityDate",
+               i."amountBdt", i."createdAt", i."activatedAt", i."maturedAt", i."paymentPlan"
+        FROM investment_profit_terms t
+        JOIN investments i ON i."id" = t."investmentId"
+        JOIN investor_profiles ip ON ip."id" = i."investorProfileId"
+        WHERE t."investmentId" = \$1 AND ip."userId" = \$2
+        LIMIT 1
+      ''', [invId, userId]),
+      queryNeonHttp('''
+        SELECT * FROM (
+          SELECT mp."id", mp."amountBdt", mp."paymentMethod" AS "method", COALESCE(mp."reviewedAt", mp."createdAt") AS "approvedAt"
+          FROM manual_payment_submissions mp WHERE mp."investmentId" = \$1 AND mp."status"::text = 'APPROVED'
+          UNION ALL
+          SELECT gp."id", gp."amountBdt", gp."provider" AS "method", gp."createdAt" AS "approvedAt"
+          FROM gateway_payments gp WHERE gp."investmentId" = \$1 AND gp."status"::text = 'SUCCESS'
+        ) x ORDER BY "approvedAt" ASC
+      ''', [invId]),
+      (r['accrualIds'] as List).isEmpty
+          ? Future.value(<Map<String, dynamic>>[])
+          : queryNeonHttp('''
+              SELECT "id", "kind", "annualRatePct", "eligibleDays", "daysInMonth", "amountBdt"
+              FROM profit_accruals
+              WHERE "investorUserId" = \$1 AND "id" IN (${List.generate((r['accrualIds'] as List).length, (i) => '\$${i + 2}').join(', ')})
+            ''', [userId, ...(r['accrualIds'] as List)]),
+    ]);
+    if (res[0].isEmpty) return lastRequestFailed ? {'error': 'network'} : null;
+    final t = res[0].first;
+    final principal = _paisa(t['principalBdt']);
+    final agreed = _toDouble(t['annualRatePct']);
+    final effective = _dbDay(t['effectiveDate']);
+
+    final info = {
+      'investedAt': t['createdAt']?.toString(),
+      'activatedAt': t['activatedAt']?.toString(),
+      'effectiveDate': effective,
+      'earningFrom': effective.length == 10 ? _addDays(effective, 1) : '',
+      'earningTo': _lastEarningDay({'maturityDate': t['maturityDate'], 'maturedAt': t['maturedAt']}),
+      'contractMaturity': t['maturityDate'] == null ? null : _dbDay(t['maturityDate']),
+      'paymentPlan': t['paymentPlan']?.toString() ?? 'FULL',
+      'annualProfitBdt': _toDouble(t['annualProfitBdt']),
+      'policy': t['policy']?.toString(),
+      'installments': res[1]
+          .map((p) => {
+        'amountBdt': _toDouble(p['amountBdt']),
+        'method': p['method']?.toString(),
+        'approvedAt': p['approvedAt']?.toString(),
+      })
+          .toList(),
+    };
+
+    Map<String, dynamic> fixedBreakdown(String label, double ratePct, int annual, int dim, int days, int amount) {
+      final den = 12 * dim;
+      final exactRounded = (annual * days * 2 + den) ~/ (2 * den);
+      return {
+        'label': label,
+        'ratePct': ratePct,
+        'principalBdt': _taka(principal),
+        'annualProfitBdt': _taka(annual),
+        'monthlyProfit': annual / 12 / 100,
+        'dailyProfit': annual / den / 100,
+        'daysInMonth': dim,
+        'eligibleDays': days,
+        'fullMonth': days == dim,
+        'exactPeriodProfit': annual * days / den / 100,
+        'amountBdt': _taka(amount),
+        'roundingPaisa': amount - exactRounded,
+      };
+    }
+
+    final fixed = <Map<String, dynamic>>[];
+    Map<String, dynamic>? period;
+    if (r['kind'] != 'PERIOD') {
+      final accs = res[2];
+      final base = accs.where((a) => a['kind'] == 'BASE').toList();
+      fixed.add(fixedBreakdown(
+        'AGREED',
+        agreed,
+        _paisa(t['annualProfitBdt']),
+        (r['daysInMonth'] as int?) ?? 30,
+        r['eligibleDays'] as int,
+        base.isNotEmpty ? _paisa(base.first['amountBdt']) : _paisa(r['baseBdt']),
+      ));
+      for (final a in accs.where((a) => a['kind'].toString().startsWith('TOPUP:'))) {
+        final extra = ((_toDouble(a['annualRatePct']) - agreed) * 10000).round() / 10000;
+        fixed.add({
+          ...fixedBreakdown('TOPUP', extra, (principal * extra / 100).round(), _toInt(a['daysInMonth']),
+              _toInt(a['eligibleDays']), _paisa(a['amountBdt'])),
+          'toRatePct': _toDouble(a['annualRatePct']),
+        });
+      }
+    } else {
+      // Profit share: shobar capital × din er mot (shudhu mot — onno karo tottho na)
+      final acc = res[2].isNotEmpty ? res[2].first : null;
+      final kind = acc?['kind']?.toString() ?? '';
+      final calcId = kind.startsWith('PROJECT:') ? kind.substring(8) : '';
+      if (acc != null && calcId.isNotEmpty) {
+        final c = await Future.wait([
+          queryNeonHttp('''
+            SELECT "periodStart", "periodEnd", "revenueBdt", "expensesBdt", "netProfitBdt",
+                   "investorSharePct", "investorPoolBdt", "notes"
+            FROM project_profit_calculations WHERE "id" = \$1 LIMIT 1
+          ''', [calcId]),
+          queryNeonHttp('''
+            SELECT COUNT(*) AS "investors",
+                   COALESCE(SUM(ROUND(t."principalBdt" * 100) * a."eligibleDays"), 0) AS "totalWeight"
+            FROM profit_accruals a
+            LEFT JOIN investment_profit_terms t ON t."investmentId" = a."investmentId"
+            WHERE a."kind" = \$1 AND a."status" = 'ACCRUED'
+          ''', [kind]),
+        ]);
+        if (c[0].isNotEmpty) {
+          final calc = c[0].first;
+          final totalWeight = _toDouble(c[1].isEmpty ? 0 : c[1].first['totalWeight']);
+          final weight = principal * _toInt(acc['eligibleDays']);
+          final pool = _paisa(calc['investorPoolBdt']);
+          final share = totalWeight > 0 ? (pool * weight / totalWeight).floor() : 0;
+          final amount = _paisa(acc['amountBdt']);
+          period = {
+            'periodStart': _dbDay(calc['periodStart']),
+            'periodEnd': _dbDay(calc['periodEnd']),
+            'revenueBdt': _toDouble(calc['revenueBdt']),
+            'expensesBdt': _toDouble(calc['expensesBdt']),
+            'netProfitBdt': _toDouble(calc['netProfitBdt']),
+            'investorSharePct': _toDouble(calc['investorSharePct']),
+            'poolBdt': _taka(pool),
+            'principalBdt': _taka(principal),
+            'activeDays': _toInt(acc['eligibleDays']),
+            'sharePct': totalWeight > 0 ? (weight * 1000000 / totalWeight).floor() / 10000 : 0.0,
+            'computedShareBdt': _taka(share),
+            'amountBdt': _taka(amount),
+            'calculated': amount - share >= 0 && amount - share <= 1,
+            'notes': calc['notes']?.toString(),
+            'investorCount': _toInt(c[1].isEmpty ? 0 : c[1].first['investors']),
+          };
+        }
+      }
+    }
+
+    return {'record': r, 'info': info, 'fixed': fixed, 'period': period};
+  }
+
   static bool get lastRequestFailed => _lastConnectionError != null;
 
   /// Notun theke purono. [limit] — ekbare koyta anbo.
@@ -2447,7 +4343,10 @@ class DatabaseService {
           'mine': r['mine'] == true || r['mine']?.toString() == 'true',
         };
 
-        if (cat == 'PAYMENT_RECEIPT') {
+        if (cat == 'INVESTMENT_AGREEMENT') {
+          // Website approve er por je deed (dolil) PDF banay — "Agreement #<receipt>"
+          docs['contracts']!.add(item);
+        } else if (cat == 'PAYMENT_RECEIPT') {
           docs['paymentReceipts']!.add(item);
         } else if (cat == 'DISTRIBUTION_STATEMENT') {
           docs['distributionStatements']!.add(item);
@@ -2489,7 +4388,14 @@ class DatabaseService {
                  pr."fundedAmountBdt", pr."fundingGoalBdt", pr."expectedReturnPct",
                  pr."returnPctMin", pr."returnPctMax",
                  sub."id" AS "subId", sub."status" AS "subStatus", sub."transactionRef" AS "subRef",
-                 sub."rejectionReason" AS "subReason", sub."createdAt" AS "subCreatedAt"
+                 sub."rejectionReason" AS "subReason", sub."createdAt" AS "subCreatedAt",
+                 COALESCE(to_jsonb(i) ->> 'paymentPlan', 'FULL') AS "paymentPlan",
+                 i."cancellationReason",
+                 COALESCE((SELECT SUM(x."amountBdt") FROM manual_payment_submissions x
+                           WHERE x."investmentId" = i."id" AND x."status"::text = 'APPROVED'), 0) AS "paidApproved",
+                 COALESCE((SELECT SUM(x."amountBdt") FROM manual_payment_submissions x
+                           WHERE x."investmentId" = i."id"
+                             AND x."status"::text IN ('SUBMITTED', 'UNDER_REVIEW')), 0) AS "paidPending"
           FROM investments i
           JOIN investor_profiles p ON i."investorProfileId" = p."id"
           JOIN projects pr ON i."projectId" = pr."id"
@@ -2586,6 +4492,11 @@ class DatabaseService {
           ...projectReturnRange(r),
           'expectedReturnPct': projectReturnRange(r)['returnMax'],
           'latestSubmission': latestSubmission,
+          // Website er motoi payment er hishab (kisti / ekadhik part)
+          'paymentPlan': (r['paymentPlan']?.toString() ?? 'FULL').toUpperCase(),
+          'paidApproved': _toDouble(r['paidApproved']),
+          'paidPending': _toDouble(r['paidPending']),
+          'cancellationReason': r['cancellationReason']?.toString(),
           'bankAccounts': banksByProject[projectId] ?? <Map<String, dynamic>>[],
           'receiptNumber': r['receiptNumber']?.toString(),
           // Website er certificate data (na thakle null = ekhono toiri hoyni)
@@ -2984,34 +4895,33 @@ class DatabaseService {
       return res.map((r) {
         final id = r['id'].toString();
         final rawReceipt = r['receiptNumber']?.toString() ?? '';
-        final receiptNo = rawReceipt.isNotEmpty
-            ? rawReceipt
-            : 'GRP-${id.substring(0, min(8, id.length)).toUpperCase()}';
+        // Banano 'GRP-xxx' na — website receipt na dile certificate "pending" thake
+        final receiptNo = rawReceipt;
         final createdAt = r['createdAt']?.toString() ?? '';
-        final groupName = r['groupName']?.toString() ?? 'Business Group';
-        final tierName = r['tierName']?.toString() ?? 'Tier';
-        final title = '$groupName — $tierName';
+        final groupName = r['groupName']?.toString() ?? '';
+        final tierName = r['tierName']?.toString() ?? '';
+        final title = [groupName, tierName].where((s) => s.isNotEmpty).join(' — ');
 
         return <String, dynamic>{
           'id': id,
-          'name': 'Investment Receipt — $title',
+          'name': title.isEmpty ? 'Investment Receipt' : 'Investment Receipt — $title',
           'category': 'GROUP_INVESTMENT_RECEIPT',
           'certificateNo': receiptNo,
           'issuedDate': createdAt.length >= 10 ? createdAt.substring(0, 10) : createdAt,
           'createdAt': createdAt,
-          'status': 'CONFIRMED',
+          'status': receiptNo.isEmpty ? 'RECEIPT_PENDING' : 'CONFIRMED',
           'investmentStatus': r['status']?.toString() ?? 'ACTIVE',
           'amountInvested': _toDouble(r['amountBdt']),
           'groupName': groupName,
           'entityName': r['entityName']?.toString() ?? '',
           'tierName': tierName,
           'projectTitle': title,
-          'expectedReturnPct': _normalizePct(r['expectedReturnPct'], 0.15),
-          'durationMonths': _toInt(r['durationMonths'], 12),
-          'userName': r['name']?.toString() ?? 'Investor',
+          'expectedReturnPct': _normalizePct(r['expectedReturnPct'], 0),
+          'durationMonths': _toInt(r['durationMonths'], 0),
+          'userName': r['name']?.toString() ?? '',
           'userEmail': r['email']?.toString() ?? '',
           'userPhone': r['phone']?.toString(),
-          'verifyUrl': '$websiteBaseUrl/verify/$receiptNo',
+          'verifyUrl': receiptNo.isEmpty ? '' : '$websiteBaseUrl/verify/$receiptNo',
         };
       }).toList();
     } catch (e) {
@@ -3022,23 +4932,10 @@ class DatabaseService {
 
   static Future<void> _ensureReceiptNumbersExist() async {
     try {
-      // 1. Auto-activate investments that have approved manual payment submissions
-      await executeNeonHttp('''
-        UPDATE investments
-        SET "status" = 'ACTIVE'::"InvestmentStatus", "activatedAt" = COALESCE("activatedAt", NOW())
-        WHERE "status"::text IN ('PENDING', 'PAYMENT_PENDING')
-          AND "id" IN (
-            SELECT "investmentId" FROM manual_payment_submissions WHERE "status"::text = 'APPROVED'
-          )
-      ''');
-
-      // 2. Receipt number na thakle ek query te boshai (age protita row er jonno alada query hoto)
-      await executeNeonHttp('''
-        UPDATE investments
-        SET "receiptNumber" = 'BC-' || UPPER(SUBSTRING("id" FROM 1 FOR 12))
-        WHERE "receiptNumber" IS NULL OR "receiptNumber" = ''
-      ''');
-
+      // Age app nije ekta APPROVED kisti dekhlei investment ACTIVE kore dito ar
+      // shobar (PENDING o) receipt number boshato — ledger, fundedAmount,
+      // contract chara. Website eta approve er shomoy kore (puro taka verify
+      // hole), tai app ar financial status bodlay na.
       // 3. Age app nijei bhuya "certificate" document row banato (asol file nei,
       //    signature nei, shobar jonno public). Egulo soft-delete — website er
       //    asol certificate e verificationHash thake, segulo chhoa hoy na.
@@ -3094,6 +4991,7 @@ class DatabaseService {
           gt.description as tier_description, gt.benefits as tier_benefits,
           gt."minAmountBdt" as tier_min_amount, gt."maxAmountBdt" as tier_max_amount, 
           gt."expectedReturnPct" as tier_expected_return, gt."durationMonths" as tier_duration_months,
+          to_jsonb(gt) ->> 'availableUnits' as tier_available_units,
           ba.id as bank_id, ba."bankName" as bank_name, ba."accountName" as bank_account_name, 
           ba."accountNumber" as bank_account_number, ba."branchName" as bank_branch_name
         FROM business_groups bg
@@ -3148,6 +5046,8 @@ class DatabaseService {
           'maxAmountBdt': _toDoubleOrNull(r['tier_max_amount']),
           'expectedReturnPct': _normalizePct(r['tier_expected_return']),
           'durationMonths': _toInt(r['tier_duration_months']),
+          // null = unit er hishab nei; 0 = shob bikri hoye geche
+          'availableUnits': r['tier_available_units'] == null ? null : _toInt(r['tier_available_units']),
           'bank': r['bank_id'] != null
               ? {
             'id': r['bank_id'].toString(),
@@ -3186,7 +5086,13 @@ class DatabaseService {
                ba."branchName", ba."mobileNumber",
                sub."id" AS "subId", sub."status" AS "subStatus",
                sub."transactionRef" AS "subRef", sub."createdAt" AS "subCreatedAt",
-               sub."reason" AS "subReason"
+               sub."reason" AS "subReason",
+               COALESCE(to_jsonb(gi) ->> 'paymentPlan', 'FULL') AS "paymentPlan",
+               COALESCE((SELECT SUM(x."amountBdt") FROM group_investment_payments x
+                         WHERE x."groupInvestmentId" = gi."id" AND x."status"::text = 'APPROVED'), 0) AS "paidApproved",
+               COALESCE((SELECT SUM(x."amountBdt") FROM group_investment_payments x
+                         WHERE x."groupInvestmentId" = gi."id"
+                           AND x."status"::text IN ('SUBMITTED', 'UNDER_REVIEW')), 0) AS "paidPending"
         FROM group_investments gi
         JOIN group_tiers gt     ON gi."tierId" = gt."id"
         JOIN group_entities ge  ON gt."entityId" = ge."id"
@@ -3211,9 +5117,9 @@ class DatabaseService {
           'id': r['id'].toString(),
           'tierId': r['tierId']?.toString() ?? '',
           'receiptNumber': r['receiptNumber']?.toString(),
-          'groupName': r['groupName']?.toString() ?? 'Business Group',
-          'entityName': r['entityName']?.toString() ?? 'Group Entity',
-          'tierName': r['tierName']?.toString() ?? 'Tier',
+          'groupName': r['groupName']?.toString() ?? '',
+          'entityName': r['entityName']?.toString() ?? '',
+          'tierName': r['tierName']?.toString() ?? '',
           'amountBdt': _toDouble(r['amountBdt']),
           'plotNumber': r['plotNumber']?.toString() ?? '',
           'plotSizeSqft': _toDouble(r['plotSizeSqft']),
@@ -3222,6 +5128,9 @@ class DatabaseService {
           'createdAt': r['createdAt']?.toString() ?? '',
           'expectedReturnPct': _normalizePct(r['expectedReturnPct']),
           'durationMonths': _toInt(r['durationMonths']),
+          'paymentPlan': (r['paymentPlan']?.toString() ?? 'FULL').toUpperCase(),
+          'paidApproved': _toDouble(r['paidApproved']),
+          'paidPending': _toDouble(r['paidPending']),
           // GroupInvestmentsPage o ei field use kore — age eta khali jeto
           'bankAccountId': bankId ?? '',
           'bank': bankId == null
@@ -3262,9 +5171,13 @@ class DatabaseService {
     try {
       // Tier ta ki chalu ache, r amount ki min/max er moddhe?
       final tierRes = await queryNeonHttp('''
-        SELECT "id", "minAmountBdt", "maxAmountBdt", "isActive"
-        FROM group_tiers
-        WHERE "id" = \$1
+        SELECT gt."id", gt."minAmountBdt", gt."maxAmountBdt", gt."isActive",
+               ge."isActive" AS "entityActive", bg."isActive" AS "groupActive",
+               to_jsonb(gt) ->> 'availableUnits' AS "availableUnits"
+        FROM group_tiers gt
+        JOIN group_entities ge ON ge."id" = gt."entityId"
+        JOIN business_groups bg ON bg."id" = ge."groupId"
+        WHERE gt."id" = \$1
       ''', [tierId]);
 
       if (tierRes.isEmpty) {
@@ -3275,8 +5188,12 @@ class DatabaseService {
       }
 
       final t = tierRes.first;
-      if (t['isActive'] == false) {
+      if (t['isActive'] == false || t['entityActive'] == false || t['groupActive'] == false) {
         return {'success': false, 'message': 'This tier is not open for investment right now.'};
+      }
+      // Unit er hishab thakle ar 0 hoye gele — bikri shesh
+      if (t['availableUnits'] != null && _toInt(t['availableUnits']) <= 0) {
+        return {'success': false, 'message': 'This tier is sold out. No units are available right now.'};
       }
 
       final minAmt = _toDouble(t['minAmountBdt']);
@@ -3423,9 +5340,8 @@ class DatabaseService {
   }
 
   // ═════════════════════════════════════════════════════════
-  // GROUP INVEST + PAYMENT — Bank / Cash / Cheque (project er motoi)
-  // group_investment_payments e SUBMITTED → group investment PAYMENT_PENDING.
-  // Admin approve korle ACTIVE (website e).
+  // GROUP INVEST + PAYMENT — Bank / Cash / Cheque (project er motoi, website er
+  // niyome protita madhyom alada row). Admin approve korle ACTIVE (website e).
   // ═════════════════════════════════════════════════════════
 
   /// App er check server eo — kichu miss gele kichui save hobe na
@@ -3436,157 +5352,61 @@ class DatabaseService {
     required double cashAmount,
     required double chequeAmount,
     String? bankTransactionId,
-    String? bankReceiptUrl,
+    List<String> bankProofUrls = const [],
     String? cashReceiver,
-    String? chequeImageUrl,
+    List<String> chequeProofUrls = const [],
+    List<String> cashProofUrls = const [],
+    String? chequeNumber,
+    String? cashReceiptNo,
   }) {
+    // Website split-payment.ts er niyom
     if (m.isEmpty) return 'Please choose a payment method.';
+    if (m.length > 2) return 'You can combine at most two payment methods.';
     if (amountBdt <= 0) return 'Please enter the amount.';
-    if (m.contains('BANK') &&
-        ((bankTransactionId ?? '').trim().isEmpty || (bankReceiptUrl ?? '').isEmpty)) {
-      return 'Bank payment needs the transaction number and receipt image.';
+    if (m.contains('BANK') && bankProofUrls.isEmpty) {
+      return 'Bank Transfer: upload the transfer receipt or screenshot.';
     }
-    if (m.contains('CASH') && (cashReceiver ?? '').trim().isEmpty) {
-      return 'Please select who received the cash.';
+    if (m.contains('CASH') && cashReceiverValue(cashReceiver) == null) {
+      return 'Cash: select who received the cash.';
     }
-    if (m.contains('CHEQUE') && (chequeImageUrl ?? '').isEmpty) {
-      return 'Please upload the cheque image.';
+    if (m.contains('CHEQUE')) {
+      if ((chequeNumber ?? '').trim().isEmpty) return 'Cheque: the cheque number is required.';
+      if (chequeProofUrls.isEmpty) return 'Cheque: upload a photo of the cheque or deposit slip.';
     }
-    final parts = (m.contains('BANK') ? bankAmount : 0) +
-        (m.contains('CASH') ? cashAmount : 0) +
-        (m.contains('CHEQUE') ? chequeAmount : 0);
-    if (m.length > 1 && (parts - amountBdt).abs() > 0.5) {
-      return 'The split amounts must add up to the total.';
+    if (bankProofUrls.length > 3 || chequeProofUrls.length > 3 || cashProofUrls.length > 3) {
+      return 'Upload at most 3 proof files for each payment method.';
+    }
+    if (m.length > 1) {
+      for (final (k, v) in [('BANK', bankAmount), ('CASH', cashAmount), ('CHEQUE', chequeAmount)]) {
+        if (m.contains(k) && v <= 0) return 'Enter an amount for every payment method you chose.';
+      }
+      final parts = (m.contains('BANK') ? bankAmount : 0) +
+          (m.contains('CASH') ? cashAmount : 0) +
+          (m.contains('CHEQUE') ? chequeAmount : 0);
+      if ((parts - amountBdt).abs() > 0.5) return 'The split amounts must add up to the total.';
     }
     return null;
   }
 
-  /// group_investment_payments e ekta SUBMITTED row (column/enum dekhe dekhe)
-  static Future<Map<String, dynamic>> _insertGroupPayment({
-    required String groupInvestmentId,
-    required String userId,
-    required double amountBdt,
-    required Set<String> m,
-    required double bankAmount,
-    required double cashAmount,
-    required double chequeAmount,
-    String? bankAccountId,
-    String? tierBankAccountId,
-    String? bankAccountLabel,
-    String? bankTransactionId,
-    String? bankReceiptUrl,
-    String? cashReceiver,
-    String? chequeImageUrl,
-  }) async {
-    const table = 'group_investment_payments';
-    final metas = await Future.wait([_paymentMethodMeta(table), _columnsOf(table)]);
-    final pm = metas[0] as ({String cast, Set<String> labels});
-    final cols = metas[1] as Map<String, bool>;
-    if (cols.isEmpty) return {'success': false, 'message': _saveFailMsg('Could not save your payment details.')};
-
-    String pick(List<String> candidates, String fallback) {
-      if (pm.labels.isEmpty) return candidates.first;
-      for (final c in candidates) {
-        if (pm.labels.contains(c)) return c;
-      }
-      return pm.labels.contains(fallback) ? fallback : pm.labels.first;
-    }
-
-    final String method;
-    if (m.length > 1) {
-      method = pick(['MIXED', 'MULTIPLE', 'OTHER'], m.contains('BANK') ? 'BANK_TRANSFER' : 'CASH');
-    } else if (m.contains('BANK')) {
-      method = pick(['BANK_TRANSFER', 'BANK_DEPOSIT', 'BANK'], 'BANK_TRANSFER');
-    } else if (m.contains('CASH')) {
-      method = pick(['CASH', 'CASH_DEPOSIT', 'CASH_PAYMENT'], 'BANK_TRANSFER');
-    } else {
-      method = pick(['CHEQUE', 'CHECK', 'BANK_CHEQUE'], 'BANK_TRANSFER');
-    }
-
-    final lines = <String>[
-      'Payment: ${[if (m.contains('BANK')) 'Bank', if (m.contains('CASH')) 'Cash', if (m.contains('CHEQUE')) 'Cheque'].join(' + ')}'
-          ' — total ${_fmtTk(amountBdt)}',
-      if (m.contains('BANK'))
-        'Bank: ${_fmtTk(m.length > 1 ? bankAmount : amountBdt)}'
-            '${(bankAccountLabel ?? '').isNotEmpty ? ' to $bankAccountLabel' : ''}'
-            ', TRX ${bankTransactionId!.trim()}, receipt: $bankReceiptUrl',
-      if (m.contains('CASH'))
-        'Cash: ${_fmtTk(m.length > 1 ? cashAmount : amountBdt)} handed to ${cashReceiver!.trim()}',
-      if (m.contains('CHEQUE'))
-        'Cheque: ${_fmtTk(m.length > 1 ? chequeAmount : amountBdt)}, image: $chequeImageUrl',
-    ];
-
-    final proofUrl = m.contains('BANK') ? bankReceiptUrl! : (m.contains('CHEQUE') ? chequeImageUrl! : '');
-    final ref = m.contains('BANK')
-        ? bankTransactionId!.trim()
-        : (m.contains('CASH') ? 'CASH - ${cashReceiver!.trim()}' : 'CHEQUE');
-
-    // Bank na hole bankAccountId khali — kintu column NOT NULL hole tier er account
-    String? bankId = (m.contains('BANK') && (bankAccountId ?? '').isNotEmpty) ? bankAccountId : null;
-    if (bankId == null && cols.containsKey('bankAccountId') && cols['bankAccountId'] == false) {
-      bankId = (tierBankAccountId ?? '').isNotEmpty ? tierBankAccountId : null;
-      if (bankId == null) {
-        return {'success': false, 'message': 'Payment account for this tier is not set yet. Please contact support.'};
-      }
-    }
-
-    String? orEmpty(String? v, String col) =>
-        (v == null || v.isEmpty) ? ((cols[col] ?? true) ? null : '') : v;
-
-    final nowStr = _nowIso();
-    final names = <String>[];
-    final values = <String>[];
-    final params = <dynamic>[];
-    void add(String col, dynamic v, {String cast = '', String? raw}) {
-      if (!cols.containsKey(col)) return;
-      names.add('"$col"');
-      if (raw != null) {
-        values.add(raw);
-      } else {
-        params.add(v);
-        values.add('\$${params.length}$cast');
-      }
-    }
-
-    add('id', _generateUuid());
-    add('groupInvestmentId', groupInvestmentId);
-    add('submittedBy', userId);
-    add('status', null, raw: "'SUBMITTED'::\"ManualPaymentStatus\"");
-    add('amountBdt', amountBdt);
-    add('bankAccountId', bankId);
-    add('paymentMethod', method, cast: pm.cast);
-    add('transactionRef', orEmpty(ref, 'transactionRef'));
-    add('proofFileUrl', orEmpty(proofUrl, 'proofFileUrl'));
-    add('proofMimeType', orEmpty(proofUrl.isEmpty ? '' : 'image/jpeg', 'proofMimeType'));
-    add('notes', lines.join('\n'));
-    add('createdAt', nowStr);
-    add('updatedAt', nowStr);
-
-    final ins = await queryNeonHttp('''
-      INSERT INTO group_investment_payments (${names.join(', ')})
-      VALUES (${values.join(', ')})
-      RETURNING "id"
-    ''', params);
-
-    if (ins.isEmpty) {
-      return {'success': false, 'message': 'Could not save your payment details. (${_shortDbError()})'};
-    }
-
-    await executeNeonHttp('''
-      UPDATE group_investments
-      SET "status" = 'PAYMENT_PENDING'::"GroupInvestmentStatus", "updatedAt" = \$1
-      WHERE "id" = \$2
-    ''', [nowStr, groupInvestmentId]);
-
-    return {'success': true};
+  /// Website er CASH_RECEIVERS value — purono app er lekha ("MD Sir") o bujhe
+  static String? cashReceiverValue(String? raw) {
+    final v = (raw ?? '').trim().toUpperCase().replaceAll(RegExp(r'[^A-Z]'), '');
+    if (v.isEmpty) return null;
+    if (v == 'CEO') return 'CEO';
+    if (v == 'MD' || v.startsWith('MDSIR') || v.contains('MANAGINGDIRECTOR')) return 'MD';
+    if (v.startsWith('CHAIRMAN')) return 'CHAIRMAN';
+    if (v.startsWith('FINANCE')) return 'FINANCE_TEAM';
+    return null;
   }
 
-  /// Notun group investment + payment ek shathe (Browse Groups theke)
+  /// Notun group investment + prothom payment (Browse Groups theke)
   static Future<Map<String, dynamic>> groupInvestWithPayment({
     required String userId,
     required String tierId,
     required double amountBdt,
     required List<String> methods,
+    double? payNowBdt,
+    String paymentPlan = 'FULL',
     double bankAmount = 0,
     double cashAmount = 0,
     double chequeAmount = 0,
@@ -3596,26 +5416,39 @@ class DatabaseService {
     String? bankReceiptUrl,
     String? cashReceiver,
     String? chequeImageUrl,
+    List<String> bankProofUrls = const [],
+    List<String> chequeProofUrls = const [],
+    List<String> cashProofUrls = const [],
+    String? chequeNumber,
+    String? cashReceiptNo,
   }) async {
     if (userId.isEmpty) return {'success': false, 'message': _loginRequiredMsg};
     final m = methods.toSet();
+    final plan = paymentPlan == 'INSTALLMENT' ? 'INSTALLMENT' : 'FULL';
+    final payNow = plan == 'FULL' ? amountBdt : (payNowBdt ?? amountBdt);
     _lastDbFailure = null;
+
+    if (payNow <= 0 || (payNow * 100).round() > (amountBdt * 100).round()) {
+      return {'success': false, 'message': 'The amount you pay now must be between 1 and ${_fmtTk(amountBdt)}.'};
+    }
     final problem = _checkPaymentParts(
       m: m,
-      amountBdt: amountBdt,
+      amountBdt: payNow,
       bankAmount: bankAmount,
       cashAmount: cashAmount,
       chequeAmount: chequeAmount,
       bankTransactionId: bankTransactionId,
-      bankReceiptUrl: bankReceiptUrl,
+      bankProofUrls: [...bankProofUrls, if ((bankReceiptUrl ?? '').isNotEmpty) bankReceiptUrl!],
       cashReceiver: cashReceiver,
-      chequeImageUrl: chequeImageUrl,
+      chequeProofUrls: [...chequeProofUrls, if ((chequeImageUrl ?? '').isNotEmpty) chequeImageUrl!],
+      cashProofUrls: cashProofUrls,
+      chequeNumber: chequeNumber,
+      cashReceiptNo: cashReceiptNo,
     );
     if (problem != null) return {'success': false, 'message': problem};
 
     // Tier er nijer bank account (bankAccountId NOT NULL hole lagbe)
-    final tier = await queryNeonHttp(
-        'SELECT "bankAccountId" FROM group_tiers WHERE "id" = \$1', [tierId]);
+    final tier = await queryNeonHttp('SELECT "bankAccountId" FROM group_tiers WHERE "id" = \$1', [tierId]);
     final tierBankId = tier.isEmpty ? null : tier.first['bankAccountId']?.toString();
 
     // ধাপ ১: investment (tier chalu? min/max? — createGroupInvestment e check)
@@ -3634,21 +5467,27 @@ class DatabaseService {
     }
 
     try {
-      final res = await _insertGroupPayment(
-        groupInvestmentId: gid,
+      await _setPaymentPlan(group: true, id: gid, plan: plan);
+      final res = await _insertPaymentParts(
+        group: true,
+        parentId: gid,
         userId: userId,
-        amountBdt: amountBdt,
         m: m,
+        payNowBdt: payNow,
         bankAmount: bankAmount,
         cashAmount: cashAmount,
         chequeAmount: chequeAmount,
         bankAccountId: bankAccountId,
-        tierBankAccountId: tierBankId,
+        fallbackBankId: tierBankId,
         bankAccountLabel: bankAccountLabel,
         bankTransactionId: bankTransactionId,
-        bankReceiptUrl: bankReceiptUrl,
+        bankProofUrls: [...bankProofUrls, if ((bankReceiptUrl ?? '').isNotEmpty) bankReceiptUrl!],
         cashReceiver: cashReceiver,
-        chequeImageUrl: chequeImageUrl,
+        chequeProofUrls: [...chequeProofUrls, if ((chequeImageUrl ?? '').isNotEmpty) chequeImageUrl!],
+        cashProofUrls: cashProofUrls,
+        chequeNumber: chequeNumber,
+        cashReceiptNo: cashReceiptNo,
+        note: plan == 'INSTALLMENT' ? 'Installment 1 · commitment ${_fmtTk(amountBdt)}' : null,
       );
       if (res['success'] != true) return await undo(res['message']?.toString() ?? 'Could not save your payment.');
       await _notifyGroupPending(userId: userId, groupInvestmentId: gid, amountBdt: amountBdt);
@@ -3664,7 +5503,7 @@ class DatabaseService {
     }
   }
 
-  /// Age theke thaka (PAYMENT_PENDING / proof bad pora) group investment er payment
+  /// Age theke thaka group investment e (baki taka / kisti / reject howa part) payment
   static Future<Map<String, dynamic>> submitGroupPaymentMulti({
     required String groupInvestmentId,
     required String userId,
@@ -3679,6 +5518,11 @@ class DatabaseService {
     String? bankReceiptUrl,
     String? cashReceiver,
     String? chequeImageUrl,
+    List<String> bankProofUrls = const [],
+    List<String> chequeProofUrls = const [],
+    List<String> cashProofUrls = const [],
+    String? chequeNumber,
+    String? cashReceiptNo,
   }) async {
     if (userId.isEmpty) return {'success': false, 'message': _loginRequiredMsg};
     final m = methods.toSet();
@@ -3690,59 +5534,46 @@ class DatabaseService {
       cashAmount: cashAmount,
       chequeAmount: chequeAmount,
       bankTransactionId: bankTransactionId,
-      bankReceiptUrl: bankReceiptUrl,
+      bankProofUrls: [...bankProofUrls, if ((bankReceiptUrl ?? '').isNotEmpty) bankReceiptUrl!],
       cashReceiver: cashReceiver,
-      chequeImageUrl: chequeImageUrl,
+      chequeProofUrls: [...chequeProofUrls, if ((chequeImageUrl ?? '').isNotEmpty) chequeImageUrl!],
+      cashProofUrls: cashProofUrls,
+      chequeNumber: chequeNumber,
+      cashReceiptNo: cashReceiptNo,
     );
     if (problem != null) return {'success': false, 'message': problem};
 
     try {
-      final check = await queryNeonHttp('''
-        SELECT gi."status"::text AS "status", gi."amountBdt", gt."bankAccountId" AS "tierBankId",
-               EXISTS (
-                 SELECT 1 FROM group_investment_payments x
-                 WHERE x."groupInvestmentId" = gi."id" AND x."status"::text = 'SUBMITTED'
-               ) AS "hasPending"
-        FROM group_investments gi
-        JOIN group_tiers gt ON gt."id" = gi."tierId"
-        WHERE gi."id" = \$1 AND gi."investorUserId" = \$2
-      ''', [groupInvestmentId, userId]);
-
-      if (check.isEmpty) {
+      final prog = await getPaymentProgress(group: true, id: groupInvestmentId, userId: userId);
+      if (prog == null) {
         return {
           'success': false,
           'message': _lastConnectionError != null ? _connectionErrorMsg() : 'Group investment not found.',
         };
       }
-      final row = check.first;
-      final st = row['status']?.toString() ?? '';
-      if (st != 'PENDING' && st != 'PAYMENT_PENDING') {
-        return {'success': false, 'message': 'This investment is not awaiting payment.'};
-      }
-      if (row['hasPending'] == true || row['hasPending']?.toString() == 'true') {
-        return {'success': false, 'message': 'A payment is already under review.'};
-      }
-      // Taka investment er shoman-i hote hobe
-      final invAmount = _toDouble(row['amountBdt']);
-      if (invAmount > 0 && (invAmount - amountBdt).abs() > 0.5) {
-        return {'success': false, 'message': 'Amount must be ${_fmtTk(invAmount)}.'};
-      }
+      final pay = _checkPayable(prog, amountBdt);
+      if (pay != null) return {'success': false, 'message': pay};
 
-      final res = await _insertGroupPayment(
-        groupInvestmentId: groupInvestmentId,
+      final res = await _insertPaymentParts(
+        group: true,
+        parentId: groupInvestmentId,
         userId: userId,
-        amountBdt: amountBdt,
         m: m,
+        payNowBdt: amountBdt,
         bankAmount: bankAmount,
         cashAmount: cashAmount,
         chequeAmount: chequeAmount,
         bankAccountId: bankAccountId,
-        tierBankAccountId: row['tierBankId']?.toString(),
+        fallbackBankId: prog['fallbackBankId']?.toString(),
         bankAccountLabel: bankAccountLabel,
         bankTransactionId: bankTransactionId,
-        bankReceiptUrl: bankReceiptUrl,
+        bankProofUrls: [...bankProofUrls, if ((bankReceiptUrl ?? '').isNotEmpty) bankReceiptUrl!],
         cashReceiver: cashReceiver,
-        chequeImageUrl: chequeImageUrl,
+        chequeProofUrls: [...chequeProofUrls, if ((chequeImageUrl ?? '').isNotEmpty) chequeImageUrl!],
+        cashProofUrls: cashProofUrls,
+        chequeNumber: chequeNumber,
+        cashReceiptNo: cashReceiptNo,
+        note: prog['plan'] == 'INSTALLMENT' ? 'Installment · commitment ${_fmtTk(_toDouble(prog['total']))}' : null,
       );
       if (res['success'] != true) return res;
       await _notifyGroupPending(

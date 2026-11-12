@@ -4,11 +4,14 @@ import 'package:flutter/services.dart';
 import '../../services/auth_service.dart';
 import 'reset_password_page.dart';
 import 'widgets/auth_card.dart';
+import '../../theme/app_colors.dart';
 
-const _emerald = Color(0xFF0F4D3A);
-const _goldDeep = Color(0xFF8A6A1F);
-const _bg = Color(0xFFF6F1E7);
-const _danger = Color(0xFFB3261E);
+// ─── Palette — website er rong (lib/theme/app_colors.dart) ───
+const _emerald = BC.primary;
+const _muted = BC.mutedForeground;
+const _line = BC.border;
+const _bg = BC.background;
+const _danger = BC.destructive;
 
 class OtpVerificationPage extends StatefulWidget {
   final String email;
@@ -147,7 +150,7 @@ class _OtpVerificationPageState extends State<OtpVerificationPage> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Text("Didn't get the email? ",
-                    style: TextStyle(color: Colors.grey[700], fontSize: 13)),
+                    style: const TextStyle(color: _muted, fontSize: 14)),
                 TextButton(
                   onPressed: (_resendSeconds == 0 && !_isResending) ? _handleResendOtp : null,
                   child: Text(
@@ -155,9 +158,9 @@ class _OtpVerificationPageState extends State<OtpVerificationPage> {
                         ? 'Sending...'
                         : (_resendSeconds > 0 ? 'Resend in ${_resendSeconds}s' : 'Resend code'),
                     style: TextStyle(
-                      color: _resendSeconds == 0 ? _emerald : Colors.grey,
+                      color: _resendSeconds == 0 ? _emerald : _muted.withAlpha(150),
                       fontWeight: FontWeight.bold,
-                      fontSize: 13,
+                      fontSize: 14,
                     ),
                   ),
                 ),
@@ -179,7 +182,7 @@ class _OtpVerificationPageState extends State<OtpVerificationPage> {
                     ],
                     textAlign: TextAlign.center,
                     style: const TextStyle(
-                      fontSize: 26,
+                      fontSize: 27,
                       fontWeight: FontWeight.bold,
                       letterSpacing: 10,
                       color: _emerald,
@@ -196,7 +199,7 @@ class _OtpVerificationPageState extends State<OtpVerificationPage> {
                       enabledBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
                         borderSide: BorderSide(
-                            color: _error != null ? _danger : Colors.grey.shade300),
+                            color: _error != null ? _danger : _line),
                       ),
                       focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
@@ -220,7 +223,7 @@ class _OtpVerificationPageState extends State<OtpVerificationPage> {
                         Expanded(
                           child: Text(_error!,
                               style: const TextStyle(
-                                  color: _danger, fontSize: 13, fontWeight: FontWeight.w600)),
+                                  color: _danger, fontSize: 14, fontWeight: FontWeight.w600)),
                         ),
                       ],
                     ),
@@ -229,7 +232,7 @@ class _OtpVerificationPageState extends State<OtpVerificationPage> {
                   Text(
                     'Check your Spam / Promotions folder if the email is not in your inbox.',
                     textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 12, color: _goldDeep),
+                    style: const TextStyle(fontSize: 13, color: _muted),
                   ),
                   const SizedBox(height: 20),
                   ElevatedButton(
@@ -248,7 +251,7 @@ class _OtpVerificationPageState extends State<OtpVerificationPage> {
                       child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                     )
                         : const Text('Verify & Continue',
-                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                        style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
                   ),
                 ],
               ),

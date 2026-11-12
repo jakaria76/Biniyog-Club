@@ -5,6 +5,8 @@ import '../../../services/auth_service.dart';
 import '../../../services/bd_location_service.dart';
 import '../../../services/database_service.dart';
 import '../../../services/language_service.dart';
+import '../../authentication/widgets/countries.dart';
+import '../../../theme/app_colors.dart';
 
 /// Profile edit — nam, mobile, email, jonmo tarikh, NID, thikana (bibhag →
 /// jela → upazila), nominee, pesha / ay / obhiggota / jhuki.
@@ -21,15 +23,14 @@ class EditProfilePage extends StatefulWidget {
 }
 
 class _EditProfilePageState extends State<EditProfilePage> {
-  // ─── Palette ───
-  static const Color emerald = Color(0xFF0E4A37);
-  static const Color goldDeep = Color(0xFF8A6A3A);
-  static const Color goldSoft = Color(0xFFF6EEDF);
-  static const Color ivory = Color(0xFFF7F4EE);
-  static const Color ink = Color(0xFF1C2421);
-  static const Color muted = Color(0xFF6E736F);
-  static const Color line = Color(0xFFE8E2D7);
-  static const Color danger = Color(0xFFB4413A);
+  // ─── Palette — website er rong (lib/theme/app_colors.dart) ───
+  static const Color emerald = BC.primary;
+  static const Color emeraldSoft = BC.secondary;
+  static const Color ivory = BC.background;
+  static const Color ink = BC.foreground;
+  static const Color muted = BC.mutedForeground;
+  static const Color line = BC.border;
+  static const Color danger = BC.destructive;
 
   static const String _otherKey = '__other__';
 
@@ -76,6 +77,9 @@ class _EditProfilePageState extends State<EditProfilePage> {
   late final TextEditingController _occupation;
 
   DateTime? _dob;
+
+  /// Phone er desh (registration er motoi je kono desh)
+  Country _country = Country.bangladesh;
   String? _division;
   String? _district;
   String? _upazila;
@@ -97,7 +101,8 @@ class _EditProfilePageState extends State<EditProfilePage> {
     super.initState();
     final p = _p;
     _name = TextEditingController(text: widget.profile['name']?.toString() ?? '');
-    _phone = TextEditingController(text: widget.profile['phone']?.toString() ?? '');
+    _phone = TextEditingController();
+    _splitPhone(widget.profile['phone']?.toString() ?? '');
     _email = TextEditingController(text: widget.profile['email']?.toString() ?? '');
     _nid = TextEditingController(text: p['nationalId'] ?? '');
     _nomineeName = TextEditingController(text: p['nomineeName'] ?? '');
@@ -124,6 +129,93 @@ class _EditProfilePageState extends State<EditProfilePage> {
       c.dispose();
     }
     super.dispose();
+  }
+
+  /// DB er +8801712… / 01712… → desh + local number
+  void _splitPhone(String raw) {
+    if (raw.trim().isEmpty) return;
+    final e = DatabaseService.canonicalPhone(raw);
+    if (!e.startsWith('+')) {
+      _phone.text = raw.trim();
+      return;
+    }
+    final digits = e.substring(1);
+    Country? best;
+    for (final c in Country.all) {
+      if (digits.startsWith(c.dial) && (best == null || c.dial.length > best.dial.length)) best = c;
+    }
+    if (best == null) {
+      _phone.text = digits;
+      return;
+    }
+    _country = best;
+    final local = digits.substring(best.dial.length);
+    // Bangladesh e chena format 01XXXXXXXXX
+    _phone.text = best.iso == 'BD' ? '0$local' : local;
+  }
+
+  String get _phoneE164 => DatabaseService.toE164(_country.dial, _phone.text);
+
+  Future<void> _pickCountry() async {
+    FocusScope.of(context).unfocus();
+    final picked = await showModalBottomSheet<Country>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (_) => _CountryPicker(selected: _country),
+    );
+    if (picked != null && mounted) setState(() => _country = picked);
+  }
+
+  Widget _phoneField() {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: _pickCountry,
+          child: Container(
+            height: 50,
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            decoration: BoxDecoration(
+              color: ivory,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: line),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(_country.flag, style: const TextStyle(fontSize: 18)),
+                const SizedBox(width: 4),
+                Text('+${_country.dial}',
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: ink)),
+                const Icon(Icons.arrow_drop_down_rounded, color: muted, size: 20),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: TextFormField(
+            controller: _phone,
+            keyboardType: TextInputType.phone,
+            inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9\s-]')), LengthLimitingTextInputFormatter(16)],
+            validator: (v) {
+              final t = (v ?? '').replaceAll(RegExp(r'\D'), '');
+              if (t.isEmpty) return _req;
+              if (!DatabaseService.isValidPhone(_phoneE164)) {
+                return _country.iso == 'BD'
+                    ? LanguageService.tr('Enter a valid number (01XXXXXXXXX)', 'সঠিক নম্বর দিন (01XXXXXXXXX)')
+                    : LanguageService.tr('Enter a valid phone number', 'সঠিক ফোন নম্বর দিন');
+              }
+              return null;
+            },
+            decoration: _dec(LanguageService.tr('Mobile number *', 'মোবাইল নম্বর *'), Icons.phone_outlined),
+          ),
+        ),
+      ],
+    );
   }
 
   String? _nonEmpty(String? s) => (s ?? '').trim().isEmpty ? null : s!.trim();
@@ -255,7 +347,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
     final res = await DatabaseService.updateUserProfile(
       userId: userId,
       name: _name.text.trim(),
-      phone: _phone.text.trim(),
+      phone: _phoneE164,
       email: _email.text.trim(),
       dateOfBirth: _dob,
       profile: {
@@ -313,30 +405,31 @@ class _EditProfilePageState extends State<EditProfilePage> {
             iconTheme: const IconThemeData(color: ink),
             title: Text(
               LanguageService.tr('Edit Profile', 'প্রোফাইল এডিট'),
-              style: const TextStyle(color: ink, fontWeight: FontWeight.w700, fontSize: 18),
+              style: const TextStyle(color: ink, fontWeight: FontWeight.w700, fontSize: 17.5),
             ),
+            toolbarHeight: 54,
           ),
           bottomNavigationBar: SafeArea(
             top: false,
             child: Container(
-              padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
               decoration: const BoxDecoration(color: Colors.white, border: Border(top: BorderSide(color: line))),
               child: SizedBox(
-                height: 52,
+                height: 46,
                 child: FilledButton.icon(
                   onPressed: _saving ? null : _save,
                   icon: _saving
                       ? const SizedBox(
-                      width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2.2, color: Colors.white))
-                      : const Icon(Icons.check_rounded),
+                      width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                      : const Icon(Icons.check_rounded, size: 18),
                   label: Text(LanguageService.tr('Save Changes', 'পরিবর্তন সেভ করুন'),
-                      style: const TextStyle(fontSize: 15.5, fontWeight: FontWeight.w700)),
+                      style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
                   style: FilledButton.styleFrom(
                     backgroundColor: emerald,
                     foregroundColor: Colors.white,
                     disabledBackgroundColor: emerald.withAlpha(140),
                     disabledForegroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   ),
                 ),
               ),
@@ -353,9 +446,9 @@ class _EditProfilePageState extends State<EditProfilePage> {
                   Text(
                     LanguageService.tr('Clear any field and save to remove that information.',
                         'কোনো তথ্য মুছতে ঘরটি খালি করে সেভ করুন।'),
-                    style: const TextStyle(fontSize: 12, color: muted),
+                    style: const TextStyle(fontSize: 12.5, color: muted),
                   ),
-                  const SizedBox(height: 14),
+                  const SizedBox(height: 10),
 
                   // ─── Basic ───
                   _section(Icons.person_outline_rounded, LanguageService.tr('Basic information', 'মৌলিক তথ্য'), [
@@ -366,18 +459,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
                           if (t.length < 3) return LanguageService.tr('Name is too short', 'নাম খুব ছোট');
                           return null;
                         }),
-                    _field(_phone, LanguageService.tr('Mobile number *', 'মোবাইল নম্বর *'), Icons.phone_outlined,
-                        keyboard: TextInputType.phone,
-                        clearable: false,
-                        formatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9+\s-]')), LengthLimitingTextInputFormatter(16)],
-                        validator: (v) {
-                          final t = DatabaseService.normalizeBdPhone((v ?? '').trim());
-                          if (t.isEmpty) return _req;
-                          if (!RegExp(r'^01[3-9]\d{8}$').hasMatch(t)) {
-                            return LanguageService.tr('Enter a valid number (01XXXXXXXXX)', 'সঠিক নম্বর দিন (01XXXXXXXXX)');
-                          }
-                          return null;
-                        }),
+                    _phoneField(),
                     _field(_email, LanguageService.tr('Email', 'ইমেইল'), Icons.mail_outline_rounded,
                         keyboard: TextInputType.emailAddress, validator: (v) {
                           final t = (v ?? '').trim();
@@ -407,7 +489,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
                     Text(
                       LanguageService.tr('The person who receives your investment if something happens to you.',
                           'আপনার অবর্তমানে যিনি আপনার বিনিয়োগ পাবেন।'),
-                      style: const TextStyle(fontSize: 11.5, color: muted),
+                      style: const TextStyle(fontSize: 12, color: muted),
                     ),
                     _field(_nomineeName, LanguageService.tr('Nominee name', 'নমিনীর নাম'), Icons.person_pin_outlined,
                         caps: TextCapitalization.words, onChanged: (_) => setState(() {})),
@@ -456,13 +538,13 @@ class _EditProfilePageState extends State<EditProfilePage> {
                   if (_error != null)
                     Container(
                       padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(color: const Color(0xFFFBEAE8), borderRadius: BorderRadius.circular(12)),
+                      decoration: BoxDecoration(color: BC.destructiveMuted, borderRadius: BorderRadius.circular(12)),
                       child: Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           const Icon(Icons.error_outline_rounded, size: 17, color: danger),
                           const SizedBox(width: 8),
-                          Expanded(child: Text(_error!, style: const TextStyle(fontSize: 12.5, color: danger))),
+                          Expanded(child: Text(_error!, style: const TextStyle(fontSize: 13.5, color: danger))),
                         ],
                       ),
                     ),
@@ -520,7 +602,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
           DropdownMenuItem(
             value: _otherKey,
             child: Text(LanguageService.tr('Other (type it)', 'অন্যান্য (লিখে দিন)'),
-                style: const TextStyle(fontSize: 13.5, color: goldDeep, fontWeight: FontWeight.w600)),
+                style: const TextStyle(fontSize: 13.5, color: emerald, fontWeight: FontWeight.w600)),
           ),
         ],
         onChanged: _district == null ? null : (v) => setState(() => _upazila = v),
@@ -546,11 +628,11 @@ class _EditProfilePageState extends State<EditProfilePage> {
   // ─── Building blocks ──────────────────────────────────────
   Widget _section(IconData icon, String title, List<Widget> children) {
     return Container(
-      margin: const EdgeInsets.only(bottom: 14),
-      padding: const EdgeInsets.all(14),
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(14),
         border: Border.all(color: line),
       ),
       child: Column(
@@ -561,14 +643,14 @@ class _EditProfilePageState extends State<EditProfilePage> {
               Container(
                 width: 30,
                 height: 30,
-                decoration: BoxDecoration(color: goldSoft, borderRadius: BorderRadius.circular(9)),
-                child: Icon(icon, size: 17, color: goldDeep),
+                decoration: BoxDecoration(color: emeraldSoft, borderRadius: BorderRadius.circular(9)),
+                child: Icon(icon, size: 16, color: emerald),
               ),
-              const SizedBox(width: 10),
-              Text(title, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: ink)),
+              const SizedBox(width: 8),
+              Text(title, style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700, color: ink)),
             ],
           ),
-          for (final c in children) ...[const SizedBox(height: 12), c],
+          for (final c in children) ...[const SizedBox(height: 10), c],
         ],
       ),
     );
@@ -603,7 +685,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
           suffixIcon: clearable && value.text.isNotEmpty
               ? IconButton(
             tooltip: LanguageService.tr('Clear', 'মুছুন'),
-            icon: const Icon(Icons.close_rounded, size: 18, color: muted),
+            icon: const Icon(Icons.close_rounded, size: 16, color: muted),
             onPressed: () {
               c.clear();
               onChanged?.call('');
@@ -623,10 +705,10 @@ class _EditProfilePageState extends State<EditProfilePage> {
       child: InputDecorator(
         decoration: _dec(LanguageService.tr('Date of birth', 'জন্ম তারিখ'), Icons.cake_outlined).copyWith(
           suffixIcon: _dob == null
-              ? const Icon(Icons.calendar_month_outlined, color: muted, size: 20)
+              ? const Icon(Icons.calendar_month_outlined, color: muted, size: 17)
               : IconButton(
             tooltip: LanguageService.tr('Clear', 'মুছুন'),
-            icon: const Icon(Icons.close_rounded, size: 18, color: muted),
+            icon: const Icon(Icons.close_rounded, size: 16, color: muted),
             onPressed: () => setState(() => _dob = null),
           ),
         ),
@@ -675,7 +757,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
         suffixIcon: value != null && onChanged != null
             ? IconButton(
           tooltip: LanguageService.tr('Clear', 'মুছুন'),
-          icon: const Icon(Icons.close_rounded, size: 18, color: muted),
+          icon: const Icon(Icons.close_rounded, size: 16, color: muted),
           onPressed: () => onChanged(null),
         )
             : null,
@@ -687,10 +769,13 @@ class _EditProfilePageState extends State<EditProfilePage> {
     return InputDecoration(
       labelText: label,
       labelStyle: const TextStyle(fontSize: 13, color: muted),
-      prefixIcon: Icon(icon, color: goldDeep, size: 20),
+      floatingLabelStyle: const TextStyle(fontSize: 13.5, color: emerald, fontWeight: FontWeight.w600),
+      isDense: true,
+      prefixIcon: Icon(icon, color: emerald, size: 19),
+      prefixIconConstraints: const BoxConstraints(minWidth: 38, minHeight: 38),
       filled: true,
       fillColor: ivory,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
       border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: line)),
       enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: line)),
       disabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: line.withAlpha(120))),
@@ -699,6 +784,101 @@ class _EditProfilePageState extends State<EditProfilePage> {
       errorBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: danger)),
       focusedErrorBorder:
       OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: danger, width: 1.4)),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Desh bachai (registration er motoi — nam, code ba +dial diye khoja)
+// ═══════════════════════════════════════════════════════════
+class _CountryPicker extends StatefulWidget {
+  final Country selected;
+  const _CountryPicker({required this.selected});
+
+  @override
+  State<_CountryPicker> createState() => _CountryPickerState();
+}
+
+class _CountryPickerState extends State<_CountryPicker> {
+  static const Color emerald = BC.primary;
+  static const Color emeraldSoft = BC.secondary;
+  static const Color ivory = BC.background;
+  static const Color ink = BC.foreground;
+  static const Color muted = BC.mutedForeground;
+  static const Color line = BC.border;
+
+  String _q = '';
+
+  List<Country> get _list {
+    final q = _q.trim().toLowerCase().replaceFirst('+', '');
+    if (q.isEmpty) return Country.all;
+    return Country.all
+        .where((c) => c.name.toLowerCase().contains(q) || c.iso.toLowerCase() == q || c.dial.startsWith(q))
+        .toList();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final list = _list;
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      child: SizedBox(
+        height: MediaQuery.of(context).size.height * 0.75,
+        child: Column(
+          children: [
+            const SizedBox(height: 10),
+            Container(width: 40, height: 4, decoration: BoxDecoration(color: line, borderRadius: BorderRadius.circular(4))),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+              child: TextField(
+                autofocus: true,
+                onChanged: (v) => setState(() => _q = v),
+                decoration: InputDecoration(
+                  hintText: LanguageService.tr('Search country or code', 'দেশ বা কোড খুঁজুন'),
+                  prefixIcon: const Icon(Icons.search_rounded, color: muted),
+                  filled: true,
+                  fillColor: ivory,
+                  contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: line)),
+                  enabledBorder:
+                  OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: line)),
+                  focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: emerald, width: 1.5)),
+                ),
+              ),
+            ),
+            Expanded(
+              child: list.isEmpty
+                  ? Center(
+                  child: Text(LanguageService.tr('No country found', 'কোনো দেশ পাওয়া যায়নি'),
+                      style: const TextStyle(color: muted)))
+                  : ListView.builder(
+                padding: const EdgeInsets.fromLTRB(8, 0, 8, 16),
+                itemCount: list.length,
+                itemBuilder: (_, i) {
+                  final c = list[i];
+                  final on = c.iso == widget.selected.iso;
+                  return Material(
+                    color: on ? emeraldSoft : Colors.transparent,
+                    borderRadius: BorderRadius.circular(12),
+                    child: ListTile(
+                      dense: true,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      leading: Text(c.flag, style: const TextStyle(fontSize: 23)),
+                      title: Text(c.name,
+                          style: TextStyle(
+                              fontSize: 15, fontWeight: on ? FontWeight.w700 : FontWeight.w500, color: on ? emerald : ink)),
+                      trailing: Text('+${c.dial}',
+                          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: muted)),
+                      onTap: () => Navigator.pop(context, c),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

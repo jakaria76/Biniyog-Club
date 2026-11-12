@@ -16,7 +16,7 @@ void main() async {
   }
   await LanguageService.init();
 
-  // Firebase এবং Push Service ইনিশিয়ালাইজেশন[cite: 1]
+  // Firebase এবং Push Service ইনিশিয়ালাইজেশন
   await Firebase.initializeApp();
   FirebaseMessaging.onBackgroundMessage(firebaseBackgroundHandler);
   await PushService.init();
@@ -31,19 +31,24 @@ class MyApp extends StatelessWidget {
   static const Color emerald = Color(0xFF0E4A37);
   static const Color ivory = Color(0xFFF7F4EE);
 
+  /// App er sob lekha ei font e (pubspec.yaml er fonts: family)
+  static const String appFont = 'FamiljenGrotesk';
+
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<String>(
       valueListenable: LanguageService.currentLanguage,
       builder: (context, currentLang, child) {
         return MaterialApp(
-          navigatorKey: PushService.navigatorKey, // Push navigation এর জন্য যুক্ত করা হলো[cite: 1]
+          navigatorKey: PushService.navigatorKey, // Push navigation এর জন্য
           debugShowCheckedModeBanner: false,
           title: 'Biniyog Club',
           theme: ThemeData(
             colorScheme: ColorScheme.fromSeed(seedColor: emerald),
             scaffoldBackgroundColor: ivory,
             useMaterial3: true,
+            // Sob Text, TextField, Button, AppBar — puro app e Familjen Grotesk
+            fontFamily: appFont,
           ),
           // App lock: shob page er upor lock screen boshe,
           // tai jekono page theke-i app lock kaj korbe

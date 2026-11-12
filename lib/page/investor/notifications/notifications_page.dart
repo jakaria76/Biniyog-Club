@@ -7,6 +7,7 @@ import '../projects/my_projects_page.dart';
 import '../../../services/auth_service.dart';
 import '../../../services/database_service.dart';
 import '../../../services/language_service.dart';
+import '../../../theme/app_colors.dart';
 
 class NotificationsPage extends StatefulWidget {
   const NotificationsPage({super.key});
@@ -17,23 +18,20 @@ class NotificationsPage extends StatefulWidget {
 
 class _NotificationsPageState extends State<NotificationsPage> {
   // ─── Palette (dashboard er moto) ───
-  static const Color emerald = Color(0xFF0E4A37);
-  static const Color emeraldSoft = Color(0xFFE3F0E9);
-  static const Color gold = Color(0xFFB8935A);
-  static const Color goldDeep = Color(0xFF8A6A3A);
-  static const Color goldSoft = Color(0xFFF6EEDF);
-  static const Color turquoise = Color(0xFF167A80);
-  static const Color turquoiseSoft = Color(0xFFE0F1F1);
-  static const Color lapis = Color(0xFF26437A);
-  static const Color lapisSoft = Color(0xFFE5EAF4);
-  static const Color terracotta = Color(0xFFA5523A);
-  static const Color terracottaSoft = Color(0xFFF7E6DF);
-  static const Color ivory = Color(0xFFF7F4EE);
-  static const Color ink = Color(0xFF1C2421);
-  static const Color muted = Color(0xFF6E736F);
-  static const Color line = Color(0xFFE8E2D7);
-  static const Color danger = Color(0xFFB4413A);
-  static const Color dangerSoft = Color(0xFFFBEAE8);
+  static const Color emerald = BC.primary;
+  static const Color emeraldSoft = BC.secondary;
+  static const Color turquoise = BC.chart4;
+  static const Color turquoiseSoft = BC.chart4Muted;
+  static const Color lapis = BC.finance600;
+  static const Color lapisSoft = BC.finance50;
+  static const Color terracotta = BC.destructive;
+  static const Color terracottaSoft = BC.destructiveMuted;
+  static const Color ivory = BC.background;
+  static const Color ink = BC.foreground;
+  static const Color muted = BC.mutedForeground;
+  static const Color line = BC.border;
+  static const Color danger = BC.destructive;
+  static const Color dangerSoft = BC.destructiveMuted;
 
   static const List<String> _months = [
     'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
@@ -137,31 +135,31 @@ class _NotificationsPageState extends State<NotificationsPage> {
   (IconData, Color, Color) _style(String type, [Map<String, dynamic> data = const {}]) {
     // App er "Pending" notification (type SYSTEM, data.kind = PENDING)
     if (data['kind'] == 'PENDING') {
-      return (Icons.hourglass_top_rounded, goldDeep, goldSoft);
+      return (Icons.hourglass_top_rounded, BC.chart4Deep, BC.chart4Muted);
     }
     switch (type) {
       case 'INVESTMENT_CONFIRMED':
         return (Icons.check_circle_outline_rounded, emerald, emeraldSoft);
       case 'INVESTMENT_MATURED':
-        return (Icons.celebration_outlined, goldDeep, goldSoft);
+        return (Icons.celebration_outlined, emerald, emeraldSoft);
       case 'PAYMENT_RECEIVED':
         return (Icons.payments_outlined, emerald, emeraldSoft);
       case 'PAYMENT_FAILED':
         return (Icons.error_outline_rounded, danger, dangerSoft);
       case 'PROJECT_APPROVED':
       case 'PROJECT_FUNDED':
-        return (Icons.agriculture_outlined, turquoise, turquoiseSoft);
+        return (Icons.agriculture_outlined, emerald, emeraldSoft);
       case 'PROJECT_UPDATE':
-        return (Icons.campaign_outlined, lapis, lapisSoft);
+        return (Icons.campaign_outlined, emerald, emeraldSoft);
       case 'KYC_APPROVED':
         return (Icons.verified_user_outlined, emerald, emeraldSoft);
       case 'KYC_REJECTED':
         return (Icons.gpp_bad_outlined, danger, dangerSoft);
       case 'WITHDRAWAL_APPROVED':
       case 'WITHDRAWAL_COMPLETED':
-        return (Icons.account_balance_outlined, turquoise, turquoiseSoft);
+        return (Icons.account_balance_outlined, emerald, emeraldSoft);
       default:
-        return (Icons.notifications_none_rounded, terracotta, terracottaSoft);
+        return (Icons.notifications_none_rounded, emerald, emeraldSoft);
     }
   }
 
@@ -208,7 +206,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
             iconTheme: const IconThemeData(color: ink),
             title: Text(
               LanguageService.tr('Notifications', 'নোটিফিকেশন'),
-              style: const TextStyle(color: ink, fontWeight: FontWeight.w700, fontSize: 18),
+              style: const TextStyle(color: ink, fontWeight: FontWeight.w700, fontSize: 19),
             ),
           ),
           body: _isLoading
@@ -270,7 +268,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
                         : LanguageService.tr(
                         '${_notifications.length} notifications',
                         'মোট ${_notifications.length} টি নোটিফিকেশন'),
-                    style: const TextStyle(fontSize: 13, color: muted),
+                    style: const TextStyle(fontSize: 14, color: muted),
                   );
                 }
                 return _buildTile(_notifications[i - 1]);
@@ -294,7 +292,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
     final when = _when(n['createdAt']?.toString() ?? '');
 
     return Material(
-      color: isNew ? goldSoft : Colors.white,
+      color: isNew ? emeraldSoft : Colors.white,
       borderRadius: BorderRadius.circular(18),
       child: InkWell(
         borderRadius: BorderRadius.circular(18),
@@ -303,7 +301,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: isNew ? gold.withAlpha(110) : line),
+            border: Border.all(color: isNew ? emerald.withAlpha(90) : line),
           ),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -331,7 +329,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
                                 ? LanguageService.tr('Notification', 'নোটিফিকেশন')
                                 : title,
                             style: TextStyle(
-                              fontSize: 14,
+                              fontSize: 15,
                               fontWeight: isNew ? FontWeight.w700 : FontWeight.w600,
                               color: ink,
                               height: 1.3,
@@ -343,13 +341,13 @@ class _NotificationsPageState extends State<NotificationsPage> {
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                             decoration: BoxDecoration(
-                              color: goldDeep,
+                              color: emerald,
                               borderRadius: BorderRadius.circular(8),
                             ),
                             child: Text(
                               LanguageService.tr('NEW', 'নতুন'),
                               style: const TextStyle(
-                                fontSize: 9,
+                                fontSize: 10.5,
                                 fontWeight: FontWeight.w800,
                                 color: Colors.white,
                                 letterSpacing: 0.5,
@@ -363,7 +361,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
                       const SizedBox(height: 4),
                       Text(
                         body,
-                        style: const TextStyle(fontSize: 12.5, color: muted, height: 1.4),
+                        style: const TextStyle(fontSize: 13.5, color: muted, height: 1.4),
                       ),
                     ],
                     const SizedBox(height: 8),
@@ -373,7 +371,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
                           Text(
                             when,
                             style: TextStyle(
-                              fontSize: 11,
+                              fontSize: 12.5,
                               color: muted.withAlpha(200),
                               fontWeight: FontWeight.w500,
                             ),
@@ -386,12 +384,12 @@ class _NotificationsPageState extends State<NotificationsPage> {
                               Text(
                                 LanguageService.tr('View', 'দেখুন'),
                                 style: TextStyle(
-                                  fontSize: 11.5,
+                                  fontSize: 12.5,
                                   fontWeight: FontWeight.w700,
                                   color: style.$2,
                                 ),
                               ),
-                              Icon(Icons.chevron_right_rounded, size: 16, color: style.$2),
+                              Icon(Icons.chevron_right_rounded, size: 18, color: style.$2),
                             ],
                           ),
                       ],
@@ -421,20 +419,20 @@ class _NotificationsPageState extends State<NotificationsPage> {
           Container(
             width: 60,
             height: 60,
-            decoration: const BoxDecoration(color: goldSoft, shape: BoxShape.circle),
-            child: const Icon(Icons.notifications_none_rounded, size: 28, color: goldDeep),
+            decoration: const BoxDecoration(color: emeraldSoft, shape: BoxShape.circle),
+            child: const Icon(Icons.notifications_none_rounded, size: 28, color: emerald),
           ),
           const SizedBox(height: 14),
           Text(
             LanguageService.tr('No notifications yet', 'এখনো কোনো নোটিফিকেশন নেই'),
-            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: ink),
+            style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: ink),
           ),
           const SizedBox(height: 4),
           Text(
             LanguageService.tr('Updates about your investments will appear here.',
                 'আপনার বিনিয়োগ সংক্রান্ত আপডেট এখানে দেখাবে।'),
             textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 12.5, color: muted, height: 1.4),
+            style: const TextStyle(fontSize: 13.5, color: muted, height: 1.4),
           ),
         ],
       ),
@@ -454,19 +452,19 @@ class _NotificationsPageState extends State<NotificationsPage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 40, color: goldDeep),
+            Icon(icon, size: 40, color: emerald),
             const SizedBox(height: 12),
             Text(
               title,
               textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: ink),
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: ink),
             ),
             if (subtitle != null) ...[
               const SizedBox(height: 4),
               Text(
                 subtitle,
                 textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 12.5, color: muted),
+                style: const TextStyle(fontSize: 13.5, color: muted),
               ),
             ],
             const SizedBox(height: 16),

@@ -3,6 +3,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import '../../../services/language_service.dart';
+import '../../../theme/app_colors.dart';
 
 // ═════════════════════════════════════════════════════════
 // LEGAL PAGE — biniyogclub.com er Terms / Privacy / About / FAQ
@@ -27,11 +28,10 @@ class LegalWebPage extends StatefulWidget {
 }
 
 class _LegalWebPageState extends State<LegalWebPage> {
-  static const Color emerald = Color(0xFF0E4A37);
-  static const Color goldDeep = Color(0xFF8A6A3A);
-  static const Color ivory = Color(0xFFF7F4EE);
-  static const Color ink = Color(0xFF1C2421);
-  static const Color muted = Color(0xFF6E736F);
+  static const Color emerald = BC.primary;
+  static const Color ivory = BC.background;
+  static const Color ink = BC.foreground;
+  static const Color muted = BC.mutedForeground;
 
   static const String _allowedHost = 'biniyogclub.com';
 
@@ -214,15 +214,18 @@ class _LegalWebPageState extends State<LegalWebPage> {
             backgroundColor: ivory,
             surfaceTintColor: Colors.transparent,
             elevation: 0,
+            toolbarHeight: 54,
             iconTheme: const IconThemeData(color: ink),
             title: Text(
               widget.title,
-              style: const TextStyle(color: ink, fontWeight: FontWeight.w700, fontSize: 17),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: ink, fontWeight: FontWeight.w700, fontSize: 16.5),
             ),
             actions: [
               IconButton(
                 tooltip: LanguageService.tr('Reload', 'রিলোড'),
-                icon: const Icon(Icons.refresh_rounded, color: ink),
+                icon: const Icon(Icons.refresh_rounded, color: ink, size: 20),
                 onPressed: _retry,
               ),
             ],
@@ -251,26 +254,26 @@ class _LegalWebPageState extends State<LegalWebPage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.wifi_off_rounded, size: 40, color: goldDeep),
-            const SizedBox(height: 12),
+            const Icon(Icons.wifi_off_rounded, size: 34, color: emerald),
+            const SizedBox(height: 10),
             Text(
               LanguageService.tr('Could not load this page', 'পেজটি লোড করা যায়নি'),
               style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: ink),
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: 3),
             Text(
               LanguageService.tr('Please check your internet connection and try again.',
                   'ইন্টারনেট সংযোগ চেক করে আবার চেষ্টা করুন।'),
               textAlign: TextAlign.center,
               style: const TextStyle(fontSize: 12.5, color: muted),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 14),
             FilledButton(
               onPressed: _retry,
               style: FilledButton.styleFrom(
                 backgroundColor: emerald,
                 foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
               ),
               child: Text(LanguageService.tr('Try again', 'আবার চেষ্টা করুন')),
             ),
