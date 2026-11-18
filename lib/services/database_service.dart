@@ -9,7 +9,11 @@ import 'package:http/http.dart' as http;
 import 'package:postgres/postgres.dart';
 import '../config/db_config.dart';
 import 'email_service.dart';
+import 'installment_schedule.dart';
+import 'membership_policy.dart';
+import 'profit_accrual.dart';
 import 'push_service.dart';
+import 'share_math.dart';
 
 class DatabaseService {
   static final http.Client _httpClient = http.Client();
@@ -1270,7 +1274,8 @@ class DatabaseService {
       final projRes = await queryNeonHttp('''
         SELECT "id", "status"::text AS "status", "fundingGoalBdt", "fundedAmountBdt", "minInvestmentBdt",
                "maxInvestmentBdt", "expectedReturnPct", "returnPctMin", "returnPctMax",
-               "returnType"::text AS "returnType", "fundingDeadline"
+               "returnType"::text AS "returnType", "fundingDeadline",
+               COALESCE(to_jsonb(projects) ->> 'projectType', 'REGULAR_INVESTMENT') AS "projectType"
         FROM projects
         WHERE "id" = \$1
       ''', [projectId]);
@@ -1284,6 +1289,10 @@ class DatabaseService {
 
       final p = projRes.first;
       final status = p['status']?.toString() ?? 'DRAFT';
+      // Website: share project e shudhu share kena (share purchase form)
+      if (p['projectType'] == 'SHARE_BUYING') {
+        return {'success': false, 'message': 'This project sells shares — please use Buy Shares.'};
+      }
       if (status != 'FUNDRAISING') {
         return {
           'success': false,
@@ -1611,6 +1620,8 @@ class DatabaseService {
     String? chequeNumber,
     String? cashReceiptNo,
     String? note,
+    /// Schedule wala plan: kon kisti-r taka (website er installmentId)
+    String? installmentId,
   }) async {
     final table = group ? 'group_investment_payments' : 'manual_payment_submissions';
     final fk = group ? 'groupInvestmentId' : 'investmentId';
@@ -1686,6 +1697,7 @@ class DatabaseService {
       if (cols.containsKey('cashReceivedBy')) 'cashReceivedBy',
       if (batchId != null) 'batchId',
       if (hasExtra) 'extraProofs',
+      if (!group && (installmentId ?? '').isNotEmpty) 'installmentId',
     ].where((c) => cols.containsKey(c)).toList();
 
     final params = <dynamic>[];
@@ -1738,6 +1750,7 @@ class DatabaseService {
         'cashReceivedBy': part.key == 'CASH' ? receiver : null,
         'batchId': batchId,
         'extraProofs': extra,
+        'installmentId': installmentId,
       };
       final slots = names.map((n) {
         if (n == 'status') return "'SUBMITTED'::\"ManualPaymentStatus\"";
@@ -1810,17 +1823,62 @@ class DatabaseService {
     String? cashReceiptNo,
     /// Cash/cheque hole-o bankAccountId column NOT NULL thakle project er account
     String? defaultBankAccountId,
+    /// INSTALLMENT: website er moto kisti-r tarikh ar taka (dueDate "YYYY-MM-DD", amountBdt)
+    List<(String, double)>? schedule,
   }) async {
     if (userId.isEmpty) return {'success': false, 'message': _loginRequiredMsg};
     final m = methods.toSet();
     final plan = paymentPlan == 'INSTALLMENT' ? 'INSTALLMENT' : 'FULL';
-    final payNow = plan == 'FULL' ? amountBdt : (payNowBdt ?? amountBdt);
+    var payNow = plan == 'FULL' ? amountBdt : (payNowBdt ?? amountBdt);
     _lastDbFailure = null;
 
-    if (payNow <= 0 || (payNow * 100).round() > (amountBdt * 100).round()) {
+    // ── Kisti: project er niyom (website investment.service + installment.service)
+    InstallmentSettings? settings;
+    String? approval;
+    List<(String, double)>? rows;
+    if (plan == 'INSTALLMENT') {
+      final pr = await queryNeonHttp('''
+        SELECT COALESCE((to_jsonb(p) ->> 'installmentsEnabled')::boolean, false) AS "enabled",
+               to_jsonb(p) -> 'installmentSettings' AS "settings"
+        FROM projects p WHERE p."id" = \$1
+      ''', [projectId]);
+      if (pr.isEmpty) return {'success': false, 'message': _connectionErrorMsg()};
+      if (pr.first['enabled'] != true) {
+        return {'success': false, 'message': 'This project accepts full payment only.'};
+      }
+      settings = InstallmentSettings.fromJson(pr.first['settings']);
+      rows = schedule ?? const [];
+      if (rows.isEmpty) return {'success': false, 'message': 'Set up your installment schedule.'};
+      final today = dhakaDay();
+      final check = checkSchedule(amountBdt, rows, settings, today, (en, bn) => en);
+      if (check.errors.isNotEmpty) return {'success': false, 'message': check.errors.first};
+      approval = needsScheduleApproval(settings, rows, today) ? 'PENDING' : null;
+      if (approval == null) {
+        // Notun schedule e ekhon shorbochcho koto (agiye deya na gele due gulo porjonto)
+        final fresh = summarizeSchedule(
+            [for (var i = 0; i < rows.length; i++) (i + 1, rows[i].$1, rows[i].$2)], 0, 0, today, settings.graceDays);
+        final maxNow = maxPayableNowPaisa(fresh, today, settings.allowEarly);
+        final minNow = min(toPaisa(minInstallmentBdt), toPaisa(amountBdt));
+        final pay = toPaisa(payNow);
+        if (pay < minNow) return {'success': false, 'message': 'An installment must be at least ${tkPaisa(minNow)}.'};
+        if (pay > maxNow) {
+          return {
+            'success': false,
+            'message': settings.allowEarly
+                ? 'You can pay at most ${tkPaisa(maxNow)} now.'
+                : "This project doesn't take payments ahead of schedule — you can pay up to ${tkPaisa(maxNow)} now.",
+          };
+        }
+      } else {
+        payNow = 0; // tarikh approve na hole kichu deya jay na
+      }
+    }
+
+    final awaitingApproval = approval == 'PENDING';
+    if (!awaitingApproval && (payNow <= 0 || (payNow * 100).round() > (amountBdt * 100).round())) {
       return {'success': false, 'message': 'The amount you pay now must be between 1 and ${_fmtTk(amountBdt)}.'};
     }
-    final problem = _checkPaymentParts(
+    final problem = awaitingApproval ? null : _checkPaymentParts(
       m: m,
       amountBdt: payNow,
       bankAmount: bankAmount,
@@ -1854,7 +1912,33 @@ class DatabaseService {
 
     try {
       await _setPaymentPlan(group: false, id: investmentId, plan: plan);
+      String? firstInstallmentId;
+      if (rows != null && settings != null) {
+        final ids = [for (var i = 0; i < rows.length; i++) _generateUuid()];
+        final saved = await _saveSchedule(
+          investmentId: investmentId,
+          schedule: rows,
+          installmentIds: ids,
+          settings: settings,
+          approval: approval,
+        );
+        if (!saved) return await undo('Could not save your installment schedule. (${_shortDbError()})');
+        firstInstallmentId = ids.first;
+      }
+
+      // Nijer beche neya tarikh: admin approve korar age kono payment na (website er motoi)
+      if (awaitingApproval) {
+        await _notifyProjectPending(userId: userId, investmentId: investmentId, amountBdt: amountBdt);
+        return {
+          'success': true,
+          'investmentId': investmentId,
+          'awaitingApproval': true,
+          'message': 'Your installment dates were sent for approval. You can pay once they are approved.',
+        };
+      }
+
       final res = await _insertPaymentParts(
+        installmentId: firstInstallmentId,
         group: false,
         parentId: investmentId,
         userId: userId,
@@ -1916,6 +2000,8 @@ class DatabaseService {
     String? chequeNumber,
     String? cashReceiptNo,
     String? defaultBankAccountId,
+    /// Schedule wala plan: kon kisti (na dile porer baki kisti)
+    String? installmentId,
   }) async {
     if (userId.isEmpty) return {'success': false, 'message': _loginRequiredMsg};
     final m = methods.toSet();
@@ -1947,7 +2033,36 @@ class DatabaseService {
       final pay = _checkPayable(prog, amountBdt);
       if (pay != null) return {'success': false, 'message': pay};
 
+      // Schedule wala plan (website assertScheduledAmount): approval chara na,
+      // ar ekhon joto deya jay tar beshi na; kon kisti seta mone rakhi
+      String? forInstallment;
+      final sch = await getInvestmentSchedule(investmentId, userId);
+      if (sch != null && sch['hasSchedule'] == true) {
+        if (sch['awaitingApproval'] == true) {
+          return {
+            'success': false,
+            'message': sch['approval'] == 'REJECTED'
+                ? "This installment schedule was not approved, so it can't be paid."
+                : 'Your installment dates are waiting for approval by our team. You can pay once they are approved.',
+          };
+        }
+        final maxNow = toPaisa(_toDouble(sch['maxPayableNowBdt']));
+        if (toPaisa(amountBdt) > maxNow) {
+          return {
+            'success': false,
+            'message': sch['allowEarly'] == true
+                ? 'Only ${tkPaisa(maxNow)} is left to pay.'
+                : "This project doesn't take payments ahead of schedule — you can pay up to ${tkPaisa(maxNow)} now.",
+          };
+        }
+        final ids = (sch['installmentIds'] as Map).values.map((e) => e.toString()).toSet();
+        forInstallment = (installmentId != null && ids.contains(installmentId))
+            ? installmentId
+            : sch['nextInstallmentId']?.toString();
+      }
+
       final res = await _insertPaymentParts(
+        installmentId: forInstallment,
         group: false,
         parentId: investmentId,
         userId: userId,
@@ -2161,6 +2276,7 @@ class DatabaseService {
       // Category OTHER hole admin je nam likheche
       'customCategory': r['customCategory']?.toString() ?? '',
       'returnType': r['returnType']?.toString() ?? '',
+      'projectType': r['projectType']?.toString() ?? 'REGULAR_INVESTMENT',
       'groupName': r['groupName']?.toString() ?? '',
       'groupSlug': r['groupSlug']?.toString() ?? '',
       'fundingDeadline': deadline,
@@ -2210,6 +2326,9 @@ class DatabaseService {
                -- Website er notun field (column na thakle null)
                to_jsonb(p) ->> 'riskLevel' AS "riskLevel",
                to_jsonb(p) ->> 'payoutPeriodMonths' AS "payoutPeriodMonths",
+               COALESCE(to_jsonb(p) ->> 'projectType', 'REGULAR_INVESTMENT') AS "projectType",
+               COALESCE((to_jsonb(p) ->> 'installmentsEnabled')::boolean, false) AS "installmentsEnabled",
+               to_jsonb(p) -> 'installmentSettings' AS "installmentSettings",
                -- Website er _count.investments ("Investors so far")
                (SELECT COUNT(*) FROM investments i WHERE i."projectId" = p."id") as "investorsCount"
         FROM projects p
@@ -2286,7 +2405,7 @@ class DatabaseService {
         if (uid.isNotEmpty)
           queryNeonHttp('''
             SELECT i."id", i."status"::text AS "status", i."amountBdt", i."expectedReturnBdt",
-                   i."paymentPlan",
+                   i."paymentPlan", to_jsonb(i) ->> 'scheduleApproval' AS "scheduleApproval",
                    (SELECT COALESCE(SUM(m."amountBdt"), 0) FROM manual_payment_submissions m
                      WHERE m."investmentId" = i."id" AND m."submittedBy" = \$2
                        AND m."status"::text = 'APPROVED') AS "approvedBdt",
@@ -2311,11 +2430,53 @@ class DatabaseService {
           ''', [projectId, uid])
         else
           Future.value(<Map<String, dynamic>>[]),
+        // Share kenar project: offering + koyta share baki (website getPublicShareOffering)
+        if ((r['projectType']?.toString() ?? '') == 'SHARE_BUYING')
+          queryNeonHttp('''
+            SELECT o."id", o."legalCompanyName", o."offeredShares", o."pricePerShareBdt", o."minInvestmentBdt",
+                   o."minSharesPerPurchase", o."maxSharesPerInvestor", o."reservationHoldDays",
+                   to_char(o."purchaseStartDate", 'YYYY-MM-DD') AS "purchaseStartDate",
+                   to_char(o."purchaseEndDate", 'YYYY-MM-DD') AS "purchaseEndDate",
+                   o."status", o."membershipEligible", o."terms",
+                   COALESCE((SELECT SUM(sp."reservedShares") FROM share_purchases sp
+                             WHERE sp."offeringId" = o."id" AND sp."status" <> 'CANCELED'), 0) AS "reserved",
+                   COALESCE((SELECT SUM(l."shares") FROM share_ledger_entries l WHERE l."offeringId" = o."id"), 0) AS "allotted",
+                   COALESCE((SELECT SUM(sp."reservedShares") FROM share_purchases sp
+                             WHERE sp."offeringId" = o."id" AND sp."investorUserId" = \$2 AND sp."status" <> 'CANCELED'), 0)
+                   + COALESCE((SELECT SUM(l."shares") FROM share_ledger_entries l
+                               WHERE l."offeringId" = o."id" AND l."investorUserId" = \$2), 0) AS "held"
+            FROM share_offerings o
+            WHERE o."projectId" = \$1
+          ''', [projectId, uid])
+        else
+          Future.value(<Map<String, dynamic>>[]),
       ]);
       final bankRes = extra[0];
       final brochureRes = extra[2];
       final docsRes = extra[3];
       final myInvRes = extra[4];
+      final offerRes = extra[5];
+      Map<String, dynamic>? shareOffering;
+      if (offerRes.isNotEmpty) {
+        final o = offerRes.first;
+        shareOffering = {
+          'id': o['id'].toString(),
+          'legalCompanyName': o['legalCompanyName']?.toString() ?? '',
+          'pricePerShareBdt': _toDouble(o['pricePerShareBdt']),
+          'minInvestmentBdt': _toDouble(o['minInvestmentBdt']),
+          'minSharesPerPurchase': o['minSharesPerPurchase'] == null ? null : _toInt(o['minSharesPerPurchase']),
+          'maxSharesPerInvestor': o['maxSharesPerInvestor'] == null ? null : _toInt(o['maxSharesPerInvestor']),
+          'reservationHoldDays': o['reservationHoldDays'] == null ? null : _toInt(o['reservationHoldDays']),
+          'purchaseStartDate': o['purchaseStartDate']?.toString() ?? '',
+          'purchaseEndDate': o['purchaseEndDate']?.toString(),
+          'status': o['status']?.toString() ?? '',
+          'membershipEligible': o['membershipEligible'] == true,
+          'terms': o['terms']?.toString() ?? '',
+          // website computeInventory: offered − reserved − allotted
+          'available': _toInt(o['offeredShares']) - _toInt(o['reserved']) - _toInt(o['allotted']),
+          'heldByInvestor': _toInt(o['held']),
+        };
+      }
 
       // Tarikh raw (ISO) pathai — page nijer bhashay sajabe; na thakle ''
       String dateOrEmpty(dynamic v) => v?.toString() ?? '';
@@ -2337,6 +2498,7 @@ class DatabaseService {
           'amountBdt': _toDouble(m['amountBdt']),
           'expectedReturnBdt': _toDouble(m['expectedReturnBdt']),
           'paymentPlan': m['paymentPlan']?.toString() ?? 'FULL',
+          'scheduleApproval': m['scheduleApproval']?.toString(),
           'approvedBdt': _toDouble(m['approvedBdt']),
           'pendingBdt': _toDouble(m['pendingBdt']),
           // Shesh payment proof — na thakle null
@@ -2402,6 +2564,11 @@ class DatabaseService {
         'documents': docsRes.map(docMap).toList(),
         // Investor er ei project e investment — na thakle null
         'myInvestment': myInvestment,
+        'projectType': r['projectType']?.toString() ?? 'REGULAR_INVESTMENT',
+        'installmentsEnabled': r['installmentsEnabled'] == true,
+        'installmentSettings': r['installmentSettings'],
+        // Share project e offering (na thakle null = "open soon")
+        'shareOffering': shareOffering,
       };
     } catch (e) {
       debugPrint("Get Project Detail Error: $e");
@@ -2549,6 +2716,8 @@ class DatabaseService {
                  p."returnPctMin", p."returnPctMax", p."returnType"::text AS "returnType", p."durationDays",
                  p."coverImageUrl", p."imageUrls", p."status"::text AS "status", p."location", p."fundingDeadline",
                  p."createdAt", bg."name" AS "groupName", bg."slug"::text AS "groupSlug",
+                 -- Website: REGULAR_INVESTMENT ("Be an Investor") / SHARE_BUYING ("Be a Shareholder")
+                 COALESCE(to_jsonb(p) ->> 'projectType', 'REGULAR_INVESTMENT') AS "projectType",
                  -- Website er _count.investments: oi project er shob investment
                  (SELECT COUNT(*) FROM investments i WHERE i."projectId" = p."id") AS "investorsCount"
           FROM projects p
@@ -2964,13 +3133,14 @@ class DatabaseService {
                  p."minInvestmentBdt", p."expectedReturnPct", p."returnPctMin", p."returnPctMax",
                  p."durationDays", p."coverImageUrl",
                  p."status"::text AS "status", p."location", p."fundingDeadline",
+                 COALESCE(to_jsonb(p) ->> 'projectType', 'REGULAR_INVESTMENT') AS "projectType",
                  (SELECT COUNT(DISTINCT i."investorProfileId") FROM investments i WHERE i."projectId" = p."id") as "investorsCount"
           FROM projects p
           WHERE p."status"::text = 'FUNDRAISING'
             AND p."deletedAt" IS NULL
             AND $_deadlineOpenSql
-          ORDER BY p."createdAt" DESC
-          LIMIT 6;
+          -- Shob khola project (Home e pashe scroll kore dekha jay)
+          ORDER BY p."createdAt" DESC;
         '''),
 
         // 3. Recent investments — project ar group duitai, notun theke purono
@@ -3162,25 +3332,6 @@ class DatabaseService {
           ORDER BY i."confirmedAt" DESC NULLS LAST, i."createdAt" DESC
           LIMIT 5
         ''', [uid]),
-        // Prestige — website er prestige.data.ts er hubohu:
-        // Star    = confirmed (ACTIVE/MATURED/COMPLETED) investment ache emon protiti project
-        // Diamond = ACTIVE, directorship na emon group investment ache emon protiti business group (max 6)
-        // Crown   = ACTIVE directorship ache emon protiti company (group entity)
-        _safeQuery('''
-          SELECT
-            (SELECT COUNT(DISTINCT i."projectId") FROM investments i
-             JOIN investor_profiles p ON i."investorProfileId" = p."id"
-             WHERE p."userId" = \$1 AND i."status"::text IN ('ACTIVE', 'MATURED', 'COMPLETED')) AS "stars",
-            (SELECT COUNT(DISTINCT ge."groupId") FROM group_investments gi
-             JOIN group_tiers gt    ON gt."id" = gi."tierId"
-             JOIN group_entities ge ON ge."id" = gt."entityId"
-             WHERE gi."investorUserId" = \$1 AND gi."status"::text = 'ACTIVE'
-               AND gt."type"::text <> 'DIRECTORSHIP') AS "diamonds",
-            (SELECT COUNT(DISTINCT gt."entityId") FROM group_investments gi
-             JOIN group_tiers gt ON gt."id" = gi."tierId"
-             WHERE gi."investorUserId" = \$1 AND gi."status"::text = 'ACTIVE'
-               AND gt."type"::text = 'DIRECTORSHIP') AS "crowns"
-        ''', [uid]),
       ]);
 
       return {
@@ -3223,13 +3374,6 @@ class DatabaseService {
           'receiptNumber': x['receiptNumber']?.toString() ?? '',
           'deedNumber': x['deedNumber']?.toString() ?? '',
         }).toList(),
-        'prestige': r[5].isEmpty
-            ? null
-            : <String, dynamic>{
-          'stars': _toInt(r[5].first['stars']),
-          'diamonds': _toInt(r[5].first['diamonds']),
-          'crowns': _toInt(r[5].first['crowns']),
-        },
         'ok': true,
       };
     } catch (e) {
@@ -4390,6 +4534,8 @@ class DatabaseService {
                  sub."id" AS "subId", sub."status" AS "subStatus", sub."transactionRef" AS "subRef",
                  sub."rejectionReason" AS "subReason", sub."createdAt" AS "subCreatedAt",
                  COALESCE(to_jsonb(i) ->> 'paymentPlan', 'FULL') AS "paymentPlan",
+                 to_jsonb(i) ->> 'scheduleApproval' AS "scheduleApproval",
+                 (SELECT sp."orderNumber" FROM share_purchases sp WHERE sp."investmentId" = i."id") AS "shareOrder",
                  i."cancellationReason",
                  COALESCE((SELECT SUM(x."amountBdt") FROM manual_payment_submissions x
                            WHERE x."investmentId" = i."id" AND x."status"::text = 'APPROVED'), 0) AS "paidApproved",
@@ -4496,6 +4642,10 @@ class DatabaseService {
           'paymentPlan': (r['paymentPlan']?.toString() ?? 'FULL').toUpperCase(),
           'paidApproved': _toDouble(r['paidApproved']),
           'paidPending': _toDouble(r['paidPending']),
+          // Kisti-r tarikh admin er approval er opekkhay (PENDING) / bad (REJECTED)
+          'scheduleApproval': r['scheduleApproval']?.toString(),
+          // Share order hole order number (My Shares e o dekhay)
+          'shareOrder': r['shareOrder']?.toString(),
           'cancellationReason': r['cancellationReason']?.toString(),
           'bankAccounts': banksByProject[projectId] ?? <Map<String, dynamic>>[],
           'receiptNumber': r['receiptNumber']?.toString(),
@@ -5605,6 +5755,1817 @@ class DatabaseService {
     return msg.length > 140 ? '${msg.substring(0, 140)}…' : msg;
   }
 
+  // ═════════════════════════════════════════════════════════
+  // MY SHARES — website er share.data.ts getMyShares (hubohu)
+  // Shudhu company jachai kore allot kora share-i "shareholding";
+  // order / payment kora share "purchased" hishebe dekhay.
+  // ═════════════════════════════════════════════════════════
 
+  /// null = server e pouchano jayni
+  static Future<Map<String, dynamic>?> getMyShares(String userId) async {
+    if (userId.isEmpty) return null;
+    final r = await Future.wait([
+      queryNeonHttp('''
+        SELECT sp."id", sp."orderNumber", sp."shareCount", sp."pricePerShareBdt", sp."totalBdt",
+               sp."discountBdt", sp."paymentPlan", sp."status", sp."allotmentStatus", sp."isLegacy",
+               sp."createdAt",
+               o."id" AS "offeringId", o."legalCompanyName", o."membershipEligible",
+               pr."id" AS "projectId", pr."title" AS "projectTitle", pr."slug" AS "projectSlug",
+               bg."name" AS "groupName",
+               i."id" AS "investmentId", i."status"::text AS "investmentStatus",
+               i."installmentTerms", i."scheduleApproval", i."scheduleReviewNote",
+               COALESCE((SELECT SUM(m."amountBdt") FROM manual_payment_submissions m
+                         WHERE m."investmentId" = i."id" AND m."status"::text = 'APPROVED'), 0) AS "approved",
+               COALESCE((SELECT SUM(m."amountBdt") FROM manual_payment_submissions m
+                         WHERE m."investmentId" = i."id"
+                           AND m."status"::text IN ('SUBMITTED', 'UNDER_REVIEW')), 0) AS "pending"
+        FROM share_purchases sp
+        JOIN share_offerings o  ON o."id" = sp."offeringId"
+        JOIN projects pr        ON pr."id" = o."projectId"
+        LEFT JOIN business_groups bg ON bg."id" = pr."groupId"
+        JOIN investments i      ON i."id" = sp."investmentId"
+        WHERE sp."investorUserId" = \$1
+        ORDER BY sp."createdAt" ASC
+      ''', [userId]),
+      queryNeonHttp('''
+        SELECT ii."investmentId", ii."number", ii."amountBdt", ii."dueDate"
+        FROM investment_installments ii
+        JOIN share_purchases sp ON sp."investmentId" = ii."investmentId"
+        WHERE sp."investorUserId" = \$1
+        ORDER BY ii."number" ASC
+      ''', [userId]),
+      queryNeonHttp('''
+        SELECT a."id", a."purchaseId", a."shares", a."status", a."shareholderNumber",
+               a."allotmentDate", a."registerReference", a."documentId"
+        FROM share_allotments a
+        JOIN share_purchases sp ON sp."id" = a."purchaseId"
+        WHERE sp."investorUserId" = \$1
+        ORDER BY a."createdAt" ASC
+      ''', [userId]),
+      queryNeonHttp('''
+        SELECT "offeringId", COALESCE(SUM("shares"), 0) AS "shares"
+        FROM share_ledger_entries
+        WHERE "investorUserId" = \$1
+        GROUP BY "offeringId"
+      ''', [userId]),
+    ]);
+    if (_lastConnectionError != null) return null;
 
+    final today = dhakaDay();
+    final owned = <String, int>{for (final x in r[3]) x['offeringId'].toString(): _toInt(x['shares'])};
+    final rowsOf = <String, List<(int, String, double)>>{};
+    for (final x in r[1]) {
+      rowsOf
+          .putIfAbsent(x['investmentId'].toString(), () => [])
+          .add((_toInt(x['number']), dayOf(x['dueDate']), _toDouble(x['amountBdt'])));
+    }
+    final allotOf = <String, List<Map<String, dynamic>>>{};
+    for (final x in r[2]) {
+      allotOf.putIfAbsent(x['purchaseId'].toString(), () => []).add({
+        'id': x['id'].toString(),
+        'shares': _toInt(x['shares']),
+        'status': x['status']?.toString() ?? '',
+        'shareholderNumber': x['shareholderNumber']?.toString() ?? '',
+        'allotmentDate': dayOf(x['allotmentDate']),
+        'registerReference': x['registerReference']?.toString() ?? '',
+        'documentId': x['documentId']?.toString(),
+      });
+    }
+
+    final orders = <Map<String, dynamic>>[];
+    for (final p in r[0]) {
+      final investmentId = p['investmentId'].toString();
+      final approved = _toDouble(p['approved']);
+      final pending = _toDouble(p['pending']);
+      final total = _toDouble(p['totalBdt']);
+      final rows = rowsOf[investmentId] ?? const [];
+      final schedule = rows.isEmpty
+          ? null
+          : summarizeSchedule(rows, approved, pending, today, readGraceDays(p['installmentTerms']));
+      final verified = (allotOf[p['id'].toString()] ?? const [])
+          .where((a) => a['status'] == 'VERIFIED_ALLOTTED')
+          .toList();
+      final next = schedule?.next;
+      orders.add({
+        'id': p['id'].toString(),
+        'orderNumber': p['orderNumber']?.toString() ?? '',
+        'investmentId': investmentId,
+        'investmentStatus': p['investmentStatus']?.toString() ?? '',
+        'scheduleApproval': p['scheduleApproval']?.toString(),
+        'scheduleReviewNote': p['scheduleReviewNote']?.toString(),
+        'offeringId': p['offeringId'].toString(),
+        'projectId': p['projectId'].toString(),
+        'projectTitle': p['projectTitle']?.toString() ?? '',
+        'projectSlug': p['projectSlug']?.toString() ?? '',
+        'groupName': p['groupName']?.toString(),
+        'companyName': p['legalCompanyName']?.toString() ?? '',
+        'shareCount': _toInt(p['shareCount']),
+        'verifiedShares': verified.fold<int>(0, (s, a) => s + (a['shares'] as int)),
+        'pricePerShareBdt': _toDouble(p['pricePerShareBdt']),
+        'totalBdt': total,
+        'discountBdt': _toDouble(p['discountBdt']),
+        'paidBdt': approved,
+        'pendingBdt': pending,
+        'dueBdt': max(0.0, total - approved),
+        'paymentPlan': p['paymentPlan']?.toString() ?? 'FULL',
+        'status': p['status']?.toString() ?? '',
+        'allotmentStatus': p['allotmentStatus']?.toString() ?? '',
+        'isLegacy': p['isLegacy'] == true,
+        'createdAt': p['createdAt']?.toString() ?? '',
+        'schedule': schedule,
+        'remainingInstallments': schedule == null ? 0 : schedule.installments.where((i) => i.status != 'PAID').length,
+        'nextPayment': next == null
+            ? null
+            : {'dueDate': next.dueDate, 'amountBdt': next.openPaisa / 100, 'status': next.status},
+        'overdueBdt': schedule == null
+            ? 0.0
+            : schedule.installments.where((i) => i.status == 'OVERDUE').fold<int>(0, (s, i) => s + i.openPaisa) / 100,
+        'allotments': verified,
+        'shareholderNumber': verified.isEmpty ? null : verified.first['shareholderNumber'],
+        'membershipEligible': p['membershipEligible'] == true,
+      });
+    }
+
+    // Project onujayi (website er motoi, prothom order er kromei)
+    final byProject = <String, List<Map<String, dynamic>>>{};
+    for (final o in orders) {
+      byProject.putIfAbsent(o['projectId'] as String, () => []).add(o);
+    }
+    double sumD(Iterable<Map<String, dynamic>> l, String k) => l.fold(0.0, (s, o) => s + (o[k] as num).toDouble());
+    int sumI(Iterable<Map<String, dynamic>> l, String k) => l.fold(0, (s, o) => s + (o[k] as num).toInt());
+
+    final projects = byProject.values.map((list) {
+      final first = list.first;
+      final open = list.where((o) => o['status'] != 'CANCELED').toList();
+      final have = owned[first['offeringId']] ?? 0;
+      return <String, dynamic>{
+        'projectId': first['projectId'],
+        'projectTitle': first['projectTitle'],
+        'projectSlug': first['projectSlug'],
+        'groupName': first['groupName'],
+        'companyName': first['companyName'],
+        'purchasedShares': sumI(open, 'shareCount'),
+        'verifiedShares': have,
+        'valueAtPurchaseBdt': sumD(open, 'totalBdt'),
+        'paidBdt': sumD(open, 'paidBdt'),
+        'pendingBdt': sumD(open, 'pendingBdt'),
+        'dueBdt': sumD(open, 'dueBdt'),
+        'points': first['membershipEligible'] == true ? have : 0,
+        'orders': list,
+      };
+    }).toList();
+
+    final open = orders.where((o) => o['status'] != 'CANCELED').toList();
+    final upcoming = open
+        .where((o) => o['nextPayment'] != null)
+        .map((o) => <String, dynamic>{
+      'orderNumber': o['orderNumber'],
+      'investmentId': o['investmentId'],
+      'projectTitle': o['projectTitle'],
+      ...(o['nextPayment'] as Map<String, dynamic>),
+    })
+        .toList()
+      ..sort((a, b) => (a['dueDate'] as String).compareTo(b['dueDate'] as String));
+
+    return {
+      'totals': {
+        'groups': projects.map((p) => p['groupName']).where((g) => g != null && g.toString().isNotEmpty).toSet().length,
+        'projects': projects.length,
+        'purchasedShares': sumI(open, 'shareCount'),
+        'verifiedShares': sumI(projects, 'verifiedShares'),
+        'valueAtPurchaseBdt': sumD(open, 'totalBdt'),
+        'paidBdt': sumD(open, 'paidBdt'),
+        'pendingBdt': sumD(open, 'pendingBdt'),
+        'dueBdt': sumD(open, 'dueBdt'),
+        'remainingInstallments': sumI(open, 'remainingInstallments'),
+        'points': sumI(projects, 'points'),
+      },
+      'upcoming': upcoming,
+      'projects': projects,
+    };
+  }
+
+  // ═════════════════════════════════════════════════════════
+  // MEMBERSHIP — website er membership.data.ts getMyMembership +
+  // membership.service.ts computeMembers (hubohu). Point / tier kokhono
+  // DB te jama thake na — protibar jachai kora record theke hishab hoy,
+  // ACTIVE policy version er niyome. App kichu likhe na (shudhu pore).
+  // ═════════════════════════════════════════════════════════
+
+  /// Membership card er QR je link e jay (website er cardVerifyUrl)
+  static String membershipVerifyUrl(String token) => '$websiteBaseUrl/membership/verify/$token';
+
+  /// null = server e pouchano jayni
+  static Future<MyMembership?> getMyMembership(String userId) async {
+    if (userId.isEmpty) return null;
+    final pol = await queryNeonHttp('''
+      SELECT "version", "rules" FROM membership_policy_versions WHERE "status" = 'ACTIVE' LIMIT 1
+    ''');
+    if (pol.isEmpty) {
+      if (_lastConnectionError != null) return null;
+      return const MyMembership(policyActive: false);
+    }
+    final rules = MembershipRules.fromJson(pol.first['rules']);
+
+    final r = await Future.wait([
+      queryNeonHttp('''
+        SELECT m."id", m."memberNumber", m."status", m."verifiedAt", u."name",
+               (SELECT COUNT(*) FROM membership_exceptions e
+                WHERE e."membershipId" = m."id" AND e."kind" = 'BOAT_CLUB' AND e."status" = 'APPROVED') AS "boatClub"
+        FROM memberships m
+        JOIN users u ON u."id" = m."userId"
+        WHERE m."userId" = \$1
+        LIMIT 1
+      ''', [userId]),
+      queryNeonHttp('''
+        SELECT ri."role", ri."roleNumber"
+        FROM membership_role_identities ri
+        JOIN memberships m ON m."id" = ri."membershipId"
+        WHERE m."userId" = \$1
+      ''', [userId]),
+      queryNeonHttp('''
+        SELECT c."kind", c."status", c."cardNumber", c."tierAtIssue", c."verificationToken",
+               c."fulfilmentStatus", c."complimentary"
+        FROM membership_cards c
+        JOIN memberships m ON m."id" = c."membershipId"
+        WHERE m."userId" = \$1 AND c."status" IN ('PENDING', 'ACTIVE', 'SUSPENDED')
+        ORDER BY c."issuedAt" DESC
+      ''', [userId]),
+      queryNeonHttp('''
+        SELECT i."id", i."projectId", i."status"::text AS "status", i."amountBdt",
+               pr."projectType"::text AS "projectType", pr."title" AS "projectTitle",
+               COALESCE((SELECT SUM(mp."amountBdt") FROM manual_payment_submissions mp
+                         WHERE mp."investmentId" = i."id" AND mp."status"::text = 'APPROVED'), 0) AS "verified"
+        FROM investments i
+        JOIN investor_profiles p ON p."id" = i."investorProfileId"
+        JOIN projects pr ON pr."id" = i."projectId"
+        WHERE p."userId" = \$1
+        ORDER BY i."createdAt" ASC
+      ''', [userId]),
+      queryNeonHttp('''
+        SELECT l."offeringId", COALESCE(SUM(l."shares"), 0) AS "shares",
+               o."companyKey", o."legalCompanyName", o."membershipEligible", pr."title" AS "projectTitle"
+        FROM share_ledger_entries l
+        LEFT JOIN share_offerings o ON o."id" = l."offeringId"
+        LEFT JOIN projects pr ON pr."id" = o."projectId"
+        WHERE l."investorUserId" = \$1
+        GROUP BY l."offeringId", o."companyKey", o."legalCompanyName", o."membershipEligible", pr."title"
+      ''', [userId]),
+      queryNeonHttp('''
+        SELECT a."kind", a."investmentId", a."offeringId", a."amountBdt", a."shares"
+        FROM membership_eligibility_adjustments a
+        JOIN memberships m ON m."id" = a."membershipId"
+        WHERE m."userId" = \$1 AND a."status" = 'ACTIVE'
+      ''', [userId]),
+      queryNeonHttp('''
+        SELECT rc."kind", rc."key", rc."status", pr."title" AS "projectTitle"
+        FROM membership_recognitions rc
+        JOIN memberships m ON m."id" = rc."membershipId"
+        LEFT JOIN projects pr ON rc."kind" = 'STAR' AND pr."id" = rc."key"
+        WHERE m."userId" = \$1
+        ORDER BY rc."createdAt" ASC
+      ''', [userId]),
+    ]);
+    if (_lastConnectionError != null) return null;
+
+    final m = r[0].isEmpty ? null : r[0].first;
+    final adj = r[5];
+
+    // Investor track
+    final investments = r[3].map((x) {
+      final id = x['id'].toString();
+      final refunded = adj
+          .where((a) => a['kind'] == 'INVESTMENT_REFUND' && a['investmentId']?.toString() == id)
+          .fold<int>(0, (s, a) => s + paisaOf(a['amountBdt']));
+      return MemberInvestment(
+        id: id,
+        projectId: x['projectId'].toString(),
+        projectTitle: x['projectTitle']?.toString() ?? '',
+        status: x['status']?.toString() ?? '',
+        projectType: x['projectType']?.toString() ?? 'REGULAR_INVESTMENT',
+        amountPaisa: paisaOf(x['amountBdt']),
+        verifiedPaisa: paisaOf(x['verified']),
+        refundedPaisa: refunded,
+        excluded: adj.any((a) => a['kind'] == 'INVESTMENT_EXCLUDED' && a['investmentId']?.toString() == id),
+      );
+    }).toList();
+
+    // Shareholder track
+    final holdings = r[4].map((x) {
+      final oid = x['offeringId'].toString();
+      return MemberHolding(
+        offeringId: oid,
+        companyKey: x['companyKey']?.toString(),
+        companyName: x['legalCompanyName']?.toString() ?? '—',
+        projectTitle: x['projectTitle']?.toString() ?? '—',
+        membershipEligible: x['membershipEligible'] == true,
+        verifiedShares: _toInt(x['shares']),
+        disputedShares: adj
+            .where((a) => a['kind'] == 'SHARES_DISPUTED' && a['offeringId']?.toString() == oid)
+            .fold<int>(0, (s, a) => s + _toInt(a['shares'])),
+      );
+    }).toList();
+
+    final inv = investorTrack(investments, rules);
+    final sh = shareholderTrack(holdings, rules);
+    final rec = r[6];
+    final legacy = rec.any((x) => x['kind'] == 'LEGACY' && x['status'] == 'ACTIVE');
+    final boatClub = rules.boatClub && m != null && _toInt(m['boatClub']) > 0;
+
+    MemberCard? card(String kind) {
+      for (final c in r[2]) {
+        if (c['kind'] != kind) continue;
+        final status = c['status']?.toString() ?? 'PENDING';
+        final token = c['verificationToken']?.toString() ?? '';
+        return MemberCard(
+          kind: kind,
+          status: status,
+          cardNumber: c['cardNumber']?.toString() ?? '',
+          tierAtIssue: c['tierAtIssue']?.toString() ?? '',
+          fulfilmentStatus: c['fulfilmentStatus']?.toString(),
+          complimentary: c['complimentary'] == true,
+          // QR shudhu ACTIVE digital card e (website er motoi)
+          verifyUrl: kind == 'DIGITAL' && status == 'ACTIVE' && token.isNotEmpty ? membershipVerifyUrl(token) : null,
+        );
+      }
+      return null;
+    }
+
+    String? roleId(String role) {
+      for (final x in r[1]) {
+        if (x['role'] == role) return x['roleNumber']?.toString();
+      }
+      return null;
+    }
+
+    return MyMembership(
+      policyActive: true,
+      policyVersion: pol.first['version']?.toString(),
+      rules: rules,
+      memberNumber: m?['memberNumber']?.toString(),
+      status: m?['status']?.toString(),
+      name: m?['name']?.toString(),
+      investorId: roleId('INVESTOR'),
+      shareholderId: roleId('SHAREHOLDER'),
+      investor: inv,
+      shareholder: sh,
+      legacy: legacy,
+      boatClubException: boatClub,
+      primaryTier: primaryTier(investor: inv.tier, shareholder: sh.tier, legacy: legacy, boatClubException: boatClub),
+      diamonds: rec
+          .where((x) => x['kind'] == 'DIAMOND' && x['status'] == 'ACTIVE')
+          .map((x) => recognitionSegments[x['key']?.toString()] ?? x['key']?.toString() ?? '')
+          .toList(),
+      stars: rec
+          .where((x) => x['kind'] == 'STAR' && (x['status'] == 'ACTIVE' || x['status'] == 'ENDED'))
+          .map((x) => MemberStar(x['projectTitle']?.toString() ?? 'Project', x['status'] == 'ACTIVE'))
+          .toList(),
+      digitalCard: card('DIGITAL'),
+      physicalCard: card('PHYSICAL'),
+    );
+  }
+
+  // ═════════════════════════════════════════════════════════
+  // KISTI-R SCHEDULE — website er installment.service getScheduleState.
+  // Investment er kisti (investment_installments) + jachai / review e thaka
+  // taka theke: kon kisti Paid / Due / Overdue, ekhon koto deya jay, ar
+  // tarikh admin er approval er opekkhay kina.
+  // ═════════════════════════════════════════════════════════
+
+  /// null = investment pawa jayni / net nei. 'hasSchedule' false = purono (schedule chara) plan.
+  static Future<Map<String, dynamic>?> getInvestmentSchedule(String investmentId, String userId) async {
+    if (investmentId.isEmpty || userId.isEmpty) return null;
+    final rows = await queryNeonHttp('''
+      SELECT i."id", i."amountBdt", i."status"::text AS "status",
+             COALESCE(to_jsonb(i) ->> 'paymentPlan', 'FULL') AS "plan",
+             to_jsonb(i) -> 'installmentTerms' AS "terms",
+             to_jsonb(i) ->> 'scheduleApproval' AS "approval",
+             to_jsonb(i) ->> 'scheduleReviewNote' AS "reviewNote",
+             COALESCE((SELECT SUM(x."amountBdt") FROM manual_payment_submissions x
+                       WHERE x."investmentId" = i."id" AND x."status"::text = 'APPROVED'), 0) AS "approved",
+             COALESCE((SELECT SUM(x."amountBdt") FROM manual_payment_submissions x
+                       WHERE x."investmentId" = i."id"
+                         AND x."status"::text IN ('SUBMITTED', 'UNDER_REVIEW')), 0) AS "pending",
+             (SELECT json_agg(json_build_object(
+                        'id', ii."id", 'number', ii."number", 'amountBdt', ii."amountBdt",
+                        'dueDate', to_char(ii."dueDate", 'YYYY-MM-DD')) ORDER BY ii."number")
+              FROM investment_installments ii WHERE ii."investmentId" = i."id") AS "rows"
+      FROM investments i
+      JOIN investor_profiles p ON p."id" = i."investorProfileId"
+      WHERE i."id" = \$1 AND p."userId" = \$2
+    ''', [investmentId, userId]);
+    if (rows.isEmpty) return null;
+    final r = rows.first;
+    final total = _toDouble(r['amountBdt']);
+    final approved = _toDouble(r['approved']);
+    final pending = _toDouble(r['pending']);
+    final outstanding = max(0.0, total - approved - pending);
+    final approval = r['approval']?.toString();
+    dynamic list = r['rows'];
+    if (list is String) {
+      try {
+        list = jsonDecode(list);
+      } catch (_) {
+        list = null;
+      }
+    }
+    final inst = <(String, int, String, double)>[
+      if (list is List)
+        for (final x in list)
+          if (x is Map) (x['id'].toString(), _toInt(x['number']), dayOf(x['dueDate']), _toDouble(x['amountBdt'])),
+    ];
+    final base = <String, dynamic>{
+      'investmentId': r['id'].toString(),
+      'status': r['status']?.toString() ?? '',
+      'plan': (r['plan']?.toString() ?? 'FULL').toUpperCase(),
+      'total': total,
+      'approved': approved,
+      'pending': pending,
+      'outstanding': outstanding,
+      'approval': approval,
+      'reviewNote': r['reviewNote']?.toString(),
+      'hasSchedule': inst.isNotEmpty,
+    };
+    if (inst.isEmpty) return base;
+
+    final today = dhakaDay();
+    final grace = readGraceDays(r['terms']);
+    final allowEarly = readAllowEarly(r['terms']);
+    final summary = summarizeSchedule([for (final x in inst) (x.$2, x.$3, x.$4)], approved, pending, today, grace);
+    final blocked = scheduleBlocksPayment(approval);
+    final maxNowPaisa = blocked ? 0 : min(maxPayableNowPaisa(summary, today, allowEarly), toPaisa(outstanding));
+    String? idOf(int n) {
+      for (final x in inst) {
+        if (x.$2 == n) return x.$1;
+      }
+      return null;
+    }
+
+    return {
+      ...base,
+      'today': today,
+      'graceDays': grace,
+      'allowEarly': allowEarly,
+      'summary': summary,
+      'installmentIds': {for (final x in inst) x.$2: x.$1},
+      'awaitingApproval': blocked,
+      'maxPayableNowBdt': maxNowPaisa / 100,
+      'nextInstallmentId': summary.next == null ? null : idOf(summary.next!.number),
+    };
+  }
+
+  /// Notun investment er schedule ek SQL e save (investment update + kisti) —
+  /// ek-i statement, tai addha save hoy na
+  static Future<bool> _saveSchedule({
+    required String investmentId,
+    required List<(String, double)> schedule,
+    required List<String> installmentIds,
+    required InstallmentSettings settings,
+    required String? approval,
+  }) async {
+    final now = _nowIso();
+    final items = [
+      for (var i = 0; i < schedule.length; i++)
+        {'id': installmentIds[i], 'n': i + 1, 'amt': schedule[i].$2, 'd': schedule[i].$1},
+    ];
+    final res = await queryNeonHttp('''
+      WITH u AS (
+        UPDATE investments
+        SET "paymentPlan" = 'INSTALLMENT',
+            "installmentTerms" = \$2::jsonb,
+            "scheduleConfirmedAt" = \$3::timestamp,
+            "scheduleApproval" = \$4,
+            "updatedAt" = \$3::timestamp
+        WHERE "id" = \$1
+        RETURNING "id"
+      )
+      INSERT INTO investment_installments ("id", "investmentId", "number", "amountBdt", "dueDate", "createdAt", "updatedAt")
+      SELECT x."id", u."id", x."n", x."amt", x."d"::date, \$3::timestamp, \$3::timestamp
+      FROM u, json_to_recordset(\$5::json) AS x("id" text, "n" int, "amt" numeric, "d" text)
+      RETURNING "id"
+    ''', [investmentId, jsonEncode(settings.termsJson(DateTime.now())), now, approval, jsonEncode(items)]);
+    return res.length == schedule.length;
+  }
+
+  // ═════════════════════════════════════════════════════════
+  // PAYMENT PAGE ER JONNO EKTA INVESTMENT — My Shares / website theke
+  // fire asha / notification theke sorasori "Pay" khulte
+  // ═════════════════════════════════════════════════════════
+  static Future<Map<String, dynamic>?> getInvestmentForPayment(String investmentId, String userId) async {
+    if (investmentId.isEmpty || userId.isEmpty) return null;
+    final r = await Future.wait([
+      queryNeonHttp('''
+        SELECT i."id", i."amountBdt", i."status"::text AS "status",
+               COALESCE(to_jsonb(i) ->> 'paymentPlan', 'FULL') AS "paymentPlan",
+               pr."id" AS "projectId", pr."title", pr."expectedReturnPct", pr."returnPctMin", pr."returnPctMax",
+               COALESCE(to_jsonb(pr) ->> 'projectType', 'REGULAR_INVESTMENT') AS "projectType",
+               (SELECT sp."orderNumber" FROM share_purchases sp WHERE sp."investmentId" = i."id") AS "orderNumber",
+               COALESCE((SELECT SUM(x."amountBdt") FROM manual_payment_submissions x
+                         WHERE x."investmentId" = i."id" AND x."status"::text = 'APPROVED'), 0) AS "paidApproved",
+               COALESCE((SELECT SUM(x."amountBdt") FROM manual_payment_submissions x
+                         WHERE x."investmentId" = i."id"
+                           AND x."status"::text IN ('SUBMITTED', 'UNDER_REVIEW')), 0) AS "paidPending"
+        FROM investments i
+        JOIN investor_profiles p ON p."id" = i."investorProfileId"
+        JOIN projects pr ON pr."id" = i."projectId"
+        WHERE i."id" = \$1 AND p."userId" = \$2
+      ''', [investmentId, userId]),
+      queryNeonHttp('''
+        SELECT b."id", b."bankName", b."accountName", b."accountNumber", b."branchName",
+               b."routingNumber", b."swiftCode", b."mobileNumber", b."email", b."branchAddress"
+        FROM project_bank_accounts b
+        JOIN investments i ON i."projectId" = b."projectId"
+        WHERE i."id" = \$1 AND b."isActive" = true
+        ORDER BY b."createdAt" ASC
+      ''', [investmentId]),
+    ]);
+    if (r[0].isEmpty) return null;
+    final x = r[0].first;
+    final share = x['projectType'] == 'SHARE_BUYING';
+    return {
+      'id': x['id'].toString(),
+      'title': x['title']?.toString() ?? '',
+      'subtitle': (x['orderNumber']?.toString() ?? '').isEmpty ? null : 'Order ${x['orderNumber']}',
+      'isShare': share,
+      'amount': _toDouble(x['amountBdt']),
+      'status': x['status']?.toString() ?? '',
+      // Share kena te fixed return nei
+      ...(share ? {'returnMin': 0.0, 'returnMax': 0.0} : projectReturnRange(x)),
+      'bankAccounts': r[1].map(_mapProjectBank).toList(),
+      'paymentPlan': (x['paymentPlan']?.toString() ?? 'FULL').toUpperCase(),
+      'paidApproved': _toDouble(x['paidApproved']),
+      'paidPending': _toDouble(x['paidPending']),
+    };
+  }
+
+  // ═════════════════════════════════════════════════════════
+  // MY PROJECTS — website er /dashboard/projects (je project e invest
+  // korechen; PENDING draft chara). Ek project ekbar, sathe nijer mot taka.
+  // ═════════════════════════════════════════════════════════
+  static Future<Map<String, dynamic>?> getMyInvestedProjects(String userId) async {
+    if (userId.isEmpty) return null;
+    final r = await Future.wait([
+      queryNeonHttp('''
+        SELECT pr."id", pr."title", pr."slug", pr."category"::text AS "category",
+               to_jsonb(pr) ->> 'customCategory' AS "customCategory",
+               COALESCE(to_jsonb(pr) ->> 'projectType', 'REGULAR_INVESTMENT') AS "projectType",
+               pr."status"::text AS "status", pr."coverImageUrl", pr."imageUrls", pr."location",
+               pr."fundingGoalBdt", pr."fundedAmountBdt", pr."expectedReturnPct", pr."returnPctMin", pr."returnPctMax",
+               pr."returnType"::text AS "returnType", pr."durationDays", pr."startDate", pr."endDate", pr."fundingDeadline",
+               bg."name" AS "groupName", bg."slug"::text AS "groupSlug",
+               (SELECT COUNT(*) FROM investments x WHERE x."projectId" = pr."id") AS "investorsCount",
+               mine."count" AS "myCount", mine."total" AS "myTotal", mine."lastStatus", mine."lastAt"
+        FROM (
+          SELECT i."projectId",
+                 COUNT(*) AS "count",
+                 SUM(CASE WHEN i."status"::text IN ('CANCELLED', 'REFUNDED') THEN 0 ELSE i."amountBdt" END) AS "total",
+                 (ARRAY_AGG(i."status"::text ORDER BY i."createdAt" DESC))[1] AS "lastStatus",
+                 MAX(i."createdAt") AS "lastAt"
+          FROM investments i
+          JOIN investor_profiles p ON p."id" = i."investorProfileId"
+          WHERE p."userId" = \$1 AND i."status"::text <> 'PENDING'
+          GROUP BY i."projectId"
+        ) mine
+        JOIN projects pr ON pr."id" = mine."projectId"
+        LEFT JOIN business_groups bg ON bg."id" = pr."groupId"
+        ORDER BY mine."lastAt" DESC
+      ''', [userId]),
+      queryNeonHttp('''
+        SELECT * FROM (
+          SELECT u."id", u."projectId", u."title", u."content", u."type"::text AS "type",
+                 COALESCE(u."publishedAt", u."createdAt") AS "at",
+                 ROW_NUMBER() OVER (PARTITION BY u."projectId"
+                                    ORDER BY u."publishedAt" DESC NULLS LAST, u."createdAt" DESC) AS "rn"
+          FROM project_updates u
+          WHERE u."isPublished" = true
+            AND u."projectId" IN (
+              SELECT i."projectId" FROM investments i
+              JOIN investor_profiles p ON p."id" = i."investorProfileId"
+              WHERE p."userId" = \$1 AND i."status"::text <> 'PENDING')
+        ) t WHERE t."rn" <= 3
+      ''', [userId]),
+    ]);
+    if (_lastConnectionError != null) return null;
+    final updates = <String, List<Map<String, dynamic>>>{};
+    for (final u in r[1]) {
+      updates.putIfAbsent(u['projectId'].toString(), () => []).add({
+        'id': u['id'].toString(),
+        'title': u['title']?.toString() ?? '',
+        'content': u['content']?.toString() ?? '',
+        'type': u['type']?.toString() ?? '',
+        'at': u['at']?.toString() ?? '',
+      });
+    }
+    return {
+      'projects': r[0].map((x) {
+        final card = _mapProjectCard(x);
+        return {
+          ...card,
+          'projectType': x['projectType']?.toString() ?? 'REGULAR_INVESTMENT',
+          'startDate': x['startDate']?.toString() ?? '',
+          'endDate': x['endDate']?.toString() ?? '',
+          'myCount': _toInt(x['myCount']),
+          'myTotal': _toDouble(x['myTotal']),
+          'myStatus': x['lastStatus']?.toString() ?? '',
+          'updates': updates[x['id'].toString()] ?? const <Map<String, dynamic>>[],
+        };
+      }).toList(),
+    };
+  }
+
+  /// WebView e website login rakhte (bc_session cookie) — null = session banano jayni
+  static Future<String?> websiteSessionToken(String userId) => _websiteSession(userId);
+
+  /// Website er thikana (WebView er jonno)
+  static String get websiteHost => Uri.parse(_websiteApiBase).host;
+
+  // ═════════════════════════════════════════════════════════
+  // WEBSITE THEKE PRIVATE FILE — payment proof (manual / group / payout)
+  // ar profit receipt. Website er guard kora API, apnar login (bc_session) shoho.
+  // ═════════════════════════════════════════════════════════
+  static Future<({Uint8List bytes, String fileName, String mimeType})?> _downloadFromWebsite(
+      String userId, String path, String fallbackName) async {
+    lastDownloadError = null;
+    if (userId.isEmpty) {
+      lastDownloadError = _loginRequiredMsg;
+      return null;
+    }
+    for (int attempt = 1; attempt <= 2; attempt++) {
+      final token = await _websiteSession(userId, forceNew: attempt == 2);
+      if (token == null) {
+        lastDownloadError = 'Could not connect. Please check your internet.';
+        return null;
+      }
+      try {
+        final res = await _httpClient
+            .get(Uri.parse('$_websiteApiBase$path'), headers: {'Cookie': 'bc_session=$token'})
+            .timeout(const Duration(seconds: 45));
+        if (res.statusCode == 200 && res.bodyBytes.isNotEmpty) {
+          final mime = (res.headers['content-type'] ?? 'application/octet-stream').split(';').first.trim();
+          final name = _fileNameFromDisposition(res.headers['content-disposition']) ?? fallbackName;
+          return (bytes: res.bodyBytes, fileName: name, mimeType: mime);
+        }
+        if (res.statusCode == 401 && attempt == 1) {
+          _webSessionToken = null;
+          continue;
+        }
+        debugPrint('Website file $path → ${res.statusCode}');
+        lastDownloadError = res.statusCode == 404
+            ? 'This file is no longer available.'
+            : res.statusCode == 502
+            ? 'The file could not be fetched right now. Please try again.'
+            : 'Download failed. Please try again.';
+        return null;
+      } catch (e) {
+        debugPrint('Website file error: $e');
+        lastDownloadError = 'Download failed. Check your internet.';
+        return null;
+      }
+    }
+    lastDownloadError = 'Download failed. Please try again.';
+    return null;
+  }
+
+  /// Payment proof dekha — kind: 'manual' (project), 'group', 'payout'. n: 0 = mul, 1.. = extra
+  static Future<({Uint8List bytes, String fileName, String mimeType})?> downloadPaymentProof({
+    required String userId,
+    required String kind,
+    required String id,
+    int n = 0,
+  }) =>
+      _downloadFromWebsite(userId, '/api/payment-proofs/$kind/$id${n > 0 ? '?n=$n' : ''}', 'proof-${id.substring(0, 8)}');
+
+  /// Profit payout er receipt (PDF) — website er /api/profit-receipts/[lineId]
+  static Future<({Uint8List bytes, String fileName, String mimeType})?> downloadProfitReceipt({
+    required String userId,
+    required String lineId,
+  }) =>
+      _downloadFromWebsite(userId, '/api/profit-receipts/$lineId', 'profit-receipt-${lineId.substring(0, 8)}.pdf');
+
+  // ═════════════════════════════════════════════════════════
+  // PROFIT OVERVIEW — website er components/investments/profit-overview.tsx
+  // + profit.data.ts (profitSummaries, getInvestorPayouts). Protita approved
+  // investment koto lav earned, koto deya hoyeche, koto baki.
+  //
+  //   accrued   = bondho mash (profit_accruals, website er cron likhe)
+  //   accruing  = choloman mash, gotokal porjonto (shudhu fixed-rate project)
+  //   earned    = accrued + accruing;  paid = finance PAID;  reserved = batch e atka
+  // ═════════════════════════════════════════════════════════
+  static const String _profitTermsSql = '''
+    SELECT t."investmentId", t."projectId", t."principalBdt", t."annualRatePct", t."rateMaxPct", t."annualProfitBdt",
+           to_char(t."effectiveDate", 'YYYY-MM-DD') AS "effectiveDate",
+           to_char(t."maturityDate", 'YYYY-MM-DD') AS "maturityDate",
+           i."status"::text AS "status", i."receiptNumber", i."maturedAt", i."createdAt" AS "investedAt",
+           pr."title" AS "projectTitle", pr."returnType"::text AS "returnType",
+           to_jsonb(pr) ->> 'payoutPeriodMonths' AS "payoutPeriodMonths",
+           COALESCE((SELECT SUM(a."amountBdt") FROM profit_accruals a
+                     WHERE a."investmentId" = t."investmentId" AND a."status" = 'ACCRUED'), 0) AS "accrued",
+           COALESCE((SELECT SUM(al."amountBdt") FROM profit_allocations al
+                     JOIN profit_accruals pa ON pa."id" = al."accrualId"
+                     WHERE pa."investmentId" = t."investmentId" AND al."status" = 'PAID'), 0) AS "paid",
+           COALESCE((SELECT SUM(al."amountBdt") FROM profit_allocations al
+                     JOIN profit_accruals pa ON pa."id" = al."accrualId"
+                     WHERE pa."investmentId" = t."investmentId" AND al."status" = 'RESERVED'), 0) AS "reserved"
+    FROM investment_profit_terms t
+    JOIN investments i ON i."id" = t."investmentId"
+    JOIN projects pr ON pr."id" = t."projectId"
+  ''';
+
+  static Map<String, dynamic> _profitRow(Map<String, dynamic> t) {
+    final accrued = paisaBig(t['accrued']);
+    final fixed = (t['returnType']?.toString() ?? '') == 'FIXED_RETURN';
+    final effective = t['effectiveDate']?.toString() ?? '';
+    final maturedDay = t['maturedAt'] == null ? null : dhakaDayOf(t['maturedAt']);
+    final earnTo = lastEarningDay(t['maturityDate']?.toString(), maturedDay);
+    var accruing = BigInt.zero;
+    if (fixed && effective.isNotEmpty) {
+      for (final m in accrualSchedule(paisaBig(t['annualProfitBdt']), effective, earnTo, earnedThrough())) {
+        if (!m.closed) accruing += m.amountPaisa;
+      }
+    }
+    final paid = paisaBig(t['paid']);
+    final reserved = paisaBig(t['reserved']);
+    final annual = _toDouble(t['annualProfitBdt']);
+    double b(BigInt p) => p.toInt() / 100;
+    return {
+      'investmentId': t['investmentId'].toString(),
+      'projectId': t['projectId'].toString(),
+      'projectTitle': t['projectTitle']?.toString() ?? '',
+      'status': t['status']?.toString() ?? '',
+      'receiptNumber': t['receiptNumber']?.toString(),
+      'fixedRate': fixed,
+      'principalBdt': _toDouble(t['principalBdt']),
+      'annualRatePct': _toDouble(t['annualRatePct']),
+      'rateMaxPct': t['rateMaxPct'] == null ? null : _toDouble(t['rateMaxPct']),
+      'annualProfitBdt': annual,
+      'monthlyProfitBdt': (annual / 12 * 100).round() / 100,
+      'effectiveDate': effective,
+      'earningFrom': effective,
+      'earningTo': earnTo,
+      'payoutPeriodMonths': int.tryParse(t['payoutPeriodMonths']?.toString() ?? ''),
+      'accruedBdt': b(accrued),
+      'accruingBdt': b(accruing),
+      'earnedBdt': b(accrued + accruing),
+      'paidBdt': b(paid),
+      'reservedBdt': b(reserved),
+      'availableBdt': b(accrued - paid - reserved),
+    };
+  }
+
+  /// null = server e pouchano jayni. rows khali + payouts khali = dekhanor kichu nei.
+  static Future<Map<String, dynamic>?> getProfitOverview(String userId) async {
+    if (userId.isEmpty) return null;
+    final r = await Future.wait([
+      queryNeonHttp('''
+        $_profitTermsSql
+        WHERE t."investorUserId" = \$1 AND i."status"::text IN ('ACTIVE', 'MATURED', 'COMPLETED')
+        ORDER BY t."effectiveDate" ASC
+      ''', [userId]),
+      queryNeonHttp('''
+        SELECT li."id", li."status"::text AS "status", li."netAmountBdt", li."paidAt", li."postedAt",
+               li."paymentMethod", li."investmentId", (li."paymentProofUrl" IS NOT NULL) AS "hasProof",
+               b."status"::text AS "batchStatus", b."kind",
+               to_char(b."periodStart", 'YYYY-MM-DD') AS "periodStart",
+               to_char(b."periodEnd", 'YYYY-MM-DD') AS "periodEnd",
+               pr."title" AS "projectTitle"
+        FROM distribution_line_items li
+        JOIN distribution_batches b ON b."id" = li."batchId"
+        JOIN projects pr ON pr."id" = b."projectId"
+        WHERE li."investorUserId" = \$1
+          AND li."status"::text IN ('PENDING', 'PAID', 'POSTED', 'FAILED', 'REVERSED')
+          AND b."status"::text NOT IN ('DRAFT', 'CANCELLED', 'REJECTED')
+        ORDER BY li."createdAt" DESC
+        LIMIT 50
+      ''', [userId]),
+    ]);
+    if (_lastConnectionError != null) return null;
+
+    final rows = r[0].map(_profitRow).toList();
+    final payouts = r[1].map((p) {
+      final st = payoutStatus(p['status']?.toString() ?? '', p['batchStatus']?.toString() ?? '');
+      return <String, dynamic>{
+        'id': p['id'].toString(),
+        'investmentId': p['investmentId']?.toString(),
+        'status': p['status']?.toString() ?? '',
+        'statusKey': st.$1,
+        'statusEn': st.$2,
+        'statusBn': st.$3,
+        'amountBdt': _toDouble(p['netAmountBdt']),
+        'paidAt': (p['paidAt'] ?? p['postedAt'])?.toString(),
+        'method': p['paymentMethod']?.toString(),
+        'hasProof': p['hasProof'] == true,
+        'periodStart': p['periodStart']?.toString(),
+        'periodEnd': p['periodEnd']?.toString(),
+        'projectTitle': p['projectTitle']?.toString() ?? '',
+      };
+    }).toList();
+
+    // Porer disbursement: payout cycle shesh howar porer din (website er motoi)
+    final lastPaidEnd = <String, String>{};
+    for (final p in payouts) {
+      final end = p['periodEnd']?.toString() ?? '';
+      final inv = p['investmentId']?.toString() ?? '';
+      if (p['statusKey'] == 'PAID' && end.isNotEmpty && end.compareTo(lastPaidEnd[inv] ?? '') > 0) lastPaidEnd[inv] = end;
+    }
+    String? next;
+    for (final row in rows) {
+      final cycle = row['payoutPeriodMonths'] as int?;
+      if (cycle == null || cycle <= 0 || row['status'] != 'ACTIVE') continue;
+      final from = row['earningFrom'] as String;
+      if (from.isEmpty) continue;
+      final start = lastPaidEnd.containsKey(row['investmentId'])
+          ? addDaysToDay(lastPaidEnd[row['investmentId']]!, 1)
+          : '${from.substring(0, 8)}01';
+      final d = addMonthsToDay(start, cycle);
+      if (next == null || d.compareTo(next) < 0) next = d;
+    }
+
+    BigInt sum(String k) => rows.fold(BigInt.zero, (s, x) => s + paisaBig(x[k]));
+    double b(BigInt p) => p.toInt() / 100;
+    final rates = rows.map((x) => x['annualRatePct'] as double).toList();
+    return {
+      'rows': rows,
+      'payouts': payouts,
+      'nextDistribution': next,
+      'rateLabel': rates.isEmpty
+          ? '—'
+          : rates.length == 1
+          ? '${_trimPct(rates.first)}%'
+          : '${_trimPct(rates.reduce(min))}–${_trimPct(rates.reduce(max))}%',
+      'totals': {
+        'principal': b(sum('principalBdt')),
+        'annual': b(sum('annualProfitBdt')),
+        'monthly': b(sum('monthlyProfitBdt')),
+        'accruing': b(sum('accruingBdt')),
+        'earned': b(sum('earnedBdt')),
+        'paid': b(sum('paidBdt')),
+        'reserved': b(sum('reservedBdt')),
+      },
+    };
+  }
+
+  static String _trimPct(double v) {
+    final s = v.toStringAsFixed(2);
+    return s.replaceFirst(RegExp(r'\.?0+$'), '');
+  }
+
+  // ═════════════════════════════════════════════════════════
+  // INVESTMENT DETAILS — website er /dashboard/investments/[id]
+  // Overview, kisti, progress, deed/certificate, profit (mash e mash e),
+  // payment history (proof soho). Shudhu nijer investment.
+  // ═════════════════════════════════════════════════════════
+  static Future<Map<String, dynamic>?> getInvestmentDetail(String investmentId, String userId) async {
+    if (investmentId.isEmpty || userId.isEmpty) return null;
+    final r = await Future.wait([
+      queryNeonHttp('''
+        SELECT i."id", i."status"::text AS "status", i."amountBdt", i."expectedReturnBdt", i."receiptNumber",
+               COALESCE(to_jsonb(i) ->> 'paymentPlan', 'FULL') AS "paymentPlan",
+               i."createdAt", i."activatedAt", i."cancelledAt", i."cancellationReason",
+               pr."id" AS "projectId", pr."title", pr."slug", pr."durationDays",
+               pr."expectedReturnPct", pr."returnPctMin", pr."returnPctMax",
+               COALESCE(to_jsonb(pr) ->> 'projectType', 'REGULAR_INVESTMENT') AS "projectType",
+               u."name" AS "investorName",
+               c."deedNumber", c."contractUrl",
+               (SELECT COUNT(*) FROM investment_contracts c2 JOIN investments i2 ON i2."id" = c2."investmentId"
+                WHERE c."deedNumber" IS NOT NULL AND c2."deedNumber" = c."deedNumber"
+                  AND i2."status"::text IN ('ACTIVE', 'MATURED', 'COMPLETED')) AS "deedCount",
+               (SELECT SUM(i2."amountBdt") FROM investment_contracts c2 JOIN investments i2 ON i2."id" = c2."investmentId"
+                WHERE c."deedNumber" IS NOT NULL AND c2."deedNumber" = c."deedNumber"
+                  AND i2."status"::text IN ('ACTIVE', 'MATURED', 'COMPLETED')) AS "deedTotal",
+               (SELECT sp."orderNumber" FROM share_purchases sp WHERE sp."investmentId" = i."id") AS "orderNumber"
+        FROM investments i
+        JOIN investor_profiles p ON p."id" = i."investorProfileId"
+        JOIN users u ON u."id" = p."userId"
+        JOIN projects pr ON pr."id" = i."projectId"
+        LEFT JOIN investment_contracts c ON c."investmentId" = i."id"
+        WHERE i."id" = \$1 AND p."userId" = \$2
+      ''', [investmentId, userId]),
+      queryNeonHttp('''
+        SELECT m."id", m."status"::text AS "status", m."amountBdt", m."paymentMethod"::text AS "method",
+               m."transactionRef", to_jsonb(m) ->> 'cashReceivedBy' AS "cashReceivedBy",
+               m."rejectionReason", m."createdAt", m."reviewedAt",
+               (m."proofFileUrl" IS NOT NULL AND m."proofFileUrl" <> '') AS "hasProof",
+               COALESCE(jsonb_array_length(CASE WHEN jsonb_typeof(to_jsonb(m) -> 'extraProofs') = 'array'
+                                                THEN to_jsonb(m) -> 'extraProofs' END), 0) AS "extraCount"
+        FROM manual_payment_submissions m
+        JOIN investments i ON i."id" = m."investmentId"
+        JOIN investor_profiles p ON p."id" = i."investorProfileId"
+        WHERE m."investmentId" = \$1 AND p."userId" = \$2
+        ORDER BY m."createdAt" ASC
+      ''', [investmentId, userId]),
+      queryNeonHttp('''
+        $_profitTermsSql
+        WHERE t."investmentId" = \$1 AND t."investorUserId" = \$2
+      ''', [investmentId, userId]),
+      queryNeonHttp('''
+        SELECT to_char(a."month", 'YYYY-MM-DD') AS "month", a."kind", a."eligibleDays", a."amountBdt"
+        FROM profit_accruals a
+        WHERE a."investmentId" = \$1 AND a."investorUserId" = \$2 AND a."status" = 'ACCRUED'
+        ORDER BY a."month" ASC
+      ''', [investmentId, userId]),
+      queryNeonHttp('''
+        SELECT to_char(pa."month", 'YYYY-MM-DD') AS "month", SUM(al."amountBdt") AS "total"
+        FROM profit_allocations al
+        JOIN profit_accruals pa ON pa."id" = al."accrualId"
+        WHERE al."status" = 'PAID' AND pa."investmentId" = \$1 AND pa."investorUserId" = \$2
+        GROUP BY 1
+      ''', [investmentId, userId]),
+    ]);
+    if (r[0].isEmpty) return null;
+    final x = r[0].first;
+    final status = x['status']?.toString() ?? '';
+    final receipt = x['receiptNumber']?.toString() ?? '';
+    final live = const {'ACTIVE', 'MATURED', 'COMPLETED'}.contains(status);
+
+    // Deed (Agreement #receipt) + certificate (Receipt #receipt) — website er getInvestmentDocumentMap
+    String? deedId;
+    String? certificateId;
+    if (live && receipt.isNotEmpty) {
+      final docs = await queryNeonHttp('''
+        SELECT d."id", d."category"::text AS "category", d."description"
+        FROM documents d
+        WHERE d."ownerUserId" = \$1 AND d."deletedAt" IS NULL
+          AND ((d."category"::text = 'INVESTMENT_RECEIPT' AND d."description" = \$2)
+            OR (d."category"::text = 'INVESTMENT_AGREEMENT' AND d."description" = \$3)
+            OR (d."category"::text = 'INVESTMENT_AGREEMENT' AND d."id" = \$4))
+        ORDER BY d."createdAt" DESC
+      ''', [userId, 'Receipt #$receipt', 'Agreement #$receipt', x['contractUrl']?.toString() ?? '']);
+      for (final d in docs) {
+        if (d['category'] == 'INVESTMENT_RECEIPT' && certificateId == null) certificateId = d['id'].toString();
+        if (d['category'] == 'INVESTMENT_AGREEMENT' && d['description'] == 'Agreement #$receipt' && deedId == null) {
+          deedId = d['id'].toString();
+        }
+      }
+      // Ek-i deed number e porer investment: prothom investment er combined deed
+      if (deedId == null) {
+        for (final d in docs) {
+          if (d['category'] == 'INVESTMENT_AGREEMENT' && d['id'].toString() == x['contractUrl']?.toString()) {
+            deedId = d['id'].toString();
+          }
+        }
+      }
+    }
+
+    // Profit (approved investment)
+    Map<String, dynamic>? profit;
+    final months = <Map<String, dynamic>>[];
+    if (live && r[2].isNotEmpty) {
+      final t = r[2].first;
+      profit = _profitRow(t);
+      final byMonth = <String, Map<String, dynamic>>{};
+      for (final a in r[3]) {
+        final key = a['month'].toString();
+        final m = byMonth.putIfAbsent(key, () => {'month': key, 'eligibleDays': 0, 'earnedBdt': 0.0, 'paidBdt': 0.0, 'running': false});
+        final kind = a['kind']?.toString() ?? 'BASE';
+        if (kind == 'BASE' || kind.startsWith('PROJECT:')) m['eligibleDays'] = (m['eligibleDays'] as int) + _toInt(a['eligibleDays']);
+        m['earnedBdt'] = (toPaisa(m['earnedBdt'] as double) + toPaisa(_toDouble(a['amountBdt']))) / 100;
+      }
+      for (final p in r[4]) {
+        final m = byMonth[p['month'].toString()];
+        if (m != null) m['paidBdt'] = _toDouble(p['total']);
+      }
+      if (profit['fixedRate'] == true && (profit['effectiveDate'] as String).isNotEmpty) {
+        for (final m in accrualSchedule(paisaBig(t['annualProfitBdt']), profit['effectiveDate'] as String,
+            profit['earningTo'] as String?, earnedThrough())) {
+          if (!m.closed && !byMonth.containsKey(m.month)) {
+            byMonth[m.month] = {
+              'month': m.month,
+              'eligibleDays': m.eligibleDays,
+              'earnedBdt': m.amountPaisa.toInt() / 100,
+              'paidBdt': 0.0,
+              'running': true,
+            };
+          }
+        }
+      }
+      months.addAll(byMonth.values.toList()..sort((a, b) => (a['month'] as String).compareTo(b['month'] as String)));
+    }
+
+    final share = x['projectType'] == 'SHARE_BUYING';
+    return {
+      'id': x['id'].toString(),
+      'status': status,
+      'amountBdt': _toDouble(x['amountBdt']),
+      'expectedReturnBdt': _toDouble(x['expectedReturnBdt']),
+      'receiptNumber': receipt,
+      'paymentPlan': (x['paymentPlan']?.toString() ?? 'FULL').toUpperCase(),
+      'createdAt': x['createdAt']?.toString(),
+      'activatedAt': x['activatedAt']?.toString(),
+      'cancelledAt': x['cancelledAt']?.toString(),
+      'cancellationReason': x['cancellationReason']?.toString(),
+      'projectId': x['projectId'].toString(),
+      'projectTitle': x['title']?.toString() ?? '',
+      'projectSlug': x['slug']?.toString() ?? '',
+      'durationDays': _toInt(x['durationDays']),
+      'isShare': share,
+      'orderNumber': x['orderNumber']?.toString(),
+      ...(share ? {'returnMin': 0.0, 'returnMax': 0.0} : projectReturnRange(x)),
+      'investorName': x['investorName']?.toString() ?? '',
+      'deedNumber': x['deedNumber']?.toString(),
+      'deedCount': _toInt(x['deedCount']),
+      'deedTotalBdt': _toDouble(x['deedTotal']),
+      'deedId': deedId,
+      'certificateId': certificateId,
+      'payments': r[1].map((m) => <String, dynamic>{
+        'id': m['id'].toString(),
+        'status': m['status']?.toString() ?? 'SUBMITTED',
+        'amountBdt': _toDouble(m['amountBdt']),
+        'method': m['method']?.toString() ?? '',
+        'transactionRef': m['transactionRef']?.toString() ?? '',
+        'cashReceivedBy': m['cashReceivedBy']?.toString(),
+        'rejectionReason': m['rejectionReason']?.toString(),
+        'createdAt': m['createdAt']?.toString(),
+        'reviewedAt': m['reviewedAt']?.toString(),
+        'proofCount': m['hasProof'] == true ? 1 + _toInt(m['extraCount']) : 0,
+      }).toList(),
+      'profit': profit,
+      'profitMonths': months,
+    };
+  }
+
+  // ═════════════════════════════════════════════════════════
+  // WITHDRAWAL ACCOUNT — website er profile "Withdrawal account" (kyc table):
+  // lav ar withdrawal kon bank / mobile banking e jabe. Finance payout er
+  // shomoy eta dekhe. Khali ghor = muche fela.
+  // ═════════════════════════════════════════════════════════
+  static const List<String> mobileBankingProviders = ['bKash', 'Nagad', 'Rocket', 'Upay', 'SureCash'];
+
+  /// null = server e pouchano jayni; khali map = ekhono deya hoyni
+  static Future<Map<String, String>?> getWithdrawalAccount(String userId) async {
+    if (userId.isEmpty) return null;
+    final r = await queryNeonHttp('''
+      SELECT "bankName", "bankAccountName", "bankAccountNumber", "bankBranch", "mobileProvider", "mobileNumber"
+      FROM kyc WHERE "userId" = \$1
+    ''', [userId]);
+    if (r.isEmpty) return _lastConnectionError != null ? null : <String, String>{};
+    return {for (final e in r.first.entries) e.key: e.value?.toString() ?? ''};
+  }
+
+  /// Website er withdrawalAccountSchema er niyome jachai kore save. fieldErrors: ghor → bhul
+  static Future<Map<String, dynamic>> saveWithdrawalAccount({
+    required String userId,
+    required String bankName,
+    required String bankAccountName,
+    required String bankAccountNumber,
+    required String bankBranch,
+    required String mobileProvider,
+    required String mobileNumber,
+  }) async {
+    if (userId.isEmpty) return {'success': false, 'message': _loginRequiredMsg};
+    final v = {
+      'bankName': bankName.trim(),
+      'bankAccountName': bankAccountName.trim(),
+      'bankAccountNumber': bankAccountNumber.trim(),
+      'bankBranch': bankBranch.trim(),
+      'mobileProvider': mobileProvider.trim(),
+      'mobileNumber': mobileNumber.trim(),
+    };
+    final errors = <String, String>{};
+    for (final k in ['bankName', 'bankAccountName', 'bankBranch']) {
+      if (v[k]!.length > 100) errors[k] = 'At most 100 characters';
+    }
+    if (v['bankAccountNumber']!.length > 30 || !RegExp(r'^[0-9\-]*$').hasMatch(v['bankAccountNumber']!)) {
+      errors['bankAccountNumber'] = 'Account number must contain only digits';
+    }
+    final anyBank = ['bankName', 'bankAccountName', 'bankAccountNumber', 'bankBranch'].any((k) => v[k]!.isNotEmpty);
+    if (anyBank) {
+      if (v['bankName']!.isEmpty) errors['bankName'] = 'Enter the bank name';
+      if (v['bankAccountName']!.isEmpty) errors['bankAccountName'] = "Enter the account holder's name";
+      if (v['bankAccountNumber']!.isEmpty) errors['bankAccountNumber'] = 'Enter the account number';
+    }
+    if (v['mobileProvider']!.isNotEmpty && !mobileBankingProviders.contains(v['mobileProvider'])) {
+      errors['mobileProvider'] = 'Choose the mobile banking provider';
+    }
+    if (v['mobileProvider']!.isNotEmpty || v['mobileNumber']!.isNotEmpty) {
+      if (v['mobileProvider']!.isEmpty) errors['mobileProvider'] = 'Choose the mobile banking provider';
+      if (!RegExp(r'^(\+8801|01)[3-9]\d{8}$').hasMatch(v['mobileNumber']!)) {
+        errors['mobileNumber'] = 'Enter a valid Bangladeshi mobile number';
+      }
+    }
+    if (errors.isNotEmpty) return {'success': false, 'message': 'Please fix the highlighted fields.', 'fieldErrors': errors};
+
+    String? n(String k) => v[k]!.isEmpty ? null : v[k];
+    final now = _nowIso();
+    final res = await queryNeonHttp('''
+      INSERT INTO kyc ("id", "userId", "status", "createdAt", "updatedAt",
+                       "bankName", "bankAccountName", "bankAccountNumber", "bankBranch", "mobileProvider", "mobileNumber")
+      VALUES (\$1, \$2, 'NOT_STARTED'::"KycStatus", \$3::timestamp, \$3::timestamp, \$4, \$5, \$6, \$7, \$8, \$9)
+      ON CONFLICT ("userId") DO UPDATE SET
+        "bankName" = EXCLUDED."bankName", "bankAccountName" = EXCLUDED."bankAccountName",
+        "bankAccountNumber" = EXCLUDED."bankAccountNumber", "bankBranch" = EXCLUDED."bankBranch",
+        "mobileProvider" = EXCLUDED."mobileProvider", "mobileNumber" = EXCLUDED."mobileNumber",
+        "updatedAt" = EXCLUDED."updatedAt"
+      RETURNING "id"
+    ''', [
+      _generateUuid(),
+      userId,
+      now,
+      n('bankName'),
+      n('bankAccountName'),
+      n('bankAccountNumber'),
+      n('bankBranch'),
+      n('mobileProvider'),
+      n('mobileNumber'),
+    ]);
+    if (res.isEmpty) return {'success': false, 'message': _saveFailMsg('Could not save your withdrawal account.')};
+    return {'success': true};
+  }
+
+  // ═════════════════════════════════════════════════════════
+  // DRAFT MUCHE FELA — website er DeleteDraftButton (cancelInvestmentAction):
+  // shudhu nijer PENDING / PAYMENT_PENDING investment, jar kono payment jama
+  // / jachai hoyni. Share order website theke (share reservation chhare dite hoy).
+  // ═════════════════════════════════════════════════════════
+  static Future<Map<String, dynamic>> deleteDraftInvestment(String investmentId, String userId) async {
+    if (userId.isEmpty) return {'success': false, 'message': _loginRequiredMsg};
+    final now = _nowIso();
+    final res = await queryNeonHttp('''
+      UPDATE investments i
+      SET "status" = 'CANCELLED'::"InvestmentStatus", "cancelledAt" = \$3::timestamp,
+          "cancellationReason" = 'Draft deleted by investor', "updatedAt" = \$3::timestamp
+      FROM investor_profiles p
+      WHERE i."id" = \$1 AND p."id" = i."investorProfileId" AND p."userId" = \$2
+        AND i."status"::text IN ('PENDING', 'PAYMENT_PENDING')
+        AND NOT EXISTS (SELECT 1 FROM manual_payment_submissions m
+                        WHERE m."investmentId" = i."id" AND m."status"::text IN ('SUBMITTED', 'UNDER_REVIEW', 'APPROVED'))
+        AND NOT EXISTS (SELECT 1 FROM share_purchases sp WHERE sp."investmentId" = i."id")
+      RETURNING i."id"
+    ''', [investmentId, userId, now]);
+    if (res.isNotEmpty) return {'success': true};
+    if (_lastConnectionError != null) return {'success': false, 'message': _connectionErrorMsg()};
+    return {
+      'success': false,
+      'message': 'A payment for this investment has already been submitted. Please contact support to cancel it.',
+    };
+  }
+
+  // ═════════════════════════════════════════════════════════
+  // NEON TRANSACTION — ek HTTP call e kayekta statement, shob ek transaction e
+  // (Neon serverless driver er transaction() er moto). Kono statement error dile
+  // shob rollback. Error message 'error' e ashe; net na thakle 'network' = true.
+  // ═════════════════════════════════════════════════════════
+  static Future<({List<List<Map<String, dynamic>>>? results, String? error, bool network})> _neonTransaction(
+      List<(String, List<dynamic>)> queries) async {
+    final dbUrl = DbConfig.databaseUrl.trim();
+    _lastConnectionError = null;
+    try {
+      final response = await _httpClient
+          .post(
+        _getNeonHttpSqlUri(),
+        headers: {
+          'Content-Type': 'application/json',
+          'neon-connection-string': dbUrl,
+          'Neon-Batch-Isolation-Level': 'ReadCommitted',
+          'Neon-Batch-Read-Only': 'false',
+          'Neon-Batch-Deferrable': 'false',
+        },
+        body: jsonEncode({
+          'queries': [
+            for (final q in queries) {'query': q.$1, 'params': q.$2},
+          ],
+        }),
+      )
+          .timeout(const Duration(seconds: 25));
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final list = (data is Map ? data['results'] : data) as List? ?? const [];
+        return (
+        results: [
+          for (final r in list)
+            ((r is Map ? r['rows'] : null) as List? ?? const [])
+                .map((x) => Map<String, dynamic>.from(x as Map))
+                .toList(),
+        ],
+        error: null,
+        network: false,
+        );
+      }
+      debugPrint('Neon transaction error ${response.statusCode}: ${response.body}');
+      var msg = response.body;
+      try {
+        final j = jsonDecode(response.body);
+        if (j is Map && j['message'] != null) msg = j['message'].toString();
+      } catch (_) {}
+      _lastDbFailure = msg;
+      return (results: null, error: msg, network: false);
+    } catch (e) {
+      debugPrint('Neon transaction exception: $e');
+      _lastConnectionError = _lastDbFailure = e.toString();
+      return (results: null, error: e.toString(), network: true);
+    }
+  }
+
+  // ═════════════════════════════════════════════════════════
+  // SHARE KENA — website er SharePurchaseForm + share.service createPurchase,
+  // app er bhetorei (website e jete hoy na)
+  // ═════════════════════════════════════════════════════════
+
+  /// Kenar page er shob tottho, taja: offering er niyom, koyta share baki,
+  /// nijer koyta ache, project er kisti-r niyom. null = net nei / project nei.
+  static Future<Map<String, dynamic>?> getShareBuyContext(String projectIdOrSlug, String userId) async {
+    final rows = await queryNeonHttp('''
+      SELECT pr."id" AS "projectId", pr."title", pr."slug", pr."status"::text AS "projectStatus",
+             COALESCE(to_jsonb(pr) ->> 'projectType', 'REGULAR_INVESTMENT') AS "projectType",
+             to_jsonb(pr) ->> 'code' AS "projectCode",
+             (to_jsonb(pr) ->> 'deletedAt') IS NOT NULL AS "deleted",
+             COALESCE((to_jsonb(pr) ->> 'installmentsEnabled')::boolean, false) AS "installmentsEnabled",
+             to_jsonb(pr) -> 'installmentSettings' AS "installmentSettings",
+             o."id" AS "offeringId", o."legalCompanyName", o."offeredShares", o."pricePerShareBdt", o."minInvestmentBdt",
+             o."minSharesPerPurchase", o."maxSharesPerInvestor", o."reservationHoldDays",
+             to_char(o."purchaseStartDate", 'YYYY-MM-DD') AS "purchaseStartDate",
+             to_char(o."purchaseEndDate", 'YYYY-MM-DD') AS "purchaseEndDate",
+             o."status" AS "offeringStatus", o."terms",
+             COALESCE((SELECT SUM(sp."reservedShares") FROM share_purchases sp
+                       WHERE sp."offeringId" = o."id" AND sp."status" <> 'CANCELED'), 0) AS "reserved",
+             COALESCE((SELECT SUM(l."shares") FROM share_ledger_entries l WHERE l."offeringId" = o."id"), 0) AS "allotted",
+             COALESCE((SELECT SUM(sp."reservedShares") FROM share_purchases sp
+                       WHERE sp."offeringId" = o."id" AND sp."investorUserId" = \$2 AND sp."status" <> 'CANCELED'), 0)
+             + COALESCE((SELECT SUM(l."shares") FROM share_ledger_entries l
+                         WHERE l."offeringId" = o."id" AND l."investorUserId" = \$2), 0) AS "held",
+             (SELECT u."name" FROM users u WHERE u."id" = \$2) AS "investorName"
+      FROM projects pr
+      LEFT JOIN share_offerings o ON o."projectId" = pr."id"
+      WHERE pr."id" = \$1 OR pr."slug" = \$1
+      LIMIT 1
+    ''', [projectIdOrSlug, userId]);
+    if (rows.isEmpty) return null;
+    final r = rows.first;
+    final hasOffering = r['offeringId'] != null;
+    return {
+      'projectId': r['projectId'].toString(),
+      'title': r['title']?.toString() ?? '',
+      'slug': r['slug']?.toString() ?? '',
+      'projectStatus': r['projectStatus']?.toString() ?? '',
+      'projectType': r['projectType']?.toString() ?? '',
+      'projectCode': r['projectCode']?.toString(),
+      'deleted': r['deleted'] == true,
+      'installmentsEnabled': r['installmentsEnabled'] == true,
+      'installmentSettings': r['installmentSettings'],
+      'investorName': r['investorName']?.toString(),
+      'offering': !hasOffering
+          ? null
+          : <String, dynamic>{
+        'id': r['offeringId'].toString(),
+        'legalCompanyName': r['legalCompanyName']?.toString() ?? '',
+        'pricePaisa': decimalToPaisa(r['pricePerShareBdt']),
+        'minInvestmentPaisa': decimalToPaisa(r['minInvestmentBdt']),
+        'minSharesPerPurchase': r['minSharesPerPurchase'] == null ? null : _toInt(r['minSharesPerPurchase']),
+        'maxSharesPerInvestor': r['maxSharesPerInvestor'] == null ? null : _toInt(r['maxSharesPerInvestor']),
+        'reservationHoldDays': r['reservationHoldDays'] == null ? null : _toInt(r['reservationHoldDays']),
+        'purchaseStartDate': r['purchaseStartDate']?.toString() ?? '',
+        'purchaseEndDate': r['purchaseEndDate']?.toString(),
+        'status': r['offeringStatus']?.toString() ?? 'DRAFT',
+        'terms': r['terms']?.toString(),
+        'available': _toInt(r['offeredShares']) - _toInt(r['reserved']) - _toInt(r['allotted']),
+        'heldByInvestor': _toInt(r['held']),
+      },
+    };
+  }
+
+  static OfferingRules shareRulesOf(Map<String, dynamic> o) => OfferingRules(
+    status: o['status']?.toString() ?? 'DRAFT',
+    pricePaisa: (o['pricePaisa'] as int?) ?? 0,
+    minInvestmentPaisa: (o['minInvestmentPaisa'] as int?) ?? 0,
+    minSharesPerPurchase: o['minSharesPerPurchase'] as int?,
+    maxSharesPerInvestor: o['maxSharesPerInvestor'] as int?,
+    purchaseStartDate: o['purchaseStartDate']?.toString() ?? '',
+    purchaseEndDate: o['purchaseEndDate']?.toString(),
+  );
+
+  /// Website er moto: 15 minute e 15 bar porjonto coupon check (anuman kore code khuja bondho)
+  static final List<DateTime> _couponTries = [];
+
+  /// Coupon code check — thik hole terms, na hole message. (website previewCoupon)
+  static Future<({CouponTerms? terms, String? couponId, String? error})> previewShareCoupon({
+    required String userId,
+    required String offeringId,
+    required String code,
+    bool rateLimited = true,
+  }) async {
+    String tr(String en, String bn) => en;
+    final invalid = "This coupon code isn't valid for this purchase";
+    if (userId.isEmpty) return (terms: null, couponId: null, error: _loginRequiredMsg);
+    if (rateLimited) {
+      final now = DateTime.now();
+      _couponTries.removeWhere((t) => now.difference(t).inMinutes >= 15);
+      if (_couponTries.length >= 15) {
+        return (terms: null, couponId: null, error: 'Too many attempts. Please try again in a few minutes.');
+      }
+      _couponTries.add(now);
+    }
+    final c = normalizeCouponCode(code);
+    if (!RegExp(r'^[A-Z0-9-]{4,32}$').hasMatch(c)) return (terms: null, couponId: null, error: invalid);
+    final rows = await queryNeonHttp('''
+      SELECT c."id", c."code", c."offeringId", c."discountType", c."discountValue", c."maxDiscountBdt",
+             c."minShares", c."maxShares", c."assignedUserId", c."maxUses", c."status",
+             to_char(c."validFrom", 'YYYY-MM-DD') AS "validFrom", to_char(c."validUntil", 'YYYY-MM-DD') AS "validUntil",
+             (SELECT COUNT(*) FROM share_purchases sp WHERE sp."couponId" = c."id" AND sp."status" <> 'CANCELED') AS "used"
+      FROM share_coupons c WHERE c."code" = \$1
+    ''', [c]);
+    if (rows.isEmpty) {
+      return (terms: null, couponId: null, error: _lastConnectionError != null ? _connectionErrorMsg() : invalid);
+    }
+    final x = rows.first;
+    final reason = couponUnusableReason(
+      status: x['status']?.toString() ?? '',
+      couponOfferingId: x['offeringId']?.toString() ?? '',
+      offeringId: offeringId,
+      assignedUserId: x['assignedUserId']?.toString(),
+      userId: userId,
+      maxUses: _toInt(x['maxUses']),
+      usedCount: _toInt(x['used']),
+      validFrom: x['validFrom']?.toString(),
+      validUntil: x['validUntil']?.toString(),
+      today: dhakaDay(),
+      tr: tr,
+    );
+    if (reason != null) return (terms: null, couponId: null, error: reason);
+    return (
+    terms: CouponTerms(
+      code: x['code'].toString(),
+      discountType: x['discountType']?.toString() ?? 'FIXED',
+      discountValue: decimalToPaisa(x['discountValue']),
+      maxDiscountPaisa: x['maxDiscountBdt'] == null ? null : decimalToPaisa(x['maxDiscountBdt']),
+      minShares: x['minShares'] == null ? null : _toInt(x['minShares']),
+      maxShares: x['maxShares'] == null ? null : _toInt(x['maxShares']),
+    ),
+    couponId: x['id'].toString(),
+    error: null,
+    );
+  }
+
+  /// Ek-i request dubar gele (net er karone) — ager order-tai ferot
+  static Future<Map<String, dynamic>?> _sharePurchaseByKey(String key, String userId) async {
+    final r = await queryNeonHttp('''
+      SELECT i."id" AS "investmentId", i."scheduleApproval", sp."id" AS "purchaseId", sp."orderNumber"
+      FROM investments i
+      JOIN investor_profiles p ON p."id" = i."investorProfileId"
+      JOIN share_purchases sp ON sp."investmentId" = i."id"
+      WHERE i."idempotencyKey" = \$1 AND p."userId" = \$2
+    ''', [key, userId]);
+    if (r.isEmpty) return null;
+    return {
+      'success': true,
+      'investmentId': r.first['investmentId'].toString(),
+      'purchaseId': r.first['purchaseId'].toString(),
+      'orderNumber': r.first['orderNumber']?.toString() ?? '',
+      'needsScheduleApproval': r.first['scheduleApproval']?.toString() == 'PENDING',
+    };
+  }
+
+  /// Share er order — share gulo reserve + investment (+ kisti) ek transaction e,
+  /// offering er row lock er niche (website createPurchase). Investor je dam ar
+  /// mot taka dekhechen sheta pathan; majhe bodle gele abar dekhte bola hoy.
+  static Future<Map<String, dynamic>> createSharePurchase({
+    required String userId,
+    required String projectId,
+    required int shares,
+    required int expectedPricePaisa,
+    required int expectedTotalPaisa,
+    String? couponCode,
+    String paymentPlan = 'FULL',
+    List<(String, double)>? schedule,
+    required String idempotencyKey,
+  }) async {
+    String tr(String en, String bn) => en;
+    if (userId.isEmpty) return {'success': false, 'message': _loginRequiredMsg};
+    _lastDbFailure = null;
+
+    final prior = await _sharePurchaseByKey(idempotencyKey, userId);
+    if (prior != null) return prior;
+
+    final prof = await queryNeonHttp('SELECT "id" FROM investor_profiles WHERE "userId" = \$1', [userId]);
+    if (prof.isEmpty) {
+      return {
+        'success': false,
+        'message': _lastConnectionError != null
+            ? _connectionErrorMsg()
+            : 'Investor profile not found. Please complete your profile.',
+      };
+    }
+    final profileId = prof.first['id'].toString();
+
+    final ctx = await getShareBuyContext(projectId, userId);
+    if (ctx == null) {
+      return {'success': false, 'message': _lastConnectionError != null ? _connectionErrorMsg() : 'Project not found.'};
+    }
+    final o = ctx['offering'] as Map<String, dynamic>?;
+    if (o == null) return {'success': false, 'message': 'This project has no share offering'};
+    if (ctx['deleted'] == true || ctx['projectType'] != 'SHARE_BUYING') {
+      return {'success': false, 'message': "This project doesn't sell shares"};
+    }
+    if (ctx['projectStatus'] != 'FUNDRAISING') {
+      return {'success': false, 'message': 'This project is not accepting share purchases right now'};
+    }
+    final rules = shareRulesOf(o);
+    if (expectedPricePaisa != rules.pricePaisa) {
+      return {
+        'success': false,
+        'message': 'The share price is now ${formatBdtPaisa(rules.pricePaisa)} — please review your purchase again',
+      };
+    }
+    final today = dhakaDay();
+    final check = checkPurchase(rules,
+        byAmount: false,
+        shares: shares,
+        available: o['available'] as int,
+        heldByInvestor: o['heldByInvestor'] as int,
+        today: today,
+        tr: tr);
+    if (check.errors.isNotEmpty) return {'success': false, 'message': check.errors.first};
+
+    // Coupon: abar check, ar transaction e row lock
+    String? couponId;
+    String? appliedCode;
+    var discount = 0;
+    var payable = check.totalPaisa;
+    if ((couponCode ?? '').trim().isNotEmpty) {
+      final c = await previewShareCoupon(userId: userId, offeringId: o['id'].toString(), code: couponCode!, rateLimited: false);
+      if (c.terms == null) return {'success': false, 'message': c.error ?? 'This coupon code isn\'t valid for this purchase'};
+      final q = applyCoupon(c.terms!, check.shares, rules.pricePaisa, tr);
+      if (q.errors.isNotEmpty) return {'success': false, 'message': q.errors.first};
+      couponId = c.couponId;
+      appliedCode = c.terms!.code;
+      discount = q.discountPaisa;
+      payable = q.payablePaisa;
+    }
+    if (payable != expectedTotalPaisa) {
+      return {
+        'success': false,
+        'message': appliedCode != null
+            ? '${formatShares(check.shares)} shares cost ${formatBdtPaisa(payable)} with coupon $appliedCode — please review your purchase again'
+            : '${formatShares(check.shares)} shares cost ${formatBdtPaisa(check.totalPaisa)} — please review your purchase again',
+      };
+    }
+    final totalBdt = payable / 100;
+
+    // Kisti: project er niyom (app er investWithPayment er motoi)
+    final plan = paymentPlan == 'INSTALLMENT' ? 'INSTALLMENT' : 'FULL';
+    String? approval;
+    InstallmentSettings? settings;
+    final rows = schedule ?? const <(String, double)>[];
+    if (plan == 'INSTALLMENT') {
+      settings = InstallmentSettings.fromJson(ctx['installmentSettings']);
+      if (ctx['installmentsEnabled'] != true) {
+        return {'success': false, 'message': 'This share offering accepts full payment only'};
+      }
+      if (rows.isEmpty) return {'success': false, 'message': 'Set up your installment schedule'};
+      final sc = checkSchedule(totalBdt, rows, settings, today, tr);
+      if (sc.errors.isNotEmpty) return {'success': false, 'message': sc.errors.first};
+      approval = needsScheduleApproval(settings, rows, today) ? 'PENDING' : null;
+    }
+
+    final offeringId = o['id'].toString();
+    final investmentId = _generateUuid();
+    final purchaseId = _generateUuid();
+    final now = _nowIso();
+    final returnRow = await queryNeonHttp(
+        'SELECT "returnType"::text AS "rt" FROM projects WHERE "id" = \$1', [ctx['projectId']]);
+    final returnType = returnRow.isEmpty ? 'FIXED_RETURN' : (returnRow.first['rt']?.toString() ?? 'FIXED_RETURN');
+    final priceStr = paisaToDecimalString(rules.pricePaisa);
+    final totalStr = paisaToDecimalString(payable);
+    final discountStr = paisaToDecimalString(discount);
+    final grossStr = paisaToDecimalString(check.totalPaisa);
+
+    // Guard — lock er pore taja hishab; na mille ichchhe kore error (shob rollback)
+    String fail(String code) => "CAST('BCERR_${code}_' || o.\"id\" AS int)";
+    final queries = <(String, List<dynamic>)>[
+      ('SELECT o."id" FROM share_offerings o WHERE o."id" = \$1 FOR UPDATE', [offeringId]),
+      if (couponId != null) ('SELECT c."id" FROM share_coupons c WHERE c."id" = \$1 FOR UPDATE', [couponId]),
+      ('''
+        SELECT CASE
+          WHEN o."status" <> 'ACTIVE' OR pr."status"::text <> 'FUNDRAISING' THEN ${fail('CLOSED')}
+          WHEN o."pricePerShareBdt" <> \$2::numeric THEN ${fail('PRICE')}
+          WHEN o."offeredShares"
+               - COALESCE((SELECT SUM(sp."reservedShares") FROM share_purchases sp
+                           WHERE sp."offeringId" = o."id" AND sp."status" <> 'CANCELED'), 0)
+               - COALESCE((SELECT SUM(l."shares") FROM share_ledger_entries l WHERE l."offeringId" = o."id"), 0) < \$3
+            THEN ${fail('SOLDOUT')}
+          WHEN o."maxSharesPerInvestor" IS NOT NULL AND
+               COALESCE((SELECT SUM(sp."reservedShares") FROM share_purchases sp
+                         WHERE sp."offeringId" = o."id" AND sp."investorUserId" = \$4 AND sp."status" <> 'CANCELED'), 0)
+               + COALESCE((SELECT SUM(l."shares") FROM share_ledger_entries l
+                           WHERE l."offeringId" = o."id" AND l."investorUserId" = \$4), 0) + \$3 > o."maxSharesPerInvestor"
+            THEN ${fail('LIMIT')}
+          WHEN \$5::text IS NOT NULL AND NOT EXISTS (
+                 SELECT 1 FROM share_coupons c
+                 WHERE c."id" = \$5 AND c."status" = 'ACTIVE' AND c."offeringId" = o."id"
+                   AND (SELECT COUNT(*) FROM share_purchases sp WHERE sp."couponId" = c."id" AND sp."status" <> 'CANCELED') < c."maxUses")
+            THEN ${fail('COUPON')}
+          ELSE 1 END AS "ok"
+        FROM share_offerings o JOIN projects pr ON pr."id" = o."projectId"
+        WHERE o."id" = \$1
+      ''', [offeringId, priceStr, check.shares, userId, couponId]),
+      ('''
+        INSERT INTO investments ("id", "investorProfileId", "projectId", "status", "amountBdt", "expectedReturnBdt",
+                                 "returnType", "idempotencyKey", "paymentPlan", "installmentTerms", "scheduleConfirmedAt",
+                                 "scheduleApproval", "createdAt", "updatedAt")
+        VALUES (\$1, \$2, \$3, 'PENDING'::"InvestmentStatus", \$4::numeric, 0, \$5::"ReturnType", \$6, \$7,
+                \$8::jsonb, \$9::timestamp, \$10, \$11::timestamp, \$11::timestamp)
+      ''', [
+        investmentId,
+        profileId,
+        ctx['projectId'],
+        totalStr,
+        returnType,
+        idempotencyKey,
+        plan,
+        settings == null ? null : jsonEncode(settings.termsJson(DateTime.now())),
+        settings == null ? null : now,
+        approval,
+        now,
+      ]),
+      if (plan == 'INSTALLMENT')
+        ('''
+          INSERT INTO investment_installments ("id", "investmentId", "number", "amountBdt", "dueDate", "createdAt", "updatedAt")
+          SELECT x."id", \$1::text, x."n", x."amt", x."d"::date, \$2::timestamp, \$2::timestamp
+          FROM json_to_recordset(\$3::json) AS x("id" text, "n" int, "amt" numeric, "d" text)
+        ''', [
+          investmentId,
+          now,
+          jsonEncode([
+            for (var i = 0; i < rows.length; i++)
+              {'id': _generateUuid(), 'n': i + 1, 'amt': paisaToDecimalString(toPaisa(rows[i].$2)), 'd': rows[i].$1},
+          ]),
+        ]),
+      ('''
+        INSERT INTO share_purchases ("id", "orderNumber", "offeringId", "projectId", "investmentId", "investorUserId",
+                                     "shareCount", "pricePerShareBdt", "totalBdt", "discountBdt", "couponId", "couponCode",
+                                     "paymentPlan", "status", "allotmentStatus", "reservedShares", "reservationExpiresAt",
+                                     "termsSnapshot", "isLegacy", "createdAt", "updatedAt")
+        SELECT \$1::text,
+               'SPO-' || \$2::text || '-' || lpad(((SELECT COUNT(*) FROM share_purchases x WHERE x."offeringId" = o."id") + 1)::text, 5, '0'),
+               o."id", o."projectId", \$3::text, \$4::text, \$5::int, o."pricePerShareBdt", \$6::numeric, \$7::numeric,
+               \$8::text, \$9::text, \$10::text,
+               'PENDING_PAYMENT', 'NOT_ALLOTTED', \$5::int,
+               CASE WHEN o."reservationHoldDays" IS NULL THEN NULL
+                    ELSE \$11::timestamp + make_interval(days => o."reservationHoldDays") END,
+               jsonb_build_object(
+                 'legalCompanyName', o."legalCompanyName", 'companyKey', o."companyKey",
+                 'authorizedShares', o."authorizedShares", 'offeredShares', o."offeredShares",
+                 'pricePerShareBdt', o."pricePerShareBdt"::text, 'minInvestmentBdt', o."minInvestmentBdt"::text,
+                 'minSharesPerPurchase', o."minSharesPerPurchase", 'maxSharesPerInvestor', o."maxSharesPerInvestor",
+                 'paymentVerificationRequired', o."paymentVerificationRequired",
+                 'allotmentApprovalRequired', o."allotmentApprovalRequired",
+                 'allowPartialAllotment', o."allowPartialAllotment", 'reservationHoldDays', o."reservationHoldDays",
+                 'purchaseStartDate', to_char(o."purchaseStartDate", 'YYYY-MM-DD'),
+                 'purchaseEndDate', to_char(o."purchaseEndDate", 'YYYY-MM-DD'),
+                 'status', o."status", 'membershipEligible', o."membershipEligible", 'terms', o."terms",
+                 'configVersion', o."configVersion", 'agreedAt', \$12::text
+               ) || CASE WHEN \$9::text IS NULL THEN '{}'::jsonb ELSE jsonb_build_object('coupon',
+                      jsonb_build_object('code', \$9::text, 'shareValueBdt', \$13::text, 'discountBdt', \$7::text)) END,
+               false, \$11::timestamp, \$11::timestamp
+        FROM share_offerings o WHERE o."id" = \$14::text
+      ''', [
+        purchaseId,
+        orderCodeOf(ctx['projectCode']?.toString()),
+        investmentId,
+        userId,
+        check.shares,
+        totalStr,
+        discountStr,
+        couponId,
+        appliedCode,
+        plan,
+        now,
+        DateTime.now().toUtc().toIso8601String(),
+        grossStr,
+        offeringId,
+      ]),
+      ('''
+        INSERT INTO audit_logs ("id", "actorId", "action", "entityType", "entityId", "after", "createdAt")
+        SELECT \$1::text, \$2::text, 'CREATE'::"AuditAction", 'SharePurchase', sp."id",
+               jsonb_build_object('orderNumber', sp."orderNumber", 'investmentId', sp."investmentId",
+                                  'shares', sp."shareCount", 'pricePerShareBdt', \$3::text, 'shareValueBdt', \$4::text,
+                                  'discountBdt', \$5::text, 'couponCode', \$6::text, 'totalBdt', \$7::text,
+                                  'paymentPlan', \$8::text, 'configVersion', o."configVersion", 'source', 'app'),
+               \$9::timestamp
+        FROM share_purchases sp JOIN share_offerings o ON o."id" = sp."offeringId"
+        WHERE sp."id" = \$10
+      ''', [_generateUuid(), userId, priceStr, grossStr, discountStr, appliedCode, totalStr, plan, now, purchaseId]),
+      ('''
+        SELECT sp."id", sp."orderNumber", i."scheduleApproval"
+        FROM share_purchases sp JOIN investments i ON i."id" = sp."investmentId"
+        WHERE sp."id" = \$1
+      ''', [purchaseId]),
+    ];
+
+    final tx = await _neonTransaction(queries);
+    if (tx.results == null) {
+      // Net kete gele hoyto commit hoye geche — key diye khuji
+      final again = await _sharePurchaseByKey(idempotencyKey, userId);
+      if (again != null) return again;
+      final err = tx.error ?? '';
+      final code = RegExp(r'BCERR_([A-Z]+)').firstMatch(err)?.group(1);
+      final msg = switch (code) {
+        'CLOSED' => 'This project is not accepting share purchases right now',
+        'PRICE' => 'The share price has changed — please review your purchase again',
+        'SOLDOUT' => 'Those shares were just taken by someone else — please review your purchase again',
+        'LIMIT' => 'You have reached the per-investor share limit for this offering',
+        'COUPON' => 'This coupon has already been used',
+        _ => tx.network
+            ? 'Could not reach the server. Please check your internet connection.'
+            : 'Could not place your order. (${err.length > 120 ? err.substring(0, 120) : err})',
+      };
+      return {'success': false, 'message': msg};
+    }
+    final last = tx.results!.isEmpty ? const <Map<String, dynamic>>[] : tx.results!.last;
+    if (last.isEmpty) {
+      final again = await _sharePurchaseByKey(idempotencyKey, userId);
+      return again ?? {'success': false, 'message': 'Could not place your order. Please try again.'};
+    }
+    final orderNumber = last.first['orderNumber']?.toString() ?? '';
+    final needsApproval = last.first['scheduleApproval']?.toString() == 'PENDING';
+
+    // Admin der notice (website onInvestmentCreated / onScheduleReviewNeeded) — order hoye geche, eta best-effort
+    unawaited(_notifyStaffShareOrder(
+      userId: userId,
+      investmentId: investmentId,
+      projectId: ctx['projectId'].toString(),
+      text: '${ctx['investorName'] ?? 'An investor'} invested ৳${_fmtTkPlain(totalBdt)} in "${ctx['title']} (shares, $orderNumber)"',
+      scheduleText: needsApproval
+          ? '${ctx['investorName'] ?? 'An investor'} chose their own ${rows.length} installment dates for "${ctx['title']}". Review and approve them before they can pay.'
+          : null,
+    ));
+
+    return {
+      'success': true,
+      'investmentId': investmentId,
+      'purchaseId': purchaseId,
+      'orderNumber': orderNumber,
+      'needsScheduleApproval': needsApproval,
+    };
+  }
+
+  static String _fmtTkPlain(double v) {
+    final s = v.toStringAsFixed(v == v.roundToDouble() ? 0 : 2);
+    final parts = s.split('.');
+    final w = parts[0].replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => ',');
+    return parts.length > 1 ? '$w.${parts[1]}' : w;
+  }
+
+  static Future<void> _notifyStaffShareOrder({
+    required String userId,
+    required String investmentId,
+    required String projectId,
+    required String text,
+    String? scheduleText,
+  }) async {
+    try {
+      final now = _nowIso();
+      await executeNeonHttp('''
+        INSERT INTO notifications ("id", "userId", "type", "title", "body", "data", "isRead", "createdAt")
+        SELECT gen_random_uuid()::text, u."id", 'INVESTMENT_CONFIRMED'::"NotificationType",
+               'New Investment Submitted', \$1::text, jsonb_build_object('investmentId', \$2::text, 'projectId', \$3::text), false, \$4::timestamp
+        FROM users u
+        WHERE u."role"::text IN ('SUPER_ADMIN', 'ADMIN', 'FINANCE_OFFICER') AND u."status"::text = 'ACTIVE' AND u."deletedAt" IS NULL
+      ''', [text, investmentId, projectId, now]);
+      if (scheduleText != null) {
+        await executeNeonHttp('''
+          INSERT INTO notifications ("id", "userId", "type", "title", "body", "data", "isRead", "createdAt")
+          SELECT gen_random_uuid()::text, u."id", 'INVESTMENT_CONFIRMED'::"NotificationType",
+                 'Installment schedule to approve', \$1::text, jsonb_build_object('investmentId', \$2::text), false, \$3::timestamp
+          FROM users u
+          WHERE u."role"::text IN ('SUPER_ADMIN', 'ADMIN', 'FINANCE_OFFICER') AND u."status"::text = 'ACTIVE' AND u."deletedAt" IS NULL
+        ''', [scheduleText, investmentId, now]);
+      }
+    } catch (e) {
+      debugPrint('Share order staff notice error: $e');
+    }
+  }
+
+  // ═════════════════════════════════════════════════════════
+  // GROUP INVESTMENT DETAIL — card e chaple ekta group investment er shob:
+  // overview, payment progress, payment history (proof shoho), receipt, cancel
+  // ═════════════════════════════════════════════════════════
+  static Future<Map<String, dynamic>?> getGroupInvestmentDetail(String id, String userId) async {
+    if (id.isEmpty || userId.isEmpty) return null;
+    final r = await Future.wait([
+      queryNeonHttp('''
+        SELECT gi."id", gi."tierId", gi."receiptNumber", gi."amountBdt", gi."plotNumber", gi."plotSizeSqft",
+               gi."sharePercentage", gi."notes", gi."status"::text AS "status", gi."createdAt", gi."confirmedAt",
+               gi."cancelledAt", COALESCE(to_jsonb(gi) ->> 'paymentPlan', 'FULL') AS "paymentPlan",
+               bg."name" AS "groupName", bg."slug", ge."name" AS "entityName", gt."name" AS "tierName",
+               gt."type"::text AS "tierType", gt."expectedReturnPct", gt."durationMonths",
+               ba."id" AS "bankId", ba."bankName", ba."accountName", ba."accountNumber", ba."branchName",
+               ba."mobileNumber", to_jsonb(ba) ->> 'routingNumber' AS "routingNumber",
+               to_jsonb(ba) ->> 'swiftCode' AS "swiftCode", to_jsonb(ba) ->> 'branchAddress' AS "branchAddress",
+               COALESCE((to_jsonb(ba) ->> 'isActive')::boolean, true) AS "bankActive"
+        FROM group_investments gi
+        JOIN group_tiers gt     ON gt."id" = gi."tierId"
+        JOIN group_entities ge  ON ge."id" = gt."entityId"
+        JOIN business_groups bg ON bg."id" = ge."groupId"
+        LEFT JOIN bank_accounts ba ON ba."id" = gt."bankAccountId"
+        WHERE gi."id" = \$1 AND gi."investorUserId" = \$2
+      ''', [id, userId]),
+      queryNeonHttp('''
+        SELECT p."id", p."status"::text AS "status", p."amountBdt", p."paymentMethod" AS "method",
+               p."transactionRef", p."cashReceivedBy", p."rejectionReason", p."createdAt", p."reviewedAt",
+               (p."proofFileUrl" IS NOT NULL AND p."proofFileUrl" <> '') AS "hasProof",
+               COALESCE(jsonb_array_length(CASE WHEN jsonb_typeof(p."extraProofs") = 'array' THEN p."extraProofs" END), 0) AS "extraCount"
+        FROM group_investment_payments p
+        JOIN group_investments gi ON gi."id" = p."groupInvestmentId"
+        WHERE p."groupInvestmentId" = \$1 AND gi."investorUserId" = \$2
+        ORDER BY p."createdAt" ASC
+      ''', [id, userId]),
+    ]);
+    if (r[0].isEmpty) return null;
+    final x = r[0].first;
+    final payments = r[1]
+        .map((m) => <String, dynamic>{
+      'id': m['id'].toString(),
+      'status': m['status']?.toString() ?? 'SUBMITTED',
+      'amountBdt': _toDouble(m['amountBdt']),
+      'method': m['method']?.toString() ?? '',
+      'transactionRef': m['transactionRef']?.toString() ?? '',
+      'cashReceivedBy': m['cashReceivedBy']?.toString(),
+      'rejectionReason': m['rejectionReason']?.toString(),
+      'createdAt': m['createdAt']?.toString(),
+      'reviewedAt': m['reviewedAt']?.toString(),
+      'proofCount': m['hasProof'] == true ? 1 + _toInt(m['extraCount']) : 0,
+    })
+        .toList();
+    double sum(Set<String> st) =>
+        payments.where((p) => st.contains(p['status'])).fold(0.0, (s, p) => s + (p['amountBdt'] as double));
+    final latest = payments.isEmpty ? null : payments.last;
+    final bankId = x['bankId']?.toString();
+    return <String, dynamic>{
+      // GroupInvestPage(existing: ...) er jonno getGroupInvestmentsData er ek-i key
+      'id': x['id'].toString(),
+      'tierId': x['tierId']?.toString() ?? '',
+      'receiptNumber': x['receiptNumber']?.toString(),
+      'groupName': x['groupName']?.toString() ?? '',
+      'slug': x['slug']?.toString() ?? '',
+      'entityName': x['entityName']?.toString() ?? '',
+      'tierName': x['tierName']?.toString() ?? '',
+      'tierType': x['tierType']?.toString() ?? '',
+      'amountBdt': _toDouble(x['amountBdt']),
+      'plotNumber': x['plotNumber']?.toString() ?? '',
+      'plotSizeSqft': _toDouble(x['plotSizeSqft']),
+      'sharePercentage': x['sharePercentage'] == null ? null : _toDouble(x['sharePercentage']),
+      'notes': x['notes']?.toString() ?? '',
+      'status': x['status']?.toString() ?? 'PENDING',
+      'createdAt': x['createdAt']?.toString() ?? '',
+      'confirmedAt': x['confirmedAt']?.toString(),
+      'cancelledAt': x['cancelledAt']?.toString(),
+      'expectedReturnPct': _normalizePct(x['expectedReturnPct']),
+      'durationMonths': _toInt(x['durationMonths']),
+      'paymentPlan': (x['paymentPlan']?.toString() ?? 'FULL').toUpperCase(),
+      'paidApproved': sum({'APPROVED'}),
+      'paidPending': sum({'SUBMITTED', 'UNDER_REVIEW'}),
+      'bankAccountId': bankId ?? '',
+      'bank': bankId == null || x['bankActive'] == false
+          ? null
+          : <String, dynamic>{
+        'id': bankId,
+        'bankName': x['bankName']?.toString() ?? '',
+        'accountName': x['accountName']?.toString() ?? '',
+        'accountNumber': x['accountNumber']?.toString() ?? '',
+        'branchName': x['branchName']?.toString() ?? '',
+        'mobileNumber': x['mobileNumber']?.toString() ?? '',
+        'routingNumber': x['routingNumber']?.toString() ?? '',
+        'swiftCode': x['swiftCode']?.toString() ?? '',
+        'branchAddress': x['branchAddress']?.toString() ?? '',
+      },
+      'latestSubmission': latest == null
+          ? null
+          : <String, dynamic>{
+        'id': latest['id'],
+        'status': latest['status'],
+        'transactionRef': latest['transactionRef'],
+        'rejectionReason': latest['rejectionReason'],
+        'createdAt': latest['createdAt'],
+      },
+      'payments': payments,
+    };
+  }
+
+  /// Group investment er receipt (PDF) — website er /api/group-receipts/[id]
+  static Future<({Uint8List bytes, String fileName, String mimeType})?> downloadGroupReceipt({
+    required String userId,
+    required String groupInvestmentId,
+  }) =>
+      _downloadFromWebsite(userId, '/api/group-receipts/$groupInvestmentId', 'group-receipt');
+
+  /// Website er cancelGroupInvestmentAction: shudhu nijer PENDING / PAYMENT_PENDING,
+  /// ar kono payment jama thakle (reject chara) na — tokhon finance ke bolte hoy
+  static Future<Map<String, dynamic>> cancelGroupInvestment(String id, String userId) async {
+    if (userId.isEmpty) return {'success': false, 'message': _loginRequiredMsg};
+    final now = _nowIso();
+    final res = await queryNeonHttp('''
+      UPDATE group_investments gi
+      SET "status" = 'CANCELLED'::"GroupInvestmentStatus", "cancelledAt" = \$3::timestamp, "updatedAt" = \$3::timestamp
+      WHERE gi."id" = \$1 AND gi."investorUserId" = \$2
+        AND gi."status"::text IN ('PENDING', 'PAYMENT_PENDING')
+        AND NOT EXISTS (SELECT 1 FROM group_investment_payments p
+                        WHERE p."groupInvestmentId" = gi."id" AND p."status"::text <> 'REJECTED')
+      RETURNING gi."id"
+    ''', [id, userId, now]);
+    if (res.isNotEmpty) return {'success': true};
+    if (_lastConnectionError != null) return {'success': false, 'message': _connectionErrorMsg()};
+    return {
+      'success': false,
+      'message': 'This investment has payments submitted. Please contact support to cancel it.',
+    };
+  }
 }

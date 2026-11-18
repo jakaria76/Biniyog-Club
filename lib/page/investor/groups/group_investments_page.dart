@@ -8,6 +8,7 @@ import '../../../services/database_service.dart';
 import '../../../services/language_service.dart';
 import 'browse_groups_page.dart';
 import 'group_invest_page.dart';
+import 'group_investment_detail_page.dart';
 import '../../../theme/app_colors.dart';
 
 class GroupInvestmentsPage extends StatefulWidget {
@@ -194,6 +195,17 @@ class _GroupInvestmentsPageState extends State<GroupInvestmentsPage> {
       _loadFailed = failed;
       _isLoading = false;
     });
+  }
+
+  /// Card e chaple — shob tottho, payment history, receipt (website er motoi)
+  Future<void> _openDetail(Map<String, dynamic> inv) async {
+    final id = inv['id']?.toString() ?? '';
+    if (id.isEmpty) return;
+    await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(builder: (_) => GroupInvestmentDetailPage(groupInvestmentId: id)),
+    );
+    if (mounted) _loadGroupInvestments();
   }
 
   Future<void> _openBrowse() async {
@@ -546,164 +558,191 @@ class _GroupInvestmentsPageState extends State<GroupInvestmentsPage> {
       if (share > 0) (LanguageService.tr('Share', 'শেয়ার'), '${_trim(share, 2)}%', null),
     ];
 
-    return Container(
-      clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: rejected ? danger.withAlpha(120) : line, width: rejected ? 1.3 : 1),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // ── Header
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(color: emeraldSoft, borderRadius: BorderRadius.circular(10)),
-                  child: const Icon(Icons.apartment_rounded, color: emerald, size: 18),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        _title(inv),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700, color: ink, height: 1.25),
-                      ),
-                      if (tier.isNotEmpty) ...[
-                        const SizedBox(height: 2),
-                        Text(tier,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontSize: 10.5, color: muted)),
-                      ],
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-                  decoration: BoxDecoration(color: st.$2.withAlpha(24), borderRadius: BorderRadius.circular(20)),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(st.$3, size: 11, color: st.$2),
-                      const SizedBox(width: 3),
-                      Text(st.$1, style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.w800, color: st.$2)),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          // ── Amount strip
-          Container(
-            margin: const EdgeInsets.symmetric(horizontal: 12),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [emerald, emeraldDeep],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: IntrinsicHeight(
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => _openDetail(inv),
+      child: Container(
+        clipBehavior: Clip.antiAlias,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: rejected ? danger.withAlpha(120) : line, width: rejected ? 1.3 : 1),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // ── Header
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
               child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _stripCell(LanguageService.tr('Amount', 'পরিমাণ'), _fmtFull(amount), Colors.white),
-                  _stripDivider(),
-                  _stripCell(
-                    pct > 0
-                        ? LanguageService.tr('Expected (${_pct(pct)})', 'প্রত্যাশিত (${_pct(pct)})')
-                        : LanguageService.tr('Expected', 'প্রত্যাশিত'),
-                    pct > 0 ? '+${_fmtFull(amount * pct)}' : LanguageService.tr('Not set', 'নির্ধারিত নয়'),
-                    goldLight,
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(color: emeraldSoft, borderRadius: BorderRadius.circular(10)),
+                    child: const Icon(Icons.apartment_rounded, color: emerald, size: 18),
                   ),
-                  _stripDivider(),
-                  _stripCell(
-                    LanguageService.tr('Total', 'মোট'),
-                    pct > 0 ? _fmtFull(amount * (1 + pct)) : '—',
-                    BC.brand300,
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _title(inv),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700, color: ink, height: 1.25),
+                        ),
+                        if (tier.isNotEmpty) ...[
+                          const SizedBox(height: 2),
+                          Text(tier,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontSize: 10.5, color: muted)),
+                        ],
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                    decoration: BoxDecoration(color: st.$2.withAlpha(24), borderRadius: BorderRadius.circular(20)),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(st.$3, size: 11, color: st.$2),
+                        const SizedBox(width: 3),
+                        Text(st.$1, style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.w800, color: st.$2)),
+                      ],
+                    ),
                   ),
                 ],
               ),
             ),
-          ),
 
-          // ── Facts (choto grid)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
-            child: LayoutBuilder(
-              builder: (_, c) {
-                final w = (c.maxWidth - 16) / 3;
-                return Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: facts.map((f) => SizedBox(width: w, child: _fact(f.$1, f.$2, f.$3))).toList(),
-                );
-              },
+            // ── Amount strip
+            Container(
+              margin: const EdgeInsets.symmetric(horizontal: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [emerald, emeraldDeep],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: IntrinsicHeight(
+                child: Row(
+                  children: [
+                    _stripCell(LanguageService.tr('Amount', 'পরিমাণ'), _fmtFull(amount), Colors.white),
+                    _stripDivider(),
+                    _stripCell(
+                      pct > 0
+                          ? LanguageService.tr('Expected (${_pct(pct)})', 'প্রত্যাশিত (${_pct(pct)})')
+                          : LanguageService.tr('Expected', 'প্রত্যাশিত'),
+                      pct > 0 ? '+${_fmtFull(amount * pct)}' : LanguageService.tr('Not set', 'নির্ধারিত নয়'),
+                      goldLight,
+                    ),
+                    _stripDivider(),
+                    _stripCell(
+                      LanguageService.tr('Total', 'মোট'),
+                      pct > 0 ? _fmtFull(amount * (1 + pct)) : '—',
+                      BC.brand300,
+                    ),
+                  ],
+                ),
+              ),
             ),
-          ),
 
-          // ── Payment state (shudhu pending e)
-          if (awaiting) ...[
+            // ── Facts (choto grid)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+              child: LayoutBuilder(
+                builder: (_, c) {
+                  final w = (c.maxWidth - 16) / 3;
+                  return Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: facts.map((f) => SizedBox(width: w, child: _fact(f.$1, f.$2, f.$3))).toList(),
+                  );
+                },
+              ),
+            ),
+
+            // ── Payment state (shudhu pending e)
+            if (awaiting) ...[
+              const SizedBox(height: 10),
+              _buildPaymentState(
+                inv,
+                total: amount,
+                approved: approved,
+                pending: pending,
+                left: left,
+                rejected: rejected,
+                subStatus: subStatus,
+              ),
+            ],
+
+            // ── Footer: receipt
             const SizedBox(height: 10),
-            _buildPaymentState(
-              inv,
-              total: amount,
-              approved: approved,
-              pending: pending,
-              left: left,
-              rejected: rejected,
-              subStatus: subStatus,
+            const Divider(height: 1, color: line),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+              child: Row(
+                children: [
+                  Icon(receipt.isNotEmpty ? Icons.receipt_long_outlined : Icons.info_outline_rounded,
+                      size: 13, color: muted),
+                  const SizedBox(width: 5),
+                  Expanded(
+                    child: receipt.isNotEmpty
+                        ? SelectableText(
+                      receipt,
+                      maxLines: 1,
+                      style: const TextStyle(
+                          fontSize: 10.5, color: ink, fontWeight: FontWeight.w600, fontFamily: 'monospace'),
+                    )
+                        : Text(
+                      LanguageService.tr('Receipt will appear after approval', 'অনুমোদনের পর রসিদ নম্বর আসবে'),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 10.5, color: muted),
+                    ),
+                  ),
+                  if (status == 'ACTIVE' && pct > 0)
+                    Text(
+                      LanguageService.tr('Estimate, not guaranteed', 'আনুমানিক, নিশ্চিত নয়'),
+                      style: const TextStyle(fontSize: 9, color: muted, fontStyle: FontStyle.italic),
+                    ),
+                ],
+              ),
+            ),
+            // ── Details e jawa
+            InkWell(
+              onTap: () => _openDetail(inv),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 9),
+                decoration: const BoxDecoration(
+                  color: emeraldSoft,
+                  border: Border(top: BorderSide(color: line)),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      LanguageService.tr('View details & payment history', 'বিস্তারিত ও পেমেন্টের ইতিহাস'),
+                      style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: emerald),
+                    ),
+                    const SizedBox(width: 4),
+                    const Icon(Icons.arrow_forward_rounded, size: 14, color: emerald),
+                  ],
+                ),
+              ),
             ),
           ],
-
-          // ── Footer: receipt
-          const SizedBox(height: 10),
-          const Divider(height: 1, color: line),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-            child: Row(
-              children: [
-                Icon(receipt.isNotEmpty ? Icons.receipt_long_outlined : Icons.info_outline_rounded,
-                    size: 13, color: muted),
-                const SizedBox(width: 5),
-                Expanded(
-                  child: receipt.isNotEmpty
-                      ? SelectableText(
-                    receipt,
-                    maxLines: 1,
-                    style: const TextStyle(
-                        fontSize: 10.5, color: ink, fontWeight: FontWeight.w600, fontFamily: 'monospace'),
-                  )
-                      : Text(
-                    LanguageService.tr('Receipt will appear after approval', 'অনুমোদনের পর রসিদ নম্বর আসবে'),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 10.5, color: muted),
-                  ),
-                ),
-                if (status == 'ACTIVE' && pct > 0)
-                  Text(
-                    LanguageService.tr('Estimate, not guaranteed', 'আনুমানিক, নিশ্চিত নয়'),
-                    style: const TextStyle(fontSize: 9, color: muted, fontStyle: FontStyle.italic),
-                  ),
-              ],
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }

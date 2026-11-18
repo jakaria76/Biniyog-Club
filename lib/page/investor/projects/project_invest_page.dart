@@ -10,6 +10,7 @@ import '../../authentication/login_page.dart';
 import '../../../services/auth_service.dart';
 import '../../../services/cloudinary_service.dart';
 import '../../../services/database_service.dart';
+import '../../../services/installment_schedule.dart';
 import '../../../services/language_service.dart';
 import '../portfolio/investments_page.dart';
 import '../../../theme/app_colors.dart';
@@ -18,12 +19,18 @@ import '../../../theme/app_colors.dart';
 /// Confirm korle investment "Pending" hoy, admin approve korle dashboard e ashe.
 /// Website er motoi: ekbare (FULL) ba kistite (INSTALLMENT) deya jay; protita
 /// madhyom (bank / cash / cheque) alada part hishebe jachai hoy.
+///
+/// Kisti: project er niyome (installmentSettings) ekta schedule — koyta kisti,
+/// kon tarikhe koto. Prothom kisti ekhon dite hoy, baki gula tarikh moto
+/// (website er InstallmentPlanner + installment.service er hubohu niyom).
 class ProjectInvestPage extends StatefulWidget {
   /// ProjectDetailPage er _project map (getProjectDetail theke) — notun invest
   final Map<String, dynamic>? project;
 
-  /// Payment baki thaka investment (InvestmentsPage er item: id, title, amount,
-  /// returnMin, returnMax, bankAccounts, paymentPlan, paidApproved, paidPending).
+  /// Payment baki thaka investment (InvestmentsPage er item ba
+  /// DatabaseService.getInvestmentForPayment: id, title, amount, returnMin,
+  /// returnMax, bankAccounts, paymentPlan, paidApproved, paidPending; share
+  /// order hole subtitle + isShare).
   /// Thakle shudhu baki taka deya hoy, shofol hole pop(true).
   final Map<String, dynamic>? existing;
 
@@ -94,6 +101,27 @@ class _ProjectInvestPageState extends State<ProjectInvestPage> {
   String _stage = '';
   String? _error;
 
+  // ─── Kisti-r schedule (website er InstallmentPlanner) ───
+  InstallmentSettings _settings = InstallmentSettings.defaults;
+
+  /// Project kisti nay + plan ekhono khola (admin er tarikh periye jayni)
+  bool _installmentsAllowed = false;
+  final String _today = dhakaDay();
+
+  /// Notun schedule: protita kisti-r tarikh ("YYYY-MM-DD") ar takar ghor
+  final List<String> _dates = [];
+  final List<TextEditingController> _amts = [];
+
+  /// User nije "ekhon dicchen" bodlale ar automatic bodlai na
+  bool _payNowTouched = false;
+
+  /// Baki thaka investment er schedule (getInvestmentSchedule) — null = nei / ekhono ase nai
+  Map<String, dynamic>? _schedule;
+  bool _scheduleLoading = false;
+
+  /// Baki investment: kon kisti porjonto dicchen (website ?installment=n)
+  int? _payUpTo;
+
   @override
   void dispose() {
     for (final c in [
@@ -105,6 +133,7 @@ class _ProjectInvestPageState extends State<ProjectInvestPage> {
       _trxController,
       _chequeNoController,
       _cashReceiptController,
+      ..._amts,
     ]) {
       c.dispose();
     }
@@ -130,16 +159,181 @@ class _ProjectInvestPageState extends State<ProjectInvestPage> {
         'minInvestmentBdt': 0,
         'maxInvestmentBdt': null,
         'remainingBdt': total,
+        'subtitle': e['subtitle'],
+        'isShare': e['isShare'] == true,
       };
       _amountController.text = total.toStringAsFixed(0);
       _payNowController.text = _outstanding.toStringAsFixed(0);
+      _loadSchedule();
     } else {
       _project = widget.project!;
+      _settings = InstallmentSettings.fromJson(_project['installmentSettings']);
+      _installmentsAllowed =
+          _project['installmentsEnabled'] == true && installmentPlanOpen(_settings, _today);
       final minInv = _num(_project['minInvestmentBdt']);
       if (minInv > 0 && minInv <= _cap) _amountController.text = minInv.toStringAsFixed(0);
       // Shuru thekei jaanai — deadline periye gele confirm kaj korbe na
       _error = _closedReason;
     }
+  }
+
+  // ═════════════════════════════════════════════════════════
+  // KISTI-R SCHEDULE
+  // ═════════════════════════════════════════════════════════
+  String _amtText(double v) => v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(2);
+
+  /// Baki thaka investment er kisti (thakle) — website er getScheduleState
+  Future<void> _loadSchedule() async {
+    final user = await AuthService.getUserData();
+    final uid = user?['id']?.toString() ?? '';
+    if (uid.isEmpty || !mounted) return;
+    setState(() => _scheduleLoading = true);
+    final s = await DatabaseService.getInvestmentSchedule(widget.existing!['id'].toString(), uid);
+    if (!mounted) return;
+    setState(() {
+      _scheduleLoading = false;
+      if (s != null && s['hasSchedule'] == true) {
+        _schedule = s;
+        _plan = 'INSTALLMENT';
+        _setPayNowFor((s['summary'] as ScheduleSummary).next?.number);
+        if (s['awaitingApproval'] == true) _payNowController.text = '0';
+      }
+    });
+  }
+
+  ScheduleSummary? get _summary => _schedule?['summary'] as ScheduleSummary?;
+
+  /// Baki investment e ekhon shorbochcho koto (schedule thakle tar niyome)
+  double get _maxNow {
+    if (!_isExisting) return _amount;
+    final s = _schedule;
+    if (s == null) return _outstanding;
+    return math.min(_outstanding, _num(s['maxPayableNowBdt']));
+  }
+
+  bool get _datesBlocked => _isExisting && _schedule?['awaitingApproval'] == true;
+
+  /// n-tom kisti porjonto: ager shob khola kisti + eta (website er pay page er motoi).
+  /// Ekhon deya jay tar beshi hole shudhu prothom khola kisti.
+  void _setPayNowFor(int? n) {
+    final sum = _summary;
+    if (sum == null || n == null) return;
+    final open = sum.installments.where((a) => a.openPaisa > 0).toList();
+    if (open.isEmpty) return;
+    final max = toPaisa(_maxNow);
+    var idx = open.indexWhere((a) => a.number == n);
+    if (idx < 0) idx = 0;
+    var amount = open.take(idx + 1).fold<int>(0, (t, a) => t + a.openPaisa);
+    var target = open[idx].number;
+    if (amount > max) {
+      target = open.first.number;
+      amount = math.min(open.first.openPaisa, max);
+    }
+    _payUpTo = target;
+    _payNowController.text = _amtText(amount / 100);
+  }
+
+  String? get _installmentIdToPay {
+    final ids = _schedule?['installmentIds'];
+    if (ids is! Map || _payUpTo == null) return null;
+    return ids[_payUpTo]?.toString();
+  }
+
+  /// Notun investment er kisti plan banacche
+  bool get _planning => !_isExisting && _installment;
+
+  List<(String, double)> get _rows =>
+      [for (var i = 0; i < _dates.length; i++) (_dates[i], double.tryParse(_amts[i].text.trim()) ?? 0)];
+
+  bool get _editableDates => _settings.allowCustomDates && _settings.fixedDates == null;
+
+  ScheduleCheck? get _check => _planning && _amount > 0 && _dates.isNotEmpty
+      ? checkSchedule(_amount, _rows, _settings, _today, LanguageService.tr)
+      : null;
+
+  /// Nijer beche neya tarikh: age admin approve korbe, tarpor taka (website needsScheduleApproval)
+  bool get _needsApproval => _planning && _dates.isNotEmpty && needsScheduleApproval(_settings, _rows, _today);
+
+  /// Ekhon kono taka neya hobe na (approval er opekkhay)
+  bool get _noPaymentNow => _needsApproval || _datesBlocked;
+
+  /// Shoman bhag, aj theke mashik (ba project er tarikh) — website suggestedRows
+  void _suggest({int? count}) {
+    if (!_planning || _amount <= 0) {
+      _setRows(const []);
+      return;
+    }
+    // Age theke (offline e deya) shuru-r tarikh thakle sheta rakhi
+    final start = _dates.isNotEmpty && _dates.first.compareTo(_today) <= 0 ? _dates.first : _today;
+    final n = count ?? (_dates.isEmpty ? _settings.minCount : _dates.length);
+    _setRows(suggestSchedule(_amount, n, start, _settings.fixedDates));
+  }
+
+  void _setRows(List<(String, double)> rows) {
+    _dates
+      ..clear()
+      ..addAll(rows.map((r) => r.$1));
+    while (_amts.length < rows.length) {
+      _amts.add(TextEditingController());
+    }
+    if (_amts.length > rows.length) {
+      final extra = _amts.sublist(rows.length);
+      _amts.removeRange(rows.length, _amts.length);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        for (final c in extra) {
+          c.dispose();
+        }
+      });
+    }
+    for (var i = 0; i < rows.length; i++) {
+      _amts[i].text = _amtText(rows[i].$2);
+    }
+    _syncPayNow();
+  }
+
+  /// Notun kisti plan: "ekhon dicchen" = prothom kisti (user nije na bodlale)
+  void _syncPayNow() {
+    if (!_planning || _payNowTouched) return;
+    _payNowController.text = _amts.isEmpty ? '' : _amts.first.text;
+  }
+
+  DateTime _localDate(String day) =>
+      DateTime(int.parse(day.substring(0, 4)), int.parse(day.substring(5, 7)), int.parse(day.substring(8, 10)));
+
+  String _dayOfPicked(DateTime d) =>
+      '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+  Future<void> _pickDate(int i) async {
+    final first = i == 0 ? DateTime(1990, 1, 1) : _localDate(addDaysToDay(_dates[i - 1], 1));
+    final last = i == 0 ? _localDate(_today) : DateTime(2100, 12, 31);
+    var initial = _localDate(_dates[i]);
+    if (initial.isBefore(first)) initial = first;
+    if (initial.isAfter(last)) initial = last;
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: first,
+      lastDate: last,
+      helpText: LanguageService.tr('${ordinal(i + 1)} installment date', '${i + 1} নং কিস্তির তারিখ'),
+      builder: (ctx, child) => Theme(
+        data: Theme.of(ctx).copyWith(colorScheme: Theme.of(ctx).colorScheme.copyWith(primary: emerald)),
+        child: child!,
+      ),
+    );
+    if (picked == null || !mounted) return;
+    final day = _dayOfPicked(picked);
+    setState(() {
+      _error = null;
+      if (i == 0 && !_editableDates) {
+        // Mashik tarikh: shuru bodlale baki gula-o shathe shore
+        final moved = monthlyDates(day, _dates.length);
+        for (var k = 0; k < _dates.length; k++) {
+          _dates[k] = moved[k];
+        }
+      } else {
+        _dates[i] = day;
+      }
+    });
   }
 
   // ═════════════════════════════════════════════════════════
@@ -321,8 +515,31 @@ class _ProjectInvestPageState extends State<ProjectInvestPage> {
       return LanguageService.tr('The full amount is already submitted and under review.',
           'পুরো টাকা জমা হয়েছে, যাচাই চলছে।');
     }
+    // Baki investment: tarikh approval er opekkhay / bad (website assertScheduledAmount)
+    if (_datesBlocked) {
+      return _schedule?['approval'] == 'REJECTED'
+          ? LanguageService.tr("This installment schedule was not approved, so it can't be paid.",
+          'এই কিস্তির সময়সূচি অনুমোদিত হয়নি, তাই টাকা দেওয়া যাবে না।')
+          : LanguageService.tr('Your installment dates are waiting for approval by our team. You can pay once they are approved.',
+          'আপনার কিস্তির তারিখ আমাদের টিমের অনুমোদনের অপেক্ষায়। অনুমোদন হলে টাকা দিতে পারবেন।');
+    }
+    // Notun kisti plan: project er niyom (website checkSchedule)
+    double? planMax;
+    if (_planning) {
+      if (!_installmentsAllowed) {
+        return LanguageService.tr('This project accepts full payment only.', 'এই প্রজেক্টে শুধু একবারে পরিশোধ করা যায়।');
+      }
+      final c = _check;
+      if (c == null) return LanguageService.tr('Set up your installment schedule.', 'কিস্তির সময়সূচি ঠিক করুন।');
+      if (c.errors.isNotEmpty) return c.errors.first;
+      // Tarikh age approve hobe — ekhon kono taka na
+      if (_needsApproval) return null;
+      final fresh = summarizeSchedule(
+          [for (var i = 0; i < _rows.length; i++) (i + 1, _rows[i].$1, _rows[i].$2)], 0, 0, _today, _settings.graceDays);
+      planMax = maxPayableNowPaisa(fresh, _today, _settings.allowEarly) / 100;
+    }
     final pay = _payNow;
-    final maxNow = _isExisting ? _outstanding : a;
+    final maxNow = _isExisting ? _maxNow : (planMax ?? a);
     if (pay <= 0) {
       return LanguageService.tr('Enter how much you are paying now.', 'এখন কত টাকা দিচ্ছেন লিখুন।');
     }
@@ -331,7 +548,8 @@ class _ProjectInvestPageState extends State<ProjectInvestPage> {
     }
     // Website: kisti kompokkhe ৳1,000 (ba baki er cheye kom hole puro baki)
     if (_installment) {
-      final minInst = maxNow < _minInstallment ? maxNow : _minInstallment;
+      final base = _planning ? a : maxNow;
+      final minInst = base < _minInstallment ? base : _minInstallment;
       if (pay + 0.5 < minInst) {
         return LanguageService.tr('An installment must be at least ${_fmtFull(minInst)}.',
             'প্রতি কিস্তি কমপক্ষে ${_fmtFull(minInst)} হতে হবে।');
@@ -394,6 +612,42 @@ class _ProjectInvestPageState extends State<ProjectInvestPage> {
       Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(builder: (_) => const LoginPage()),
             (route) => false,
+      );
+      return;
+    }
+
+    // Nijer beche neya tarikh: age admin approve korbe — ekhon payment / chobi na
+    if (_needsApproval) {
+      setState(() {
+        _submitting = true;
+        _error = null;
+        _stage = LanguageService.tr('Submitting…', 'জমা হচ্ছে…');
+      });
+      final res = await DatabaseService.investWithPayment(
+        userId: userId,
+        projectId: _project['id'].toString(),
+        amountBdt: _amount,
+        payNowBdt: 0,
+        paymentPlan: 'INSTALLMENT',
+        methods: const [],
+        schedule: _rows,
+      );
+      if (!mounted) return;
+      if (res['success'] != true) {
+        setState(() {
+          _submitting = false;
+          _stage = '';
+          _error = res['message']?.toString() ??
+              LanguageService.tr('Could not submit. Please try again.', 'জমা দেওয়া যায়নি। আবার চেষ্টা করুন।');
+        });
+        return;
+      }
+      _toast(LanguageService.tr(
+          "Your installment dates were sent for approval. You can pay once they're approved — we'll notify you.",
+          'আপনার কিস্তির তারিখ অনুমোদনের জন্য পাঠানো হয়েছে। অনুমোদন হলে টাকা দিতে পারবেন — আমরা জানাব।'));
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const InvestmentsPage(initialType: 'PROJECT')),
       );
       return;
     }
@@ -465,6 +719,7 @@ class _ProjectInvestPageState extends State<ProjectInvestPage> {
       chequeNumber: _chequeNoController.text.trim(),
       chequeProofUrls: proofUrls['CHEQUE']!,
       defaultBankAccountId: fallbackBank,
+      installmentId: _installmentIdToPay,
     )
         : await DatabaseService.investWithPayment(
       userId: userId,
@@ -486,6 +741,7 @@ class _ProjectInvestPageState extends State<ProjectInvestPage> {
       chequeNumber: _chequeNoController.text.trim(),
       chequeProofUrls: proofUrls['CHEQUE']!,
       defaultBankAccountId: fallbackBank,
+      schedule: _installment ? _rows : null,
     );
 
     if (!mounted) return;
@@ -546,27 +802,40 @@ class _ProjectInvestPageState extends State<ProjectInvestPage> {
                 if (_isExisting) ...[
                   _buildProgressCard(),
                   const SizedBox(height: 10),
+                  if (_schedule != null) ...[
+                    _buildScheduleCard(),
+                    const SizedBox(height: 10),
+                  ] else if (_scheduleLoading) ...[
+                    const LinearProgressIndicator(minHeight: 2, color: emerald, backgroundColor: Colors.transparent),
+                    const SizedBox(height: 10),
+                  ],
                 ],
                 _buildAmountCard(),
-                const SizedBox(height: 10),
-                _buildBankDetailsCard(),
-                const SizedBox(height: 10),
-                _buildMethodCard(),
-                if (_isSplit) ...[
+                if (_planning) ...[
                   const SizedBox(height: 10),
-                  _buildSplitCard(),
+                  _buildPlannerCard(),
                 ],
-                if (m.contains('BANK')) ...[
+                if (!_noPaymentNow) ...[
                   const SizedBox(height: 10),
-                  _buildBankProofCard(),
-                ],
-                if (m.contains('CASH')) ...[
+                  _buildBankDetailsCard(),
                   const SizedBox(height: 10),
-                  _buildCashCard(),
-                ],
-                if (m.contains('CHEQUE')) ...[
-                  const SizedBox(height: 10),
-                  _buildChequeCard(),
+                  _buildMethodCard(),
+                  if (_isSplit) ...[
+                    const SizedBox(height: 10),
+                    _buildSplitCard(),
+                  ],
+                  if (m.contains('BANK')) ...[
+                    const SizedBox(height: 10),
+                    _buildBankProofCard(),
+                  ],
+                  if (m.contains('CASH')) ...[
+                    const SizedBox(height: 10),
+                    _buildCashCard(),
+                  ],
+                  if (m.contains('CHEQUE')) ...[
+                    const SizedBox(height: 10),
+                    _buildChequeCard(),
+                  ],
                 ],
                 if (_error != null) ...[
                   const SizedBox(height: 10),
@@ -610,12 +879,19 @@ class _ProjectInvestPageState extends State<ProjectInvestPage> {
                     (_project['title']?.toString() ?? '').isEmpty ? '—' : _project['title'].toString(),
                     style: const TextStyle(color: Colors.white, fontSize: 16.5, fontWeight: FontWeight.w800, height: 1.3),
                   ),
+                  if ((_project['subtitle']?.toString() ?? '').isNotEmpty)
+                    Text(_project['subtitle'].toString(),
+                        style: TextStyle(color: Colors.white.withAlpha(190), fontSize: 12, fontFamily: 'monospace')),
                   const SizedBox(height: 10),
                   Container(height: 1, color: Colors.white.withAlpha(25)),
                   const SizedBox(height: 8),
                   Row(
                     children: [
-                      Expanded(child: _heroStat(LanguageService.tr('Expected return', 'প্রত্যাশিত লাভ'), _pctRange(lo, hi))),
+                      Expanded(
+                        child: _project['isShare'] == true
+                            ? _heroStat(LanguageService.tr('Verified', 'যাচাইকৃত'), _fmtFull(_paidApproved))
+                            : _heroStat(LanguageService.tr('Expected return', 'প্রত্যাশিত লাভ'), _pctRange(lo, hi)),
+                      ),
                       Expanded(
                         child: _isExisting
                             ? _heroStat(LanguageService.tr('Your commitment', 'আপনার বিনিয়োগ'), _fmtFull(_amount))
@@ -740,8 +1016,11 @@ class _ProjectInvestPageState extends State<ProjectInvestPage> {
           onTap: () => setState(() {
             _plan = key;
             _error = null;
-            if (key == 'INSTALLMENT' && _payNowController.text.isEmpty && a > 0) {
-              _payNowController.text = a.toStringAsFixed(0);
+            if (key == 'INSTALLMENT') {
+              _payNowTouched = false;
+              _suggest();
+            } else if (!_isExisting) {
+              _payNowController.text = a > 0 ? a.toStringAsFixed(0) : '';
             }
           }),
           child: AnimatedContainer(
@@ -774,14 +1053,18 @@ class _ProjectInvestPageState extends State<ProjectInvestPage> {
       readOnly: !_installment,
       keyboardType: TextInputType.number,
       inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-      onChanged: (_) => setState(() => _error = null),
+      onChanged: (_) => setState(() {
+        _error = null;
+        _payNowTouched = true;
+      }),
       style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: ink),
       decoration: _dec(LanguageService.tr('Paying now (BDT)', 'এখন দিচ্ছেন (টাকা)'), Icons.savings_outlined).copyWith(
         prefixText: '৳ ',
         helperText: _isExisting
-            ? LanguageService.tr('Available to pay now: ${_fmtFull(_outstanding)}',
-            'এখন দেওয়া যাবে: ${_fmtFull(_outstanding)}')
-            : LanguageService.tr('Pay the rest later from Investments', 'বাকিটা পরে Investments থেকে দিন'),
+            ? LanguageService.tr('Available to pay now: ${_fmtFull(_maxNow)}',
+            'এখন দেওয়া যাবে: ${_fmtFull(_maxNow)}')
+            : LanguageService.tr('Usually the 1st installment — pay the rest on their dates from Investments',
+            'সাধারণত ১ম কিস্তি — বাকিগুলো তারিখ অনুযায়ী Investments থেকে দিন'),
       ),
     );
 
@@ -796,7 +1079,11 @@ class _ProjectInvestPageState extends State<ProjectInvestPage> {
           readOnly: _isExisting,
           keyboardType: TextInputType.number,
           inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-          onChanged: (_) => setState(() => _error = null),
+          onChanged: (_) => setState(() {
+            _error = null;
+            // Website: mot taka bodlale notun schedule
+            if (_planning) _suggest();
+          }),
           style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: ink),
           decoration: _dec(
               _isExisting
@@ -824,7 +1111,7 @@ class _ProjectInvestPageState extends State<ProjectInvestPage> {
           ),
         ],
         const SizedBox(height: 12),
-        if (!_isExisting) ...[
+        if (!_isExisting && _installmentsAllowed) ...[
           Text(LanguageService.tr('Payment preference', 'পেমেন্টের ধরন'),
               style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: ink)),
           const SizedBox(height: 6),
@@ -839,17 +1126,373 @@ class _ProjectInvestPageState extends State<ProjectInvestPage> {
           Text(
             _installment
                 ? LanguageService.tr(
-                'Pay in parts on dates that suit you. Your investment activates and the deed is issued once the full amount is verified.',
-                'সুবিধামতো তারিখে ভাগে ভাগে দিন। পুরো টাকা যাচাই হলে বিনিয়োগ চালু হবে ও ডিড দেওয়া হবে।')
+                'You pay only the first installment now and the rest on the dates you agree. Your investment becomes active — your deed is issued and profit starts — once every installment is verified.',
+                'এখন শুধু প্রথম কিস্তি দিন, বাকিগুলো ঠিক করা তারিখে। সব কিস্তি যাচাই হলে বিনিয়োগ চালু হবে — ডিড দেওয়া হবে ও লাভ শুরু হবে।')
                 : LanguageService.tr('Pay the whole amount now. It activates once your payment is verified.',
                 'এখন পুরো টাকা দিন। যাচাইয়ের পর বিনিয়োগ চালু হবে।'),
             style: const TextStyle(fontSize: 12, color: muted, height: 1.35),
           ),
         ],
-        if (_isExisting || _installment) ...[
+        if ((_isExisting || _installment) && !_noPaymentNow) ...[
           const SizedBox(height: 10),
           // Ekbare hole baki puro taka-i (initState e boshano, bodlano jay na)
           payField,
+        ],
+      ],
+    );
+  }
+
+  // ─── Kisti-r schedule banano (website er InstallmentPlanner) ───
+  Widget _buildPlannerCard() {
+    final st = _settings;
+    final fixed = st.fixedDates != null;
+    final counts = [for (var n = st.minCount; n <= st.maxCount; n++) n];
+    final check = _check;
+    final backdated = _dates.isNotEmpty && isBackdated(_rows, _today);
+    final remaining = check?.remainingPaisa ?? 0;
+    final otherErrors = (check?.errors ?? const <String>[])
+        .where((e) => !e.startsWith('The total installment amount') && !e.startsWith('কিস্তিগুলোর যোগফল'))
+        .toList();
+
+    return _card(
+      title: LanguageService.tr('Installment schedule', 'কিস্তির সময়সূচি'),
+      subtitle: st.summary(LanguageService.tr),
+      icon: Icons.calendar_month_outlined,
+      children: [
+        if (_amount <= 0)
+          Text(
+            LanguageService.tr('Enter the total amount above to plan your installments.',
+                'কিস্তি ঠিক করতে উপরে মোট টাকা লিখুন।'),
+            style: const TextStyle(fontSize: 12.5, color: muted),
+          )
+        else ...[
+          // Koyta kisti + shoman bhag
+          Row(
+            children: [
+              Text(LanguageService.tr('Installments', 'কিস্তি'),
+                  style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: ink)),
+              const Spacer(),
+              TextButton.icon(
+                onPressed: () => setState(() {
+                  _payNowTouched = false;
+                  _suggest(count: _dates.isEmpty ? null : _dates.length);
+                }),
+                style: TextButton.styleFrom(
+                  foregroundColor: emerald,
+                  visualDensity: VisualDensity.compact,
+                  textStyle: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700),
+                ),
+                icon: const Icon(Icons.auto_fix_high_rounded, size: 16),
+                label: Text(LanguageService.tr('Split evenly', 'সমান ভাগ')),
+              ),
+            ],
+          ),
+          if (counts.length > 1) ...[
+            const SizedBox(height: 4),
+            SizedBox(
+              height: 34,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: counts.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 6),
+                itemBuilder: (_, i) {
+                  final n = counts[i];
+                  final on = _dates.length == n;
+                  return GestureDetector(
+                    onTap: () => setState(() {
+                      _error = null;
+                      _payNowTouched = false;
+                      _suggest(count: n);
+                    }),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: on ? emerald : ivory,
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: on ? emerald : line),
+                      ),
+                      child: Text('$n',
+                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: on ? Colors.white : ink)),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+          const SizedBox(height: 10),
+          // Protita kisti: tarikh + taka
+          for (var i = 0; i < _dates.length; i++) ...[
+            if (i > 0) const SizedBox(height: 8),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(
+                  width: 36,
+                  child: Padding(
+                    padding: const EdgeInsets.only(top: 11),
+                    child: Text(ordinal(i + 1),
+                        style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w800, color: ink)),
+                  ),
+                ),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Builder(builder: (_) {
+                        final canEdit = !fixed && (i == 0 || _editableDates);
+                        return InkWell(
+                          borderRadius: BorderRadius.circular(10),
+                          onTap: canEdit ? () => _pickDate(i) : null,
+                          child: Container(
+                            height: 42,
+                            padding: const EdgeInsets.symmetric(horizontal: 10),
+                            decoration: BoxDecoration(
+                              color: canEdit ? ivory : BC.muted,
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(color: line),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(Icons.event_outlined, size: 16, color: canEdit ? emerald : muted),
+                                const SizedBox(width: 6),
+                                Expanded(
+                                  child: Text(fmtDay(_dates[i]),
+                                      style: TextStyle(
+                                          fontSize: 13, fontWeight: FontWeight.w600, color: canEdit ? ink : muted)),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      }),
+                      if (i == 0)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 3),
+                          child: Text(
+                            backdated
+                                ? LanguageService.tr('Paid earlier on this day', 'এই দিনে আগেই দেওয়া')
+                                : fixed
+                                ? LanguageService.tr('Paid now', 'এখন দিচ্ছেন')
+                                : LanguageService.tr('Paid now — or pick the earlier day you paid',
+                                'এখন দিচ্ছেন — বা আগে যেদিন দিয়েছেন সেই দিন বাছুন'),
+                            style: const TextStyle(fontSize: 11, color: muted),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                SizedBox(
+                  width: 118,
+                  child: TextField(
+                    controller: _amts[i],
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}'))],
+                    onChanged: (_) => setState(() {
+                      _error = null;
+                      if (i == 0) _syncPayNow();
+                    }),
+                    style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700, color: ink),
+                    decoration: InputDecoration(
+                      prefixText: '৳ ',
+                      isDense: true,
+                      filled: true,
+                      fillColor: ivory,
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: line)),
+                      enabledBorder:
+                      OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: line)),
+                      focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: emerald, width: 1.4)),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+          const SizedBox(height: 10),
+          // Mot mile kina
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+            decoration: BoxDecoration(
+              color: remaining == 0 ? emeraldSoft : BC.chart4Muted,
+              borderRadius: BorderRadius.circular(9),
+            ),
+            child: Text(
+              remaining == 0
+                  ? LanguageService.tr('Adds up to ${_fmtFull(_amount)} · ${_dates.length} installments',
+                  '${_fmtFull(_amount)} মিলেছে · ${_dates.length} টি কিস্তি')
+                  : remaining > 0
+                  ? LanguageService.tr('${tkPaisa(remaining)} still to schedule', 'আরও ${tkPaisa(remaining)} ভাগ করা বাকি')
+                  : LanguageService.tr('${tkPaisa(-remaining)} more than the total', 'মোটের চেয়ে ${tkPaisa(-remaining)} বেশি'),
+              style: TextStyle(
+                fontSize: 12.5,
+                fontWeight: FontWeight.w700,
+                color: remaining == 0 ? emerald : BC.chart4Deep,
+              ),
+            ),
+          ),
+          for (final e in otherErrors) ...[
+            const SizedBox(height: 6),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(Icons.error_outline_rounded, size: 15, color: danger),
+                const SizedBox(width: 6),
+                Expanded(child: Text(e, style: const TextStyle(fontSize: 12, color: danger, height: 1.35))),
+              ],
+            ),
+          ],
+          if (_needsApproval) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: BC.chart4Muted,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: BC.chart4Deep.withAlpha(50)),
+              ),
+              child: Text(
+                backdated
+                    ? LanguageService.tr(
+                    'Your schedule starts on ${fmtDay(_dates.first)}. Our team reviews it first; once it is approved, upload the proof of each installment you already paid.',
+                    'আপনার সময়সূচি ${fmtDay(_dates.first)} থেকে শুরু। আগে আমাদের টিম যাচাই করবে; অনুমোদন হলে আগে দেওয়া কিস্তির প্রুফ দিন।')
+                    : LanguageService.tr(
+                    'You chose your own dates, so our team reviews them first. You can pay the first installment once they are approved — we\'ll notify you.',
+                    'আপনি নিজে তারিখ বেছেছেন, তাই আগে আমাদের টিম যাচাই করবে। অনুমোদন হলে প্রথম কিস্তি দিতে পারবেন — আমরা জানাব।'),
+                style: const TextStyle(fontSize: 12, color: BC.chart4Deep, height: 1.4),
+              ),
+            ),
+          ],
+          const SizedBox(height: 8),
+          Text(
+            LanguageService.tr('Once confirmed, the schedule can only be changed by our team. A missed date is only marked overdue — no penalty.',
+                'নিশ্চিত করার পর সময়সূচি শুধু আমাদের টিম বদলাতে পারবে। তারিখ পেরোলে শুধু "মেয়াদোত্তীর্ণ" দেখায় — জরিমানা নেই।'),
+            style: const TextStyle(fontSize: 11.5, color: muted, height: 1.35),
+          ),
+        ],
+      ],
+    );
+  }
+
+  // ─── Baki investment er kisti (website er InstallmentScheduleCard) ───
+  Widget _buildScheduleCard() {
+    final s = _schedule!;
+    final sum = s['summary'] as ScheduleSummary;
+    final blocked = _datesBlocked;
+    final rejected = s['approval'] == 'REJECTED';
+    final paidCount = sum.installments.where((a) => a.status == 'PAID').length;
+
+    Color tone(String st) => switch (st) {
+      'PAID' => emerald,
+      'OVERDUE' => danger,
+      'DUE' => BC.chart4Deep,
+      'PENDING_VERIFICATION' => BC.finance600,
+      _ => muted,
+    };
+
+    return _card(
+      title: LanguageService.tr('Installment schedule', 'কিস্তির সময়সূচি'),
+      subtitle: LanguageService.tr('$paidCount of ${sum.installments.length} paid · ${sum.progressPct.toStringAsFixed(0)}% verified',
+          '${sum.installments.length} টির মধ্যে $paidCount টি পরিশোধিত · ${sum.progressPct.toStringAsFixed(0)}% যাচাইকৃত'),
+      icon: Icons.calendar_month_outlined,
+      children: [
+        if (blocked) ...[
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: (rejected ? danger : BC.chart4Deep).withAlpha(16),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: (rejected ? danger : BC.chart4Deep).withAlpha(50)),
+            ),
+            child: Text(
+              rejected
+                  ? LanguageService.tr(
+                  'Your installment dates were not approved.${(s['reviewNote']?.toString() ?? '').isNotEmpty ? ' Reason: ${s['reviewNote']}' : ''} You can start a new investment with different dates.',
+                  'আপনার কিস্তির তারিখ অনুমোদিত হয়নি।${(s['reviewNote']?.toString() ?? '').isNotEmpty ? ' কারণ: ${s['reviewNote']}' : ''} অন্য তারিখ দিয়ে নতুন করে বিনিয়োগ করতে পারেন।')
+                  : LanguageService.tr(
+                  "Your installment dates are being reviewed. We'll notify you as soon as they're approved — then you can pay. Nothing can be paid until then.",
+                  'আপনার কিস্তির তারিখ যাচাই চলছে। অনুমোদন হলেই জানাব — তারপর টাকা দিতে পারবেন। তার আগে কিছু দেওয়া যাবে না।'),
+              style: TextStyle(fontSize: 12, height: 1.4, color: rejected ? danger : BC.chart4Deep),
+            ),
+          ),
+          const SizedBox(height: 10),
+        ],
+        for (final a in sum.installments)
+          Builder(builder: (_) {
+            final open = a.openPaisa > 0 && !blocked;
+            final selected = !blocked && _payUpTo != null && a.openPaisa > 0 && a.number <= _payUpTo!;
+            final label = installmentStatusLabel[a.status];
+            final c = tone(a.status);
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(10),
+                onTap: open
+                    ? () => setState(() {
+                  _error = null;
+                  _setPayNowFor(a.number);
+                })
+                    : null,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: selected ? emeraldSoft : ivory,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: selected ? emerald.withAlpha(110) : line),
+                  ),
+                  child: Row(
+                    children: [
+                      SizedBox(
+                        width: 34,
+                        child: Text(ordinal(a.number),
+                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: ink)),
+                      ),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(fmtDay(a.dueDate), style: const TextStyle(fontSize: 12.5, color: ink)),
+                            if ((a.paidPaisa > 0 && a.paidPaisa < a.amountPaisa) || a.pendingPaisa > 0)
+                              Text(
+                                [
+                                  if (a.paidPaisa > 0) LanguageService.tr('${tkPaisa(a.paidPaisa)} paid', '${tkPaisa(a.paidPaisa)} পরিশোধ'),
+                                  if (a.pendingPaisa > 0)
+                                    LanguageService.tr('${tkPaisa(a.pendingPaisa)} in review', '${tkPaisa(a.pendingPaisa)} যাচাই চলছে'),
+                                ].join(' · '),
+                                style: const TextStyle(fontSize: 11, color: muted),
+                              ),
+                          ],
+                        ),
+                      ),
+                      Text(tkPaisa(a.amountPaisa),
+                          style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w800, color: ink)),
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(color: c.withAlpha(24), borderRadius: BorderRadius.circular(20)),
+                        child: Text(label == null ? a.status : LanguageService.tr(label.$1, label.$2),
+                            style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w800, color: c)),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          }),
+        if (!blocked && sum.next != null) ...[
+          const SizedBox(height: 2),
+          Text(
+            LanguageService.tr('Tap an installment to pay up to it. Payments cover installments oldest first.',
+                'যে কিস্তি পর্যন্ত দিতে চান সেটি চাপুন। টাকা আগের কিস্তি থেকে ধরা হয়।'),
+            style: const TextStyle(fontSize: 11.5, color: muted, height: 1.35),
+          ),
+        ],
+        if (sum.fullyPaid) ...[
+          const SizedBox(height: 2),
+          Text(LanguageService.tr('Every installment is verified.', 'সব কিস্তি যাচাই হয়েছে।'),
+              style: const TextStyle(fontSize: 12, color: emerald, fontWeight: FontWeight.w700)),
         ],
       ],
     );
@@ -1170,7 +1813,7 @@ class _ProjectInvestPageState extends State<ProjectInvestPage> {
         child: SizedBox(
           height: 46,
           child: FilledButton(
-            onPressed: _submitting ? null : _submit,
+            onPressed: _submitting || _datesBlocked ? null : _submit,
             style: FilledButton.styleFrom(
               backgroundColor: emerald,
               foregroundColor: Colors.white,
@@ -1192,7 +1835,11 @@ class _ProjectInvestPageState extends State<ProjectInvestPage> {
               ],
             )
                 : Text(
-              _payNow > 0
+              _needsApproval
+                  ? LanguageService.tr('Submit for Approval', 'অনুমোদনের জন্য জমা দিন')
+                  : _datesBlocked
+                  ? LanguageService.tr('Waiting for date approval', 'তারিখ অনুমোদনের অপেক্ষায়')
+                  : _payNow > 0
                   ? LanguageService.tr('Confirm ${_fmtFull(_payNow)}', '${_fmtFull(_payNow)} নিশ্চিত করুন')
                   : LanguageService.tr('Confirm', 'নিশ্চিত করুন'),
               style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),

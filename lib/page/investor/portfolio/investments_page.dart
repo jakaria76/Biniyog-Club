@@ -8,6 +8,7 @@ import '../../authentication/login_page.dart';
 import '../documents/documents_page.dart'; // PdfViewerScreen
 import '../groups/group_invest_page.dart';
 import '../projects/project_invest_page.dart';
+import 'investment_detail_page.dart';
 import '../../../theme/app_colors.dart';
 
 class InvestmentsPage extends StatefulWidget {
@@ -166,6 +167,10 @@ class _InvestmentsPageState extends State<InvestmentsPage> {
       'paidPending': _num(inv['paidPending']),
       'bankAccounts': ((inv['bankAccounts'] as List?) ?? []).map((b) => Map<String, dynamic>.from(b as Map)).toList(),
       'websiteCertificate': inv['websiteCertificate'],
+      // Kisti-r tarikh admin er approval er opekkhay (PENDING) / bad (REJECTED)
+      'scheduleApproval': inv['scheduleApproval']?.toString(),
+      // Share kena hole order number
+      'shareOrder': inv['shareOrder']?.toString(),
     };
   }
 
@@ -865,7 +870,10 @@ class _InvestmentsPageState extends State<InvestmentsPage> {
     final double paidPending = (item['paidPending'] as num?)?.toDouble() ?? 0;
     final double outstanding = (principal - paidApproved - paidPending).clamp(0, double.infinity).toDouble();
     final bool installment = item['paymentPlan'] == 'INSTALLMENT';
-    final bool canPay = awaiting && outstanding > 0.5;
+    // Website: tarikh approval er opekkhay / bad hole taka deya jay na
+    final String? approval = item['scheduleApproval']?.toString();
+    final bool datesBlocked = !isGroup && awaiting && (approval == 'PENDING' || approval == 'REJECTED');
+    final bool canPay = awaiting && outstanding > 0.5 && !datesBlocked;
 
     final bool rejected = awaiting && subStatus == 'REJECTED' && paidPending <= 0;
     final bool underReview = awaiting && paidPending > 0;
@@ -886,8 +894,10 @@ class _InvestmentsPageState extends State<InvestmentsPage> {
         if (plot != null) '${LanguageService.tr('Plot', 'প্লট')} $plot',
       ].where((s) => s.isNotEmpty).join(' · ');
     } else {
+      final order = item['shareOrder']?.toString() ?? '';
       subtitle = [
-        categoryLabels[item['category']] ?? item['category'].toString(),
+        if (order.isNotEmpty) LanguageService.tr('Shares · Order $order', 'শেয়ার · অর্ডার $order'),
+        if (order.isEmpty) categoryLabels[item['category']] ?? item['category'].toString(),
         item['location']?.toString() ?? '',
       ].where((s) => s.isNotEmpty).join(' · ');
     }
@@ -1001,7 +1011,10 @@ class _InvestmentsPageState extends State<InvestmentsPage> {
           ),
 
           // ── Payment er obostha (shudhu jokhon kichu bolar ache)
-          if (awaiting) ...[
+          if (datesBlocked) ...[
+            const SizedBox(height: 8),
+            _scheduleNote(approval!),
+          ] else if (awaiting) ...[
             const SizedBox(height: 8),
             _paymentNote(
               rejected: rejected,
@@ -1110,9 +1123,36 @@ class _InvestmentsPageState extends State<InvestmentsPage> {
               ],
             ),
           ),
+          // Website er "View details & payment history →"
+          if (!isGroup) ...[
+            const Divider(height: 1, color: line),
+            InkWell(
+              onTap: () => _openDetail(item),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    Text(LanguageService.tr('View details & payment history', 'বিস্তারিত ও পেমেন্টের ইতিহাস'),
+                        style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: emerald)),
+                    const SizedBox(width: 4),
+                    const Icon(Icons.arrow_forward_rounded, size: 15, color: emerald),
+                  ],
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );
+  }
+
+  Future<void> _openDetail(Map<String, dynamic> item) async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => InvestmentDetailPage(investmentId: item['id'].toString())),
+    );
+    if (mounted) _loadInvestmentsData();
   }
 
   Widget _stripCell(String label, String value, Color valueColor) {
@@ -1212,6 +1252,34 @@ class _InvestmentsPageState extends State<InvestmentsPage> {
     return filled
         ? FilledButton(onPressed: onTap, style: style, child: child)
         : OutlinedButton(onPressed: onTap, style: style, child: child);
+  }
+
+  /// Kisti-r tarikh admin dekhche / bad diyeche — website er motoi taka deya bondho
+  Widget _scheduleNote(String approval) {
+    final rejected = approval == 'REJECTED';
+    final Color c = rejected ? danger : lapis;
+    final text = rejected
+        ? LanguageService.tr('Your installment dates were not approved. Please contact us or start a new investment.',
+        'আপনার কিস্তির তারিখ অনুমোদিত হয়নি। যোগাযোগ করুন অথবা নতুন করে বিনিয়োগ করুন।')
+        : LanguageService.tr('Installment dates awaiting approval — you can pay once our team approves them.',
+        'কিস্তির তারিখ অনুমোদনের অপেক্ষায় — আমাদের টিম অনুমোদন দিলে টাকা দিতে পারবেন।');
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: c.withAlpha(18),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: c.withAlpha(45)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(rejected ? Icons.event_busy_outlined : Icons.hourglass_top_rounded, size: 15, color: c),
+          const SizedBox(width: 7),
+          Expanded(child: Text(text, style: TextStyle(fontSize: 12, color: c, height: 1.35))),
+        ],
+      ),
+    );
   }
 
   /// Payment baki thakle ek line e ki korte hobe

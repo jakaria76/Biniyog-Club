@@ -1,11 +1,13 @@
 import 'dart:math' as math;
 import 'dart:typed_data';
+import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 
 import '../../authentication/login_page.dart';
 import '../../../services/auth_service.dart';
 import '../../../services/database_service.dart';
+import '../../../services/installment_schedule.dart' show dhakaDay, fmtDay;
 import '../../../services/language_service.dart';
 import '../../../services/pdf_service.dart';
 import '../documents/documents_page.dart'; // PdfViewerScreen, ImageViewerScreen
@@ -14,6 +16,7 @@ import '../portfolio/investments_page.dart';
 import '../settings/legal_web_page.dart';
 import 'project_invest_page.dart';
 import 'project_labels.dart';
+import 'share_buy_page.dart';
 import '../../../theme/app_colors.dart';
 
 /// Website er /projects/[slug] page — ek-i section, ek-i lekha, ek-i niyom.
@@ -122,9 +125,42 @@ class _ProjectDetailPageState extends State<ProjectDetailPage> {
   /// Deadline er din periye geche? (Dhaka er tarikh, website er motoi)
   bool get _deadlinePassed => DatabaseService.deadlinePassed(_project['fundingDeadline']);
 
-  /// Website er investment.service: FUNDRAISING + deadline baki + taka baki
-  bool get _canInvest =>
-      _str('status') == 'FUNDRAISING' && !_deadlinePassed && _num(_project['remainingBdt']) > 0;
+  /// Share kenar project (website: "Be a Shareholder")
+  bool get _isShare => _str('projectType') == 'SHARE_BUYING';
+
+  /// Share project er offering (dam, koyta baki …) — na thakle null ("open soon")
+  Map<String, dynamic>? get _offering =>
+      _project['shareOffering'] is Map ? Map<String, dynamic>.from(_project['shareOffering'] as Map) : null;
+
+  /// Website er offeringClosedReason (share-math.ts) — null = kena jay
+  String? get _offeringClosed {
+    final o = _offering;
+    if (o == null) return null;
+    final status = o['status']?.toString() ?? '';
+    final today = dhakaDay();
+    final start = o['purchaseStartDate']?.toString() ?? '';
+    final end = o['purchaseEndDate']?.toString() ?? '';
+    if (status == 'DRAFT') return LanguageService.tr('This share offering is not open yet', 'এই শেয়ার অফার এখনো খোলেনি');
+    if (status == 'PAUSED') return LanguageService.tr('This share offering is paused', 'এই শেয়ার অফার সাময়িক বন্ধ');
+    if (status == 'CLOSED') return LanguageService.tr('This share offering is closed', 'এই শেয়ার অফার বন্ধ');
+    if (status != 'ACTIVE') return LanguageService.tr('This share offering is not open', 'এই শেয়ার অফার খোলা নেই');
+    if (start.isNotEmpty && today.compareTo(start) < 0) {
+      return LanguageService.tr('Share purchases open on ${fmtDay(start)}', '${fmtDay(start)} থেকে শেয়ার কেনা যাবে');
+    }
+    if (end.isNotEmpty && today.compareTo(end) > 0) {
+      return LanguageService.tr('The share purchase period has ended', 'শেয়ার কেনার সময় শেষ');
+    }
+    if (_int(o['available']) <= 0) return LanguageService.tr('All shares have been sold', 'সব শেয়ার বিক্রি হয়ে গেছে');
+    return null;
+  }
+
+  /// Website er investment.service: FUNDRAISING + deadline baki + taka baki.
+  /// Share project e: offering khola + share baki.
+  bool get _canInvest {
+    if (_str('status') != 'FUNDRAISING' || _deadlinePassed) return false;
+    if (_isShare) return _offering != null && _offeringClosed == null;
+    return _num(_project['remainingBdt']) > 0;
+  }
 
   String get _returnLabel =>
       ProjectLabels.returnLabel(_num(_project['returnMin']), _num(_project['returnMax']), digits: 1);
@@ -160,12 +196,44 @@ class _ProjectDetailPageState extends State<ProjectDetailPage> {
       _loadProjectDetail();
       return;
     }
+    if (_isShare) {
+      // Share kena puro app e (website er form er moto: share reserve, coupon,
+      // kisti, order number) — tarpor sorasori payment page
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => ShareBuyPage(projectId: _str('id').isNotEmpty ? _str('id') : _str('slug'))),
+      );
+      if (mounted) _loadProjectDetail();
+      return;
+    }
     // Alada page e: taka, payment er dhoron (bank/cash/cheque), bank tottho, proof
     await Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => ProjectInvestPage(project: _project)),
     );
     // Fire ashle "baki taka" ar nijer investment notun kore dekhai
+    if (mounted) _loadProjectDetail();
+  }
+
+  /// Nijer investment er baki taka / porer kisti — sorasori payment page
+  Future<void> _payMyInvestment(Map<String, dynamic> inv) async {
+    final id = inv['id']?.toString() ?? '';
+    if (id.isEmpty || _userId.isEmpty) return _openMyInvestments();
+    final data = await DatabaseService.getInvestmentForPayment(id, _userId);
+    if (!mounted) return;
+    if (data == null) {
+      _toast(LanguageService.tr('Could not open the payment. Check your internet.', 'পেমেন্ট খোলা যায়নি। ইন্টারনেট চেক করুন।'),
+          error: true);
+      return;
+    }
+    final ok = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(builder: (_) => ProjectInvestPage(existing: data)),
+    );
+    if (ok == true) {
+      _toast(LanguageService.tr('Payment submitted. It will be active after admin approval.',
+          'পেমেন্ট জমা হয়েছে। অ্যাডমিন অনুমোদনের পর চালু হবে।'));
+    }
     if (mounted) _loadProjectDetail();
   }
 
@@ -349,6 +417,10 @@ class _ProjectDetailPageState extends State<ProjectDetailPage> {
                 _buildHeader(),
                 const SizedBox(height: 12),
                 _buildFundingCard(),
+                if (_isShare) ...[
+                  const SizedBox(height: 10),
+                  _buildShareOfferingCard(),
+                ],
                 if (myInvestment != null) ...[
                   const SizedBox(height: 10),
                   _buildMyInvestment(myInvestment),
@@ -420,14 +492,30 @@ class _ProjectDetailPageState extends State<ProjectDetailPage> {
             PageView.builder(
               itemCount: images.length,
               onPageChanged: (i) => setState(() => _imageIndex = i),
-              itemBuilder: (_, i) => Container(
-                color: const Color(0xFF020617),
-                child: Image.network(
-                  images[i],
-                  fit: BoxFit.cover,
-                  width: double.infinity,
-                  errorBuilder: (_, __, ___) => _coverPlaceholder(),
-                ),
+              // Chobi pura dekhay; faka jaygay oi chobir-i jhapsa (blur) copy
+              itemBuilder: (_, i) => Stack(
+                fit: StackFit.expand,
+                children: [
+                  ClipRect(
+                    child: Transform.scale(
+                      scale: 1.25,
+                      child: ImageFiltered(
+                        imageFilter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+                        child: Image.network(
+                          images[i],
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                        ),
+                      ),
+                    ),
+                  ),
+                  Container(color: Colors.black.withAlpha(45)),
+                  Image.network(
+                    images[i],
+                    fit: BoxFit.contain,
+                    errorBuilder: (_, __, ___) => _coverPlaceholder(),
+                  ),
+                ],
               ),
             ),
             if (images.length > 1)
@@ -741,22 +829,167 @@ class _ProjectDetailPageState extends State<ProjectDetailPage> {
                   const SizedBox(height: 10),
                   Container(height: 1, color: Colors.white.withAlpha(25)),
                   const SizedBox(height: 9),
-                  Row(
-                    children: [
-                      stat(LanguageService.tr('Return', 'লাভ'), _returnLabel, color: BC.brand200),
-                      divider(),
-                      stat(LanguageService.tr('Minimum', 'সর্বনিম্ন'),
-                          ProjectLabels.bdtShort(_num(_project['minInvestmentBdt']))),
-                      divider(),
-                      stat(LanguageService.tr('Duration', 'মেয়াদ'),
-                          duration > 0 ? LanguageService.tr('$duration days', '$duration দিন') : '—'),
-                    ],
-                  ),
+                  if (_isShare && _offering != null)
+                    Row(
+                      children: [
+                        stat(LanguageService.tr('Per share', 'প্রতি শেয়ার'),
+                            ProjectLabels.bdtFull(_num(_offering!['pricePerShareBdt'])),
+                            color: BC.brand200),
+                        divider(),
+                        stat(LanguageService.tr('Available', 'বাকি শেয়ার'),
+                            ProjectLabels.grouped(math.max(0, _int(_offering!['available'])).toDouble())),
+                        divider(),
+                        stat(LanguageService.tr('Minimum', 'সর্বনিম্ন'),
+                            ProjectLabels.bdtShort(_num(_offering!['minInvestmentBdt']))),
+                      ],
+                    )
+                  else
+                    Row(
+                      children: [
+                        stat(LanguageService.tr('Return', 'লাভ'), _returnLabel, color: BC.brand200),
+                        divider(),
+                        stat(LanguageService.tr('Minimum', 'সর্বনিম্ন'),
+                            ProjectLabels.bdtShort(_num(_project['minInvestmentBdt']))),
+                        divider(),
+                        stat(LanguageService.tr('Duration', 'মেয়াদ'),
+                            duration > 0 ? LanguageService.tr('$duration days', '$duration দিন') : '—'),
+                      ],
+                    ),
                 ],
               ),
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  // ─── Share offering (website er SharePurchaseForm er tottho) ───
+  Widget _buildShareOfferingCard() {
+    final o = _offering;
+    if (o == null) {
+      return _card(
+        eyebrow: LanguageService.tr('SHARES', 'শেয়ার'),
+        title: LanguageService.tr('Share offering', 'শেয়ার অফার'),
+        child: Text(
+          LanguageService.tr('Share purchases for this project open soon.', 'এই প্রজেক্টে শীঘ্রই শেয়ার কেনা যাবে।'),
+          style: const TextStyle(fontSize: 12.5, color: muted, height: 1.4),
+        ),
+      );
+    }
+    final price = _num(o['pricePerShareBdt']);
+    final available = math.max(0, _int(o['available']));
+    final held = _int(o['heldByInvestor']);
+    final minShares = o['minSharesPerPurchase'] == null ? null : _int(o['minSharesPerPurchase']);
+    final maxShares = o['maxSharesPerInvestor'] == null ? null : _int(o['maxSharesPerInvestor']);
+    final start = o['purchaseStartDate']?.toString() ?? '';
+    final end = o['purchaseEndDate']?.toString() ?? '';
+    final terms = o['terms']?.toString().trim() ?? '';
+    final closed = _offeringClosed;
+    String n(int v) => ProjectLabels.grouped(v.toDouble());
+
+    final items = <(String, String)>[
+      (LanguageService.tr('Company', 'কোম্পানি'), (o['legalCompanyName']?.toString() ?? '').isEmpty ? '—' : o['legalCompanyName'].toString()),
+      (LanguageService.tr('Price per share', 'প্রতি শেয়ারের দাম'), ProjectLabels.bdtFull(price)),
+      (LanguageService.tr('Shares available', 'বাকি শেয়ার'), n(available)),
+      (LanguageService.tr('Minimum investment', 'সর্বনিম্ন বিনিয়োগ'), ProjectLabels.bdtFull(_num(o['minInvestmentBdt']))),
+      if (minShares != null) (LanguageService.tr('Minimum per purchase', 'প্রতিবার কমপক্ষে'), LanguageService.tr('${n(minShares)} shares', '${n(minShares)} শেয়ার')),
+      if (maxShares != null) (LanguageService.tr('Maximum per investor', 'একজন সর্বোচ্চ'), LanguageService.tr('${n(maxShares)} shares', '${n(maxShares)} শেয়ার')),
+      if (start.isNotEmpty)
+        (
+        LanguageService.tr('Purchase period', 'কেনার সময়'),
+        end.isEmpty
+            ? LanguageService.tr('From ${fmtDay(start)}', '${fmtDay(start)} থেকে')
+            : '${fmtDay(start)} – ${fmtDay(end)}'
+        ),
+      if (held > 0) (LanguageService.tr('You already hold', 'আপনার আছে'), LanguageService.tr('${n(held)} shares', '${n(held)} শেয়ার')),
+    ];
+
+    return _card(
+      eyebrow: LanguageService.tr('SHARES', 'শেয়ার'),
+      title: LanguageService.tr('Share offering', 'শেয়ার অফার'),
+      subtitle: LanguageService.tr('Buy shares in the company and own a part of the business itself.',
+          'কোম্পানির শেয়ার কিনে ব্যবসার অংশীদার হোন।'),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          LayoutBuilder(
+            builder: (_, c) {
+              final w = (c.maxWidth - 8) / 2;
+              return Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final (label, value) in items)
+                    Container(
+                      width: w,
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: ivory,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: line),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(label, style: const TextStyle(fontSize: 11.5, color: muted, fontWeight: FontWeight.w500)),
+                          const SizedBox(height: 2),
+                          Text(value,
+                              style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700, color: ink, height: 1.3)),
+                        ],
+                      ),
+                    ),
+                ],
+              );
+            },
+          ),
+          if (closed != null) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(color: amberSoft, borderRadius: BorderRadius.circular(10)),
+              child: Text(closed, style: const TextStyle(fontSize: 12.5, color: amber, fontWeight: FontWeight.w600)),
+            ),
+          ],
+          if (o['membershipEligible'] == true) ...[
+            const SizedBox(height: 10),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(Icons.stars_rounded, size: 16, color: emerald),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    LanguageService.tr('Every verified allotted share earns 1 shareholder membership point.',
+                        'প্রতিটি যাচাইকৃত বরাদ্দকৃত শেয়ারে ১টি শেয়ারহোল্ডার মেম্বারশিপ পয়েন্ট।'),
+                    style: const TextStyle(fontSize: 12, color: muted, height: 1.4),
+                  ),
+                ),
+              ],
+            ),
+          ],
+          if (terms.isNotEmpty)
+            Theme(
+              data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+              child: ExpansionTile(
+                tilePadding: EdgeInsets.zero,
+                childrenPadding: const EdgeInsets.only(bottom: 6),
+                iconColor: emerald,
+                collapsedIconColor: muted,
+                expandedCrossAxisAlignment: CrossAxisAlignment.start,
+                title: Text(LanguageService.tr('Offering terms', 'অফারের শর্ত'),
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: ink)),
+                children: [Text(terms, style: const TextStyle(fontSize: 12.5, color: muted, height: 1.5))],
+              ),
+            ),
+          const SizedBox(height: 4),
+          Text(
+            LanguageService.tr(
+                "Shares count as yours once the company allots them and our team verifies the allotment. Track them in My Shares.",
+                'কোম্পানি বরাদ্দ দিলে ও আমাদের টিম যাচাই করলে শেয়ার আপনার হয়। My Shares এ দেখুন।'),
+            style: const TextStyle(fontSize: 11.5, color: muted, height: 1.4),
+          ),
+        ],
       ),
     );
   }
@@ -775,7 +1008,10 @@ class _ProjectDetailPageState extends State<ProjectDetailPage> {
     final awaiting = status == 'PENDING' || status == 'PAYMENT_PENDING';
     final pendingSub = subStatus == 'SUBMITTED' || subStatus == 'UNDER_REVIEW';
     final owed = math.max(0.0, amount - approved - pending);
-    final canPay = awaiting && (installment ? owed > 0 : (subStatus == null || subStatus == 'REJECTED'));
+    // Website: kisti-r tarikh approval er opekkhay / bad hole taka deya jay na
+    final approval = inv['scheduleApproval']?.toString();
+    final datesBlocked = awaiting && (approval == 'PENDING' || approval == 'REJECTED');
+    final canPay = awaiting && !datesBlocked && (installment ? owed > 0 : (subStatus == null || subStatus == 'REJECTED'));
 
     final (String label, IconData icon, Color color) = switch (status) {
       'PAYMENT_PENDING' => (LanguageService.tr('Awaiting Payment', 'পেমেন্টের অপেক্ষায়'), Icons.schedule_rounded, BC.chart4Deep),
@@ -816,7 +1052,9 @@ class _ProjectDetailPageState extends State<ProjectDetailPage> {
                       Text(label, style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700, color: color)),
                       const SizedBox(height: 2),
                       Text(
-                        LanguageService.tr(
+                        _isShare || expected <= 0
+                            ? LanguageService.tr('${ProjectLabels.bdtFull(amount)} committed', '${ProjectLabels.bdtFull(amount)} প্রতিশ্রুত')
+                            : LanguageService.tr(
                             '${ProjectLabels.bdtFull(amount)} invested · ${ProjectLabels.bdtFull(expected)} annual expected return',
                             '${ProjectLabels.bdtFull(amount)} বিনিয়োগ · ${ProjectLabels.bdtFull(expected)} বার্ষিক প্রত্যাশিত লাভ'),
                         style: const TextStyle(fontSize: 12, color: muted, height: 1.35),
@@ -836,6 +1074,26 @@ class _ProjectDetailPageState extends State<ProjectDetailPage> {
               ],
             ),
           ),
+          if (datesBlocked) ...[
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: (approval == 'REJECTED' ? danger : amber).withAlpha(16),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: (approval == 'REJECTED' ? danger : amber).withAlpha(50)),
+              ),
+              child: Text(
+                approval == 'REJECTED'
+                    ? LanguageService.tr('Your installment dates were not approved. Please contact us or start a new investment.',
+                    'আপনার কিস্তির তারিখ অনুমোদিত হয়নি। যোগাযোগ করুন অথবা নতুন করে বিনিয়োগ করুন।')
+                    : LanguageService.tr(
+                    "Your installment dates are being reviewed. You can pay once they're approved — we'll notify you.",
+                    'আপনার কিস্তির তারিখ যাচাই চলছে। অনুমোদন হলে টাকা দিতে পারবেন — আমরা জানাব।'),
+                style: TextStyle(fontSize: 12, height: 1.4, color: approval == 'REJECTED' ? danger : amber),
+              ),
+            ),
+          ],
           // Kistite dicche — kotota jachai holo
           if (awaiting && installment) ...[
             const SizedBox(height: 8),
@@ -936,7 +1194,7 @@ class _ProjectDetailPageState extends State<ProjectDetailPage> {
             SizedBox(
               height: 42,
               child: FilledButton(
-                onPressed: _openMyInvestments,
+                onPressed: () => _payMyInvestment(inv),
                 style: FilledButton.styleFrom(
                   backgroundColor: emerald,
                   foregroundColor: Colors.white,
@@ -1467,6 +1725,13 @@ class _ProjectDetailPageState extends State<ProjectDetailPage> {
     if (_canInvest) {
       title = null;
       reason = null;
+    } else if (_isShare && status == 'FUNDRAISING' && !_deadlinePassed) {
+      title = _offering == null
+          ? LanguageService.tr('Opening soon', 'শীঘ্রই খুলবে')
+          : LanguageService.tr('Share purchases closed', 'শেয়ার কেনা বন্ধ');
+      reason = _offering == null
+          ? LanguageService.tr('Share purchases for this project open soon.', 'এই প্রজেক্টে শীঘ্রই শেয়ার কেনা যাবে।')
+          : _offeringClosed;
     } else if (status == 'FUNDRAISING' && _deadlinePassed) {
       title = LanguageService.tr('Funding closed', 'বিনিয়োগ বন্ধ');
       reason = LanguageService.tr(
@@ -1522,10 +1787,12 @@ class _ProjectDetailPageState extends State<ProjectDetailPage> {
                       Text.rich(
                         TextSpan(children: [
                           TextSpan(
-                              text: _returnLabel,
+                              text: _isShare ? ProjectLabels.bdtFull(_num(_offering?['pricePerShareBdt'])) : _returnLabel,
                               style: const TextStyle(fontWeight: FontWeight.w800, color: ink)),
                           TextSpan(
-                              text: LanguageService.tr(' annual expected return', ' বার্ষিক প্রত্যাশিত লাভ'),
+                              text: _isShare
+                                  ? LanguageService.tr(' per share', ' প্রতি শেয়ার')
+                                  : LanguageService.tr(' annual expected return', ' বার্ষিক প্রত্যাশিত লাভ'),
                               style: const TextStyle(color: muted)),
                         ]),
                         maxLines: 1,
@@ -1533,7 +1800,11 @@ class _ProjectDetailPageState extends State<ProjectDetailPage> {
                         style: const TextStyle(fontSize: 13),
                       ),
                       Text(
-                        LanguageService.tr(
+                        _isShare
+                            ? LanguageService.tr(
+                            '${ProjectLabels.grouped(_int(_offering?['available']).toDouble())} shares available',
+                            '${ProjectLabels.grouped(_int(_offering?['available']).toDouble())} টি শেয়ার বাকি')
+                            : LanguageService.tr(
                             'From ${ProjectLabels.bdtShort(_num(_project['minInvestmentBdt']))} · ${ProjectLabels.fundingPct(_num(_project['fundedAmountBdt']), _num(_project['fundingGoalBdt']))}% funded',
                             '${ProjectLabels.bdtShort(_num(_project['minInvestmentBdt']))} থেকে · ${ProjectLabels.fundingPct(_num(_project['fundedAmountBdt']), _num(_project['fundingGoalBdt']))}% সংগৃহীত'),
                         maxLines: 1,
@@ -1556,7 +1827,9 @@ class _ProjectDetailPageState extends State<ProjectDetailPage> {
                     ),
                     icon: const Icon(Icons.arrow_forward_rounded, size: 19),
                     label: Text(
-                      LanguageService.tr('Invest Now', 'বিনিয়োগ করুন'),
+                      _isShare
+                          ? LanguageService.tr('Buy Shares', 'শেয়ার কিনুন')
+                          : LanguageService.tr('Invest Now', 'বিনিয়োগ করুন'),
                       style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700),
                     ),
                   ),

@@ -477,23 +477,36 @@ class _DocumentsPageState extends State<DocumentsPage> {
     final url = DatabaseService.formatImageUrl(raw);
     final key = 'doc-${item['id']}';
     setState(() => _busy.add(key));
-    final bytes = await PdfService.downloadBytes(url);
+    // Website er notun file (deed, certificate, receipt, share allotment …)
+    // Cloudinary te private — fileUrl ekta storage key, link na. Ogulo
+    // website er download API diye ani (login shoho); purono link sorasori.
+    final isLink = raw.startsWith('http://') || raw.startsWith('https://');
+    Uint8List? bytes;
+    String? serverName;
+    if (isLink) {
+      bytes = await PdfService.downloadBytes(url);
+    } else {
+      final res = await DatabaseService.downloadWebsiteDocument(userId: _userId, documentId: item['id'].toString());
+      bytes = res?.bytes;
+      serverName = res?.fileName;
+    }
     if (mounted) setState(() => _busy.remove(key));
 
     if (bytes == null) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(LanguageService.tr(
-                'Download failed. Check your internet.',
-                'ডাউনলোড হয়নি। ইন্টারনেট চেক করুন।')),
+            content: Text((isLink ? null : DatabaseService.lastDownloadError) ??
+                LanguageService.tr(
+                    'Download failed. Check your internet.',
+                    'ডাউনলোড হয়নি। ইন্টারনেট চেক করুন।')),
             backgroundColor: _danger,
           ),
         );
       }
       return null;
     }
-    final ext = PdfService.extensionFor(bytes, url);
+    final ext = PdfService.extensionFor(bytes, isLink ? url : (serverName ?? ''));
     final name = item['name']?.toString() ?? 'Document';
     return (bytes, '${PdfService.safeFileName(name)}.$ext');
   }
@@ -784,7 +797,8 @@ class _DocumentsPageState extends State<DocumentsPage> {
                   emptyMsg: LanguageService.tr(
                       'No deeds yet. Your deed appears here once your investment is approved and issued.',
                       'এখনো কোনো দলিল নেই। বিনিয়োগ অনুমোদনের পর দলিল তৈরি হলে এখানে আসবে।'),
-                  rowBuilder: _buildFileRow,
+                  // Deed admin/website banay — investor muchte parbe na
+                  rowBuilder: (item) => _buildFileRow(item, allowDelete: false),
                   maxVisible: 3,
                   rowHeight: 60,
                 ),
@@ -1229,14 +1243,14 @@ class _DocumentsPageState extends State<DocumentsPage> {
 
 
 
-  Widget _buildFileRow(Map<String, dynamic> item) {
+  Widget _buildFileRow(Map<String, dynamic> item, {bool allowDelete = true}) {
     final busy = _busy.contains('doc-${item['id']}');
     final size = _fmtSize(item['sizeBytes']);
     final date = PdfService.formatDate(item['createdAt']?.toString());
     final url = item['fileUrl']?.toString().toLowerCase() ?? '';
     final isPdf = url.endsWith('.pdf') || url.startsWith('data:application/pdf');
     final desc = item['description']?.toString() ?? '';
-    final mine = item['mine'] == true;
+    final mine = allowDelete && item['mine'] == true;
 
     return InkWell(
       onTap: busy ? null : () => _viewDoc(item),

@@ -2,7 +2,7 @@ name: biniyog_club
 description: "Biniyog Club — investor app for biniyogclub.com"
 publish_to: 'none'
 
-version: 1.0.1+2
+version: 1.0.2+3
 
 environment:
   sdk: '>=3.10.0 <4.0.0'

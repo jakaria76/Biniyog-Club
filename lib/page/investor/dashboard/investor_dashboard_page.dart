@@ -9,7 +9,10 @@ import '../documents/documents_page.dart';
 import '../groups/browse_groups_page.dart';
 import '../groups/group_invest_page.dart';
 import '../groups/group_investments_page.dart';
+import '../groups/group_investment_detail_page.dart';
 import '../help/help_center_page.dart';
+import '../membership/membership_page.dart';
+import '../profit/profit_overview_page.dart';
 import '../profit/profit_returns_page.dart';
 import '../notifications/notifications_page.dart';
 import '../portfolio/investments_page.dart';
@@ -19,12 +22,13 @@ import '../projects/my_projects_page.dart';
 import '../projects/project_detail_page.dart';
 import '../reports/reports_page.dart';
 import '../settings/settings_page.dart';
+import '../shares/my_shares_page.dart';
 import '../../../services/auth_service.dart';
 import '../../../services/database_service.dart';
 import '../../../services/email_service.dart';
 import '../../../services/push_service.dart';
 import '../../../services/language_service.dart';
-import 'membership_tier.dart';
+import '../../../services/membership_policy.dart';
 import '../../../theme/app_colors.dart';
 
 class InvestorDashboardPage extends StatefulWidget {
@@ -155,8 +159,11 @@ class _InvestorDashboardPageState extends State<InvestorDashboardPage> {
   List<Map<String, dynamic>> _updates = [];
   List<Map<String, dynamic>> _documents = [];
 
-  /// Membership tier (Star / Diamond / Crown) — query fail korle null, card lukano
-  PrestigeHoldings? _prestige;
+  /// Website er Membership strip (Card & Points Policy) — load na hole null, strip lukano
+  MyMembership? _membership;
+
+  /// Website er "My Investment Profit Overview" — load na hole null
+  Map<String, dynamic>? _profit;
 
   /// Analytics card e kon chart khola
   int _chartTab = 0;
@@ -180,6 +187,8 @@ class _InvestorDashboardPageState extends State<InvestorDashboardPage> {
   static Map<String, dynamic>? _cachedUser;
   static Map<String, dynamic>? _cachedLatestNotif;
   static List<Map<String, dynamic>>? _cachedGroupTiers;
+  static MyMembership? _cachedMembership;
+  static Map<String, dynamic>? _cachedProfit;
 
   static void clearCache() {
     _cachedSummary = null;
@@ -187,6 +196,8 @@ class _InvestorDashboardPageState extends State<InvestorDashboardPage> {
     _cachedUser = null;
     _cachedLatestNotif = null;
     _cachedGroupTiers = null;
+    _cachedMembership = null;
+    _cachedProfit = null;
   }
 
   @override
@@ -203,6 +214,8 @@ class _InvestorDashboardPageState extends State<InvestorDashboardPage> {
       if (_cachedExtras != null) _applyExtras(_cachedExtras!);
       _latestNotif = _cachedLatestNotif;
       _groupTiers = _cachedGroupTiers ?? [];
+      _membership = _cachedMembership;
+      _profit = _cachedProfit;
       _isLoading = false;
       _loadDashboardData(background: true);
     } else {
@@ -355,14 +368,6 @@ class _InvestorDashboardPageState extends State<InvestorDashboardPage> {
     _groupRecent = (x['groupRecent'] as List?)?.cast<Map<String, dynamic>>() ?? [];
     _updates = (x['updates'] as List?)?.cast<Map<String, dynamic>>() ?? [];
     _documents = (x['documents'] as List?)?.cast<Map<String, dynamic>>() ?? [];
-    final pr = x['prestige'];
-    _prestige = pr is Map
-        ? PrestigeHoldings(
-      stars: (pr['stars'] as num?)?.toInt() ?? 0,
-      diamonds: math.min((pr['diamonds'] as num?)?.toInt() ?? 0, kMaxDiamonds),
-      crowns: (pr['crowns'] as num?)?.toInt() ?? 0,
-    )
-        : null;
   }
 
   @override
@@ -401,12 +406,16 @@ class _InvestorDashboardPageState extends State<InvestorDashboardPage> {
       DatabaseService.getNotificationsData(userId, limit: 1),
       DatabaseService.getDashboardExtras(userId, email: userEmail),
       DatabaseService.getBusinessGroupsWithTiers(),
+      DatabaseService.getMyMembership(userId),
+      DatabaseService.getProfitOverview(userId),
     ]);
     final summary = results[0] as Map<String, dynamic>;
     final notifs = results[1] as List<Map<String, dynamic>>;
     final extras = results[2] as Map<String, dynamic>;
     final latest = notifs.isNotEmpty ? notifs.first : null;
     final tiers = _flattenTiers(results[3] as List<Map<String, dynamic>>);
+    final membership = results[4] as MyMembership?;
+    final profit = results[5] as Map<String, dynamic>?;
 
     if (!mounted) return;
     if (summary['ok'] == true) {
@@ -415,8 +424,12 @@ class _InvestorDashboardPageState extends State<InvestorDashboardPage> {
       _cachedLatestNotif = latest;
       if (extras['ok'] == true) _cachedExtras = extras;
       if (tiers.isNotEmpty) _cachedGroupTiers = tiers;
+      if (membership != null) _cachedMembership = membership;
+      if (profit != null) _cachedProfit = profit;
       setState(() {
         if (tiers.isNotEmpty) _groupTiers = tiers;
+        if (membership != null) _membership = membership;
+        if (profit != null) _profit = profit;
         _applySummary(summary, userData);
         if (extras['ok'] == true) _applyExtras(extras);
         _latestNotif = latest;
@@ -685,13 +698,18 @@ class _InvestorDashboardPageState extends State<InvestorDashboardPage> {
             const SizedBox(height: 14),
             _buildDocumentsCard(),
           ],
-          // Website er motoi — hero er porei membership tier
-          if (_prestige != null) ...[
+          // Website er motoi — hero er porei Membership strip (tier, ID, point)
+          if (MembershipStrip.shouldShow(_membership)) ...[
             const SizedBox(height: 14),
-            MembershipTierCard(holdings: _prestige!),
+            MembershipStrip(data: _membership!),
           ],
           const SizedBox(height: 14),
           _buildStatsGrid(),
+          // Website er motoi: stats er pore profit overview
+          if (ProfitOverviewCard.shouldShow(_profit)) ...[
+            const SizedBox(height: 14),
+            ProfitOverviewCard(data: _profit!),
+          ],
           const SizedBox(height: 20),
           _buildQuickActionsSection(),
           if (_groupRecent.isNotEmpty) ...[
@@ -1746,8 +1764,10 @@ class _InvestorDashboardPageState extends State<InvestorDashboardPage> {
       child: Text(initial, style: TextStyle(fontWeight: FontWeight.w800, color: accent.$1, fontSize: 16)),
     );
 
+    final gid = g['id']?.toString() ?? '';
     return InkWell(
-      onTap: () => _open(const GroupInvestmentsPage()),
+      // Sorasori oi investment er details
+      onTap: () => _open(gid.isEmpty ? const GroupInvestmentsPage() : GroupInvestmentDetailPage(groupInvestmentId: gid)),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
         child: Row(
@@ -2006,8 +2026,12 @@ class _InvestorDashboardPageState extends State<InvestorDashboardPage> {
                     Row(
                       children: [
                         _projectMetric(
-                          LanguageService.tr('Return', 'রিটার্ন'),
-                          rHi <= 0
+                          p['projectType'] == 'SHARE_BUYING'
+                              ? LanguageService.tr('Type', 'ধরন')
+                              : LanguageService.tr('Return', 'রিটার্ন'),
+                          p['projectType'] == 'SHARE_BUYING'
+                              ? LanguageService.tr('Shares', 'শেয়ার')
+                              : rHi <= 0
                               ? '—'
                               : (rLo <= 0 || rLo == rHi)
                               ? '${rHi.toStringAsFixed(0)}%'
@@ -3082,6 +3106,8 @@ class _InvestorDashboardPageState extends State<InvestorDashboardPage> {
       LanguageService.tr('OVERVIEW', 'ওভারভিউ'),
       [
         (LanguageService.tr('Overview', 'ওভারভিউ'), Icons.space_dashboard_outlined, 0, null),
+        // Website er /dashboard/membership
+        (LanguageService.tr('Membership', 'মেম্বারশিপ'), Icons.badge_outlined, null, const MembershipPage()),
         (LanguageService.tr('Portfolio', 'পোর্টফোলিও'), Icons.donut_large_outlined, null, const PortfolioPage()),
         (LanguageService.tr('Reports', 'রিপোর্টস'), Icons.bar_chart_rounded, null, const ReportsPage()),
       ],
@@ -3090,8 +3116,12 @@ class _InvestorDashboardPageState extends State<InvestorDashboardPage> {
       LanguageService.tr('INVESTING', 'বিনিয়োগ'),
       [
         (LanguageService.tr('Investments', 'ইনভেস্টমেন্টস'), Icons.trending_up_rounded, 3, null),
-        (LanguageService.tr('Group Invest', 'গ্রুপ ইনভেস্ট'), Icons.apartment_rounded, null, const GroupInvestmentsPage()),
+        // Website er /dashboard/shares
+        (LanguageService.tr('My Shares', 'আমার শেয়ার'), Icons.layers_outlined, null, const MySharesPage()),
         (LanguageService.tr('Profit Returns', 'প্রফিট রিটার্নস'), Icons.savings_outlined, null, const ProfitReturnsPage()),
+        // Website er dashboard "My Investment Profit Overview"
+        (LanguageService.tr('Profit Overview', 'লাভের সংক্ষেপ'), Icons.query_stats_rounded, null, const ProfitOverviewPage()),
+        (LanguageService.tr('Group Invest', 'গ্রুপ ইনভেস্ট'), Icons.apartment_rounded, null, const GroupInvestmentsPage()),
         (LanguageService.tr('Projects', 'প্রজেক্টস'), Icons.folder_open_rounded, 1, null),
       ],
       ),
@@ -3279,54 +3309,6 @@ class _InvestorDashboardPageState extends State<InvestorDashboardPage> {
                           section(g.$1),
                           for (final it in g.$2) item(it),
                         ],
-                        const SizedBox(height: 12),
-                        // Website er "Explore new projects" — choto ek line
-                        Material(
-                          color: Colors.transparent,
-                          child: InkWell(
-                            borderRadius: BorderRadius.circular(12),
-                            onTap: () {
-                              Navigator.pop(context);
-                              _selectTab(1);
-                            },
-                            child: Ink(
-                              padding: const EdgeInsets.fromLTRB(12, 10, 10, 10),
-                              decoration: BoxDecoration(
-                                borderRadius: BorderRadius.circular(12),
-                                gradient: LinearGradient(
-                                  colors: [Colors.white.withAlpha(30), Colors.white.withAlpha(12)],
-                                  begin: Alignment.topLeft,
-                                  end: Alignment.bottomRight,
-                                ),
-                                border: Border.all(color: goldLight.withAlpha(50)),
-                              ),
-                              child: Row(
-                                children: [
-                                  const Icon(Icons.auto_awesome_rounded, color: BC.harvest400, size: 16),
-                                  const SizedBox(width: 10),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          LanguageService.tr('Explore new projects', 'নতুন প্রজেক্ট দেখুন'),
-                                          style: const TextStyle(color: Colors.white, fontSize: 12.5, fontWeight: FontWeight.w700),
-                                        ),
-                                        Text(
-                                          LanguageService.tr('Vetted opportunities open for investment',
-                                              'যাচাইকৃত সুযোগ, বিনিয়োগের জন্য উন্মুক্ত'),
-                                          style: TextStyle(color: Colors.white.withAlpha(140), fontSize: 10, height: 1.3),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  const SizedBox(width: 6),
-                                  const Icon(Icons.arrow_forward_rounded, color: goldLight, size: 16),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ),
                       ],
                     ),
                   ),
@@ -3389,57 +3371,150 @@ class _InvestorDashboardPageState extends State<InvestorDashboardPage> {
     );
   }
 
+  /// Sign out — dashboard er rong (emerald gradient), sign out cholar shomoy
+  /// button e loading ghore, dialog bondho kora jay na
   void _showLogoutConfirmDialog(BuildContext context) {
+    bool signingOut = false;
     showDialog(
       context: context,
-      builder: (context) {
-        return AlertDialog(
-          backgroundColor: Colors.white,
-          surfaceTintColor: Colors.transparent,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 8),
-          title: Text(
-            LanguageService.tr('Sign out', 'সাইন আউট'),
-            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: ink),
-          ),
-          content: Text(
-            LanguageService.tr('Are you sure you want to sign out of your Biniyog Club account?',
-                'আপনি কি নিশ্চিত যে আপনি অ্যাকাউন্ট থেকে সাইন আউট করতে চান?'),
-            style: const TextStyle(fontSize: 13.5, color: muted, height: 1.45),
-          ),
-          actionsPadding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: Text(
-                LanguageService.tr('Cancel', 'বাতিল'),
-                style: const TextStyle(color: muted, fontWeight: FontWeight.w600),
-              ),
+      barrierDismissible: false,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialog) => PopScope(
+          canPop: !signingOut,
+          child: Dialog(
+            backgroundColor: Colors.white,
+            surfaceTintColor: Colors.transparent,
+            insetPadding: const EdgeInsets.symmetric(horizontal: 32),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            clipBehavior: Clip.antiAlias,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // ── Header: dashboard er emerald gradient
+                Container(
+                  padding: const EdgeInsets.fromLTRB(20, 22, 20, 18),
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [emeraldBright, emerald],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                  ),
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      Positioned.fill(
+                        child: CustomPaint(painter: _IslamicPatternPainter(color: Colors.white.withAlpha(16), cell: 30)),
+                      ),
+                      Column(
+                        children: [
+                          Container(
+                            width: 52,
+                            height: 52,
+                            decoration: BoxDecoration(
+                              color: Colors.white.withAlpha(30),
+                              shape: BoxShape.circle,
+                              border: Border.all(color: Colors.white.withAlpha(70)),
+                            ),
+                            child: const Icon(Icons.logout_rounded, color: Colors.white, size: 24),
+                          ),
+                          const SizedBox(height: 10),
+                          Text(
+                            LanguageService.tr('Sign out', 'সাইন আউট'),
+                            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: Colors.white),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                // ── Body
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(22, 18, 22, 6),
+                  child: Text(
+                    signingOut
+                        ? LanguageService.tr('Signing you out…', 'সাইন আউট হচ্ছে…')
+                        : LanguageService.tr('Are you sure you want to sign out of your Biniyog Club account?',
+                        'আপনি কি নিশ্চিত যে আপনি অ্যাকাউন্ট থেকে সাইন আউট করতে চান?'),
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 13.5, color: muted, height: 1.45),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: SizedBox(
+                          height: 46,
+                          child: OutlinedButton(
+                            onPressed: signingOut ? null : () => Navigator.pop(dialogContext),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: emerald,
+                              backgroundColor: emeraldSoft,
+                              side: BorderSide(color: emerald.withAlpha(60)),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            ),
+                            child: Text(
+                              LanguageService.tr('Cancel', 'বাতিল'),
+                              style: const TextStyle(fontWeight: FontWeight.w700),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: SizedBox(
+                          height: 46,
+                          child: FilledButton(
+                            onPressed: signingOut
+                                ? null
+                                : () async {
+                              final nav = Navigator.of(context, rootNavigator: true);
+                              setDialog(() => signingOut = true);
+                              try {
+                                // Ei phone e ar ei user er push jabe na
+                                await PushService.unregister();
+                              } catch (_) {}
+                              try {
+                                await AuthService.logout();
+                              } catch (_) {}
+                              clearCache();
+                              // Logout shesh — landing page, pichoner shob page muche
+                              nav.pushAndRemoveUntil(
+                                MaterialPageRoute(builder: (_) => const LandingPage()),
+                                    (route) => false,
+                              );
+                            },
+                            style: FilledButton.styleFrom(
+                              backgroundColor: danger,
+                              foregroundColor: Colors.white,
+                              disabledBackgroundColor: danger,
+                              disabledForegroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            ),
+                            child: signingOut
+                                ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2.4, color: Colors.white),
+                            )
+                                : Text(
+                              LanguageService.tr('Sign out', 'সাইন আউট'),
+                              style: const TextStyle(fontWeight: FontWeight.w800),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
-            FilledButton(
-              onPressed: () async {
-                final nav = Navigator.of(context);
-                nav.pop();
-                // Ei phone e ar ei user er push jabe na
-                await PushService.unregister();
-                await AuthService.logout();
-                clearCache();
-                nav.pushAndRemoveUntil(
-                  MaterialPageRoute(builder: (context) => const LandingPage()),
-                      (route) => false,
-                );
-              },
-              style: FilledButton.styleFrom(
-                backgroundColor: danger,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              ),
-              child: Text(LanguageService.tr('Sign out', 'সাইন আউট')),
-            ),
-          ],
-        );
-      },
+          ),
+        ),
+      ),
     );
   }
 }

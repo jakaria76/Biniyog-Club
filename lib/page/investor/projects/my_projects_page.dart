@@ -3,14 +3,17 @@ import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 
+import '../../../services/auth_service.dart';
 import '../../../services/database_service.dart';
 import '../../../services/language_service.dart';
 import 'project_detail_page.dart';
 import 'project_labels.dart';
 import '../../../theme/app_colors.dart';
 
-/// Website er /projects (All Projects) page — search, sort, category ar
-/// website er moto project card.
+/// Website er /projects (All Projects) page — search, sort, category,
+/// "Be an Investor" / "Be a Shareholder" filter ar website er moto project card.
+/// Upore "My projects" chaple website er /dashboard/projects (je project e
+/// apni invest korechen, sathe latest update).
 class MyProjectsPage extends StatefulWidget {
   /// Dashboard er tab hishebe khulle back chaple ki hobe (jemon Home tab e jawa).
   /// Alada page hishebe (push kore) khulle dorkar nei — tokhon pop hoy.
@@ -47,6 +50,16 @@ class _MyProjectsPageState extends State<MyProjectsPage> {
 
   String _sort = 'newest';
   String? _category; // null = All
+
+  /// Website er ?type= : null = shob, REGULAR_INVESTMENT = Be an Investor, SHARE_BUYING = Be a Shareholder
+  String? _type;
+
+  /// false = All projects, true = My projects
+  bool _mine = false;
+  bool _mineLoading = false;
+  bool _mineFailed = false;
+  bool _mineNeedsLogin = false;
+  List<Map<String, dynamic>>? _myProjects;
   String _search = '';
   final TextEditingController _searchCtrl = TextEditingController();
 
@@ -98,8 +111,45 @@ class _MyProjectsPageState extends State<MyProjectsPage> {
         .any((v) => (v?.toString() ?? '').toLowerCase().contains(q));
   }
 
-  /// Search mile emon project — category chip er count er jonno
-  List<Map<String, dynamic>> get _searched => _projects.where(_matchesSearch).toList();
+  /// Search + type mile emon project — category chip er count er jonno
+  List<Map<String, dynamic>> get _searched =>
+      _projects.where((p) => _type == null || _typeOf(p) == _type).where(_matchesSearch).toList();
+
+  String _typeOf(Map<String, dynamic> p) => p['projectType']?.toString() ?? 'REGULAR_INVESTMENT';
+
+  Future<void> _loadMine() async {
+    setState(() {
+      _mineLoading = true;
+      _mineFailed = false;
+    });
+    final user = await AuthService.getUserData();
+    final uid = user?['id']?.toString() ?? '';
+    if (uid.isEmpty) {
+      if (mounted) {
+        setState(() {
+          _mineNeedsLogin = true;
+          _mineLoading = false;
+        });
+      }
+      return;
+    }
+    final res = await DatabaseService.getMyInvestedProjects(uid);
+    if (!mounted) return;
+    setState(() {
+      _mineNeedsLogin = false;
+      _mineLoading = false;
+      if (res == null) {
+        _mineFailed = _myProjects == null;
+      } else {
+        _myProjects = ((res['projects'] as List?) ?? []).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+      }
+    });
+  }
+
+  void _setMine(bool v) {
+    setState(() => _mine = v);
+    if (v && _myProjects == null && !_mineLoading) _loadMine();
+  }
 
   List<Map<String, dynamic>> get _visible {
     final list = _searched.where((p) => _category == null || p['category'] == _category).toList();
@@ -159,7 +209,7 @@ class _MyProjectsPageState extends State<MyProjectsPage> {
               },
             ),
             title: Text(
-              LanguageService.tr('All Projects', 'সব প্রজেক্ট'),
+              _mine ? LanguageService.tr('My Projects', 'আমার প্রজেক্ট') : LanguageService.tr('All Projects', 'সব প্রজেক্ট'),
               style: const TextStyle(color: ink, fontWeight: FontWeight.w700, fontSize: 17.5),
             ),
           ),
@@ -174,28 +224,36 @@ class _MyProjectsPageState extends State<MyProjectsPage> {
               : _loadFailed
               ? _buildMessage()
               : RefreshIndicator(
-            onRefresh: _loadProjectsData,
+            onRefresh: () => _mine ? _loadMine() : _loadProjectsData(),
             color: emerald,
             child: ListView(
               physics: const AlwaysScrollableScrollPhysics(),
               // Dashboard tab hole curved navbar er jonno niche jayga
               padding: EdgeInsets.fromLTRB(16, 2, 16, Navigator.of(context).canPop() ? 24 : 104),
               children: [
-                _buildSummary(),
+                _buildViewToggle(),
                 const SizedBox(height: 12),
-                _buildSearch(),
-                const SizedBox(height: 10),
-                _buildSortChips(),
-                const SizedBox(height: 8),
-                _buildCategoryChips(),
-                const SizedBox(height: 12),
-                if (list.isEmpty)
-                  _buildEmptyState()
-                else
-                  for (final p in list) ...[
-                    _buildProjectCard(p),
-                    const SizedBox(height: 12),
-                  ],
+                if (_mine)
+                  ..._buildMine()
+                else ...[
+                  _buildSummary(),
+                  const SizedBox(height: 12),
+                  _buildTypeChips(),
+                  const SizedBox(height: 10),
+                  _buildSearch(),
+                  const SizedBox(height: 10),
+                  _buildSortChips(),
+                  const SizedBox(height: 8),
+                  _buildCategoryChips(),
+                  const SizedBox(height: 12),
+                  if (list.isEmpty)
+                    _buildEmptyState()
+                  else
+                    for (final p in list) ...[
+                      _buildProjectCard(p),
+                      const SizedBox(height: 12),
+                    ],
+                ],
               ],
             ),
           ),
@@ -274,6 +332,345 @@ class _MyProjectsPageState extends State<MyProjectsPage> {
       ),
     );
   }
+
+  /// All projects / My projects (website: /projects ar /dashboard/projects)
+  Widget _buildViewToggle() {
+    Widget seg(String label, IconData icon, bool on, VoidCallback onTap) => Expanded(
+      child: GestureDetector(
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          decoration: BoxDecoration(
+            color: on ? Colors.white : Colors.transparent,
+            borderRadius: BorderRadius.circular(9),
+            border: Border.all(color: on ? line : Colors.transparent),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, size: 16, color: on ? emerald : muted),
+              const SizedBox(width: 5),
+              Text(label,
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: on ? ink : muted)),
+            ],
+          ),
+        ),
+      ),
+    );
+    return Container(
+      padding: const EdgeInsets.all(3),
+      decoration: BoxDecoration(color: BC.muted, borderRadius: BorderRadius.circular(12), border: Border.all(color: line)),
+      child: Row(
+        children: [
+          seg(LanguageService.tr('All projects', 'সব প্রজেক্ট'), Icons.grid_view_rounded, !_mine, () => _setMine(false)),
+          seg(LanguageService.tr('My projects', 'আমার প্রজেক্ট'), Icons.folder_open_rounded, _mine, () => _setMine(true)),
+        ],
+      ),
+    );
+  }
+
+  /// Website er INVEST_TYPES: Be an Investor / Be a Shareholder
+  Widget _buildTypeChips() {
+    final regular = _projects.where((p) => _typeOf(p) == 'REGULAR_INVESTMENT').length;
+    final share = _projects.where((p) => _typeOf(p) == 'SHARE_BUYING').length;
+    Widget card(String? type, String title, String desc, IconData icon, int count) {
+      final on = _type == type;
+      return Expanded(
+        child: GestureDetector(
+          onTap: () => setState(() {
+            _type = on ? null : type;
+            _category = null;
+          }),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            padding: const EdgeInsets.fromLTRB(10, 9, 10, 9),
+            decoration: BoxDecoration(
+              color: on ? emeraldSoft : Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: on ? emerald : line, width: on ? 1.4 : 1),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(icon, size: 16, color: emerald),
+                    const SizedBox(width: 5),
+                    Expanded(
+                      child: Text(title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: ink)),
+                    ),
+                    Text('$count', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: emerald)),
+                  ],
+                ),
+                const SizedBox(height: 3),
+                Text(desc, maxLines: 2, style: const TextStyle(fontSize: 11, color: muted, height: 1.3)),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Row(
+      children: [
+        card('REGULAR_INVESTMENT', LanguageService.tr('Be an Investor', 'বিনিয়োগকারী হোন'),
+            LanguageService.tr('Earn a fixed or ranged return', 'নির্দিষ্ট বা পরিসরের লাভ'), Icons.trending_up_rounded, regular),
+        const SizedBox(width: 8),
+        card('SHARE_BUYING', LanguageService.tr('Be a Shareholder', 'শেয়ারহোল্ডার হোন'),
+            LanguageService.tr('Own a part of the company', 'কোম্পানির অংশীদার হোন'), Icons.pie_chart_outline_rounded, share),
+      ],
+    );
+  }
+
+  // ─── My projects (website er /dashboard/projects) ─────────
+  List<Widget> _buildMine() {
+    if (_mineLoading && _myProjects == null) {
+      return const [
+        SizedBox(height: 60),
+        Center(child: SizedBox(width: 26, height: 26, child: CircularProgressIndicator(color: emerald, strokeWidth: 2.4))),
+      ];
+    }
+    if (_mineNeedsLogin) {
+      return [_mineMessage(Icons.lock_outline_rounded, LanguageService.tr('Log in to see your projects', 'আপনার প্রজেক্ট দেখতে লগইন করুন'), null)];
+    }
+    if (_mineFailed || _myProjects == null) {
+      return [
+        _mineMessage(Icons.wifi_off_rounded, LanguageService.tr('Could not load your projects', 'আপনার প্রজেক্ট লোড করা যায়নি'),
+            _loadMine),
+      ];
+    }
+    final list = _myProjects!;
+    if (list.isEmpty) {
+      return [
+        _mineMessage(Icons.eco_outlined, LanguageService.tr('No projects yet — invest in a project to see it here.',
+            'এখনো কোনো প্রজেক্ট নেই — বিনিয়োগ করলে এখানে দেখাবে।'), null),
+      ];
+    }
+    return [
+      Text(
+        LanguageService.tr("${list.length} project${list.length == 1 ? '' : 's'} you've invested in",
+            '${list.length} টি প্রজেক্টে আপনি বিনিয়োগ করেছেন'),
+        style: const TextStyle(fontSize: 12.5, color: muted),
+      ),
+      const SizedBox(height: 10),
+      for (final p in list) ...[
+        _buildMyProjectCard(p),
+        const SizedBox(height: 12),
+      ],
+    ];
+  }
+
+  Widget _mineMessage(IconData icon, String text, VoidCallback? retry) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 26, horizontal: 20),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), border: Border.all(color: line)),
+      child: Column(
+        children: [
+          Container(
+            width: 42,
+            height: 42,
+            decoration: const BoxDecoration(color: emeraldSoft, shape: BoxShape.circle),
+            child: Icon(icon, color: emerald, size: 20),
+          ),
+          const SizedBox(height: 10),
+          Text(text, textAlign: TextAlign.center, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: ink)),
+          if (retry != null) ...[
+            const SizedBox(height: 10),
+            TextButton(
+              onPressed: retry,
+              style: TextButton.styleFrom(foregroundColor: emerald),
+              child: Text(LanguageService.tr('Try again', 'আবার চেষ্টা করুন')),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// Website er My Projects card: status, category, nijer investment, funding, 3–4 ta tottho, latest update
+  Widget _buildMyProjectCard(Map<String, dynamic> p) {
+    final goal = _num(p['fundingGoalBdt']);
+    final funded = _num(p['fundedAmountBdt']);
+    final pct = ProjectLabels.fundingPct(funded, goal);
+    final status = p['status']?.toString() ?? '';
+    final isShare = _typeOf(p) == 'SHARE_BUYING';
+    final updates = ((p['updates'] as List?) ?? []).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+    final location = p['location']?.toString() ?? '';
+    final endDate = ProjectLabels.dateLong(p['endDate']);
+    final startDate = ProjectLabels.dateLong(p['startDate']);
+    final returnLabel = ProjectLabels.returnLabel(_num(p['returnMin']), _num(p['returnMax']));
+    final myCount = (p['myCount'] as num?)?.toInt() ?? 1;
+
+    Future<void> open() async {
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => ProjectDetailPage(projectIdOrSlug: p['id'].toString())),
+      );
+      if (mounted) _loadMine();
+    }
+
+    Widget stat(String value, String label) => Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 4),
+        decoration: BoxDecoration(color: ivory, borderRadius: BorderRadius.circular(9), border: Border.all(color: line)),
+        child: Column(
+          children: [
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(value, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w800, color: ink)),
+            ),
+            const SizedBox(height: 1),
+            FittedBox(fit: BoxFit.scaleDown, child: Text(label, style: const TextStyle(fontSize: 10, color: muted))),
+          ],
+        ),
+      ),
+    );
+
+    return GestureDetector(
+      onTap: open,
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), border: Border.all(color: line)),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Wrap(
+              spacing: 6,
+              runSpacing: 4,
+              children: [
+                _softPill(ProjectLabels.cardStatus(status), emerald, emeraldSoft),
+                _softPill(ProjectLabels.category(p['category']?.toString() ?? '', p['customCategory']?.toString()), ink, ivory),
+                if (isShare) _softPill(LanguageService.tr('Shares', 'শেয়ার'), BC.finance600, BC.finance50),
+              ],
+            ),
+            const SizedBox(height: 7),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(p['title']?.toString() ?? '—',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: ink, height: 1.25)),
+                      if (location.isNotEmpty || endDate.isNotEmpty) ...[
+                        const SizedBox(height: 3),
+                        Text(
+                          [
+                            if (location.isNotEmpty) location,
+                            if (endDate.isNotEmpty) LanguageService.tr('Matures $endDate', 'মেয়াদ শেষ $endDate'),
+                          ].join(' · '),
+                          style: const TextStyle(fontSize: 11.5, color: muted),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(LanguageService.tr('My investment', 'আমার বিনিয়োগ'), style: const TextStyle(fontSize: 10.5, color: muted)),
+                    Text(ProjectLabels.bdtFull(_num(p['myTotal'])),
+                        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: emerald)),
+                    if (myCount > 1)
+                      Text(LanguageService.tr('$myCount investments', '$myCount টি বিনিয়োগ'),
+                          style: const TextStyle(fontSize: 10.5, color: muted)),
+                  ],
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Text(LanguageService.tr('$pct% funded', '$pct% সংগৃহীত'), style: const TextStyle(fontSize: 11.5, color: muted)),
+                const Spacer(),
+                Text(LanguageService.tr('${ProjectLabels.bdtCard(goal)} goal', 'লক্ষ্য ${ProjectLabels.bdtCard(goal)}'),
+                    style: const TextStyle(fontSize: 11.5, color: muted)),
+              ],
+            ),
+            const SizedBox(height: 4),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(
+                value: pct / 100,
+                minHeight: 6,
+                backgroundColor: line,
+                valueColor: const AlwaysStoppedAnimation<Color>(emerald),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                stat(isShare ? '—' : returnLabel, LanguageService.tr('Annual return', 'বার্ষিক লাভ')),
+                const SizedBox(width: 6),
+                stat(ProjectLabels.term((p['durationDays'] as num?)?.toInt() ?? 0), LanguageService.tr('Duration', 'মেয়াদ')),
+                const SizedBox(width: 6),
+                stat('${(p['investorsCount'] as num?)?.toInt() ?? 0}', LanguageService.tr('Investors', 'বিনিয়োগকারী')),
+                if (startDate.isNotEmpty) ...[
+                  const SizedBox(width: 6),
+                  stat(startDate.split(',').first, LanguageService.tr('Started', 'শুরু')),
+                ],
+              ],
+            ),
+            if (updates.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              const Divider(height: 1, color: line),
+              const SizedBox(height: 8),
+              Text(LanguageService.tr('LATEST UPDATES', 'সর্বশেষ আপডেট'),
+                  style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w800, color: muted, letterSpacing: 1)),
+              const SizedBox(height: 6),
+              for (final u in updates)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Padding(
+                        padding: EdgeInsets.only(top: 2),
+                        child: Icon(Icons.notifications_none_rounded, size: 14, color: emerald),
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(u['title']?.toString() ?? '',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: ink)),
+                            if ((u['content']?.toString() ?? '').isNotEmpty)
+                              Text(ProjectLabels.plainText(u['content'].toString()),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(fontSize: 11.5, color: muted)),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Text(ProjectLabels.updateType(u['type']?.toString() ?? ''),
+                          style: const TextStyle(fontSize: 10.5, color: muted, fontWeight: FontWeight.w600)),
+                    ],
+                  ),
+                ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _softPill(String text, Color fg, Color bg) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+    decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20), border: Border.all(color: line)),
+    child: Text(text, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: fg)),
+  );
 
   Widget _buildSearch() {
     return TextField(
@@ -611,7 +1008,9 @@ class _MyProjectsPageState extends State<MyProjectsPage> {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Text(
-                              LanguageService.tr('Be an Investor', 'বিনিয়োগ করুন'),
+                              _typeOf(p) == 'SHARE_BUYING'
+                                  ? LanguageService.tr('Be a Shareholder', 'শেয়ারহোল্ডার হোন')
+                                  : LanguageService.tr('Be an Investor', 'বিনিয়োগ করুন'),
                               style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
                             ),
                             const SizedBox(width: 5),
@@ -829,7 +1228,7 @@ class _MyProjectsPageState extends State<MyProjectsPage> {
   }
 
   Widget _buildEmptyState() {
-    final filtered = _search.isNotEmpty || _category != null;
+    final filtered = _search.isNotEmpty || _category != null || _type != null;
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 22, horizontal: 20),
       decoration: BoxDecoration(
@@ -869,6 +1268,7 @@ class _MyProjectsPageState extends State<MyProjectsPage> {
                 setState(() {
                   _search = '';
                   _category = null;
+                  _type = null;
                 });
               },
               style: TextButton.styleFrom(foregroundColor: emerald),

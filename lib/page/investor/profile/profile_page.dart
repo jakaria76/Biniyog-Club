@@ -11,6 +11,7 @@ import '../../../services/language_service.dart';
 import '../dashboard/investor_dashboard_page.dart';
 import 'edit_profile_page.dart';
 import '../../../theme/app_colors.dart';
+import 'withdrawal_account_page.dart';
 
 class ProfilePage extends StatefulWidget {
   const ProfilePage({super.key});
@@ -487,6 +488,10 @@ class _ProfilePageState extends State<ProfilePage> {
                 const SizedBox(height: 16),
                 _sectionLabel(LanguageService.tr('INVESTOR PROFILE', 'বিনিয়োগকারী প্রোফাইল')),
                 _buildInvestorCard(),
+                const SizedBox(height: 16),
+                // Website er profile "Withdrawal account"
+                _sectionLabel(LanguageService.tr('WITHDRAWAL ACCOUNT', 'উত্তোলনের অ্যাকাউন্ট')),
+                const WithdrawalAccountCard(),
               ],
             ),
           ),
